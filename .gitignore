@@ -1,0 +1,49 @@
+# Datos (no versionar archivos grandes; solo se versionan los .gitkeep)
+data/raw/*.parquet
+data/raw/*.csv
+data/interim/*.parquet
+data/interim/*.csv
+data/processed/*.parquet
+data/processed/*.csv
+
+# Cache de sentimiento LLM
+data/interim/sentiment_cache*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+ENV/
+
+# Variables de entorno / secretos
+.env
+.env.*
+*.env
+
+# IDEs
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Distribución / build
+dist/
+build/
+*.egg-info/
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db

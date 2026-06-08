@@ -1,0 +1,12 @@
+pandas>=2.0
+numpy>=1.24
+pyyaml>=6.0
+pyarrow>=14.0          # parquet
+yfinance>=0.2.40       # respaldo de mercado
+requests>=2.31         # BVL endpoints
+zeep>=4.2              # SOAP web service de la SMV
+mediacloud>=4.2        # noticias (Media Cloud API v4)
+# LLM (elegir uno):
+# anthropic>=0.39
+# google-generativeai>=0.8
+# openai>=1.40

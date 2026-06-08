@@ -1,0 +1,99 @@
+# =====================================================================
+# Configuración del pipeline de extracción (OE2 / R3–R6)
+# Tesis DRL aplicado a la BVL — Rodrigo Holguin / Asesor: Dr. E. Villanueva
+# =====================================================================
+
+# Horizonte de estudio (ISO 8601). 20 años.
+# OJO: 2005–2007 suele venir incompleto en fundamentales (lo reportó la
+# maestría de Ancajima: ~25% vacío 2004–2006). Plan de relleno en R4.
+period:
+  start: "2005-01-01"
+  end:   "2025-12-31"
+
+# Universo de activos. Un activo por sector para evaluar diversificación.
+# - bvl    : ticker en la Bolsa de Valores de Lima (fuente primaria)
+# - yahoo  : ticker de respaldo en Yahoo Finance (verificar uno por uno;
+#            para acciones solo-BVL el sufijo suele ser ".LM" pero la
+#            cobertura es irregular -> por eso BVL es la primaria)
+# - smv    : entidad que PRESENTA los EEFF a la SMV (puede diferir del
+#            ticker bursátil, sobre todo en bancos/holdings)
+# - isin   : identificador estable, útil para reconciliar fuentes
+universe:
+  - sector: banca
+    name: "Banco de Credito del Peru (BCP)"
+    bvl: "CREDITC1"
+    yahoo: "CREDITC1.LM"  # solo cubre ~2011+ ; para 2005-2010 usar la BVL
+    smv: "Banco de Credito del Peru S.A."
+    isin: "PEP120001008"
+    xcheck: "BAP"          # Credicorp Ltd (NYSE, USD): validación cruzada, NO reemplazo
+    notes: >
+      Cotiza en PEN (coherente con el resto). Reporta EEFF localmente a la SMV
+      en soles -> fundamentales limpios. Sigue siendo banco: taxonomía contable
+      SBS distinta a empresas no financieras -> mapear sus cuentas aparte (P/E,
+      ROE, DY sí son calculables). Liquidez baja (free float reducido, ~33k
+      acciones/día): limpiar huecos/cierres estancados y modelar el costo de
+      iliquidez en el entorno. Historia disponible desde ~1993 (S&P Global), así
+      que 2005 está cubierto desde la fuente oficial de la BVL.
+
+  - sector: minero
+    name: "Compañia de Minas Buenaventura"
+    bvl: "BUENAVC1"
+    yahoo: "BVN"          # NYSE (ADR), USD
+    smv: "Compañia de Minas Buenaventura S.A.A."
+    isin: null
+
+  - sector: alimentos
+    name: "Alicorp"
+    bvl: "ALICORC1"
+    yahoo: "ALICORC1.LM"  # TODO: verificar
+    smv: "Alicorp S.A.A."
+    isin: null
+
+  - sector: retail
+    name: "Saga Falabella"
+    bvl: "SAGAC1"
+    yahoo: "SAGAC1.LM"    # TODO: verificar
+    smv: "Saga Falabella S.A."
+    isin: "PEP757001008"
+
+  - sector: manufactura
+    name: "Corporacion Aceros Arequipa"
+    bvl: "CORAREC1"        # acción común; existe también CORAREI1 (inversión)
+    yahoo: "CORAREC1.LM"  # TODO: verificar
+    smv: "Corporacion Aceros Arequipa S.A."
+    isin: null
+
+# ---------------------------------------------------------------------
+# Fuentes de datos
+# ---------------------------------------------------------------------
+sources:
+  market:
+    # Primaria: BVL. Secundaria/fallback: Yahoo. Se reconcilian cierres.
+    primary: "bvl"
+    fallback: "yahoo"
+    # El endpoint exacto de cotizaciones de la BVL NO está documentado.
+    # Probar la familia dataondemand v1 (la maestría usó /financialstatements/)
+    # y/o capturar el XHR del sitio con DevTools. Ver src/market/bvl_client.py
+    bvl_base_url: "https://dataondemand.bvl.com.pe/v1"
+
+  fundamentals:
+    # MÁS SEGURA = SMV (regulador, presentación legal obligatoria, datos
+    # abiertos del Estado, estructurado). BVL dataondemand como secundaria
+    # y para validación cruzada (es la que ya programó la maestría).
+    primary: "smv"
+    fallback: "bvl_dataondemand"
+    smv_wsdl: "https://mvnet.smv.gob.pe/ws_od_eeff/WebServiceInfoFinanciera.asmx?WSDL"
+    bvl_dataondemand_url: "https://dataondemand.bvl.com.pe/v1/financialstatements/"
+    frequency: "trimestral"   # también anual
+
+  sentiment:
+    # Media Cloud API v4. story_list EXIGE collection_ids o sources.
+    # El token va por variable de entorno MEDIACLOUD_API_TOKEN.
+    peru_national_collection_id: null   # TODO: resolver con DirectoryApi (ver módulo)
+    llm_provider: "anthropic"           # anthropic | google | openai
+    daily_aggregation: "mean"           # mean | net_sentiment
+
+paths:
+  raw:       "data/raw"
+  interim:   "data/interim"
+  processed: "data/processed"
