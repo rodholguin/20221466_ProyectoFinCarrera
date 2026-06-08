@@ -25,21 +25,35 @@ from src.universe import MARKET_SCHEMA, Asset
 # Yahoo (fallback)
 # --------------------------------------------------------------------------
 def fetch_yahoo(asset: Asset, start: str, end: str) -> pd.DataFrame:
-    """Descarga OHLCV diario desde Yahoo y lo normaliza al esquema canónico."""
-    import yfinance as yf  # import local: dependencia opcional
+    """Descarga OHLCV diario desde Yahoo y lo normaliza al esquema canónico.
+
+    Usa Ticker.history() en lugar de yf.download para evitar el MultiIndex
+    que devuelve yfinance >= 0.2.38 cuando se descarga un único ticker.
+    """
+    import yfinance as yf
 
     if not asset.yahoo:
         return pd.DataFrame(columns=MARKET_SCHEMA)
 
-    df = yf.download(asset.yahoo, start=start, end=end, auto_adjust=False,
-                     progress=False)
-    if df.empty:
+    try:
+        raw = yf.Ticker(asset.yahoo).history(start=start, end=end, auto_adjust=False)
+    except Exception as exc:
+        print(f"[Yahoo] {asset.yahoo}: fallo ({exc}).")
         return pd.DataFrame(columns=MARKET_SCHEMA)
 
-    df = df.reset_index().rename(columns={
+    if raw.empty:
+        return pd.DataFrame(columns=MARKET_SCHEMA)
+
+    df = raw.reset_index().rename(columns={
         "Date": "date", "Open": "open", "High": "high", "Low": "low",
         "Close": "close", "Volume": "volume",
     })
+    # history() devuelve Date tz-aware (p.ej. 2008-01-03 05:00 UTC para Lima UTC-5)
+    # Convertir a tz-naive y truncar a día para obtener la fecha de negociación.
+    s = pd.to_datetime(df["date"])
+    if s.dt.tz is not None:
+        s = s.dt.tz_convert(None)
+    df["date"] = s.dt.normalize()
     df["ticker"] = asset.bvl
     df["source"] = "yahoo"
     return df[MARKET_SCHEMA]
@@ -120,10 +134,4 @@ def _report_discrepancies(asset: Asset, bvl: pd.DataFrame, yah: pd.DataFrame,
         print(f"[reconcile] {asset.bvl}: {len(bad)} días con diff de cierre > {tol:.0%}")
 
 
-if __name__ == "__main__":
-    from src.universe import Config
-
-    cfg = Config.load()
-    for a in cfg.assets:
-        df = fetch_market(a, cfg.start, cfg.end, Path(cfg.paths["raw"]))
-        print(f"{a.bvl}: {len(df)} filas")
+# Ejecutar el pipeline completo con: python -m src.market
