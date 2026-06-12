@@ -21,6 +21,7 @@ class Asset:
     bvl: str
     yahoo: str | None
     smv: str | None
+    smv_rpj: str | None = None  # código RPJ del registro SMV (clave de filtro exacta)
     isin: str | None = None
     notes: str | None = None
     xcheck: str | None = None   # ticker de validación cruzada (p.ej. BAP para BCP)

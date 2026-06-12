@@ -6,6 +6,12 @@ data/interim/*.csv
 data/processed/*.parquet
 data/processed/*.csv
 
+# Cache de respuestas crudas del SMV (archivos JSON grandes ~8MB c/u)
+data/raw/smv_cache/
+# Archivos de exploración/sondeo (generados por scripts de probe)
+data/interim/smv_*.json
+data/interim/smv_*.txt
+
 # Cache de sentimiento LLM
 data/interim/sentiment_cache*.json
 
