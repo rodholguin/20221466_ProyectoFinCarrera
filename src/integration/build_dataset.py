@@ -74,12 +74,16 @@ def feature_views(unified: pd.DataFrame) -> dict[str, list[str]]:
                           "sma_20", "sma_50", "ema_12", "ema_26", "macd",
                           "macd_signal", "rsi_14", "volatility_20"}]
     sentiment = ["sentiment_score", "n_articles"]
-    fundamental = [c for c in unified.columns if c in {"pe", "roe", "dy"}]
+    _fundamental_cols = {
+        "roe", "roa", "net_margin", "debt_equity", "debt_ratio",  # derivados SMV
+        "pe", "dy",                                                # reservados (P/E, DY futuro)
+    }
+    fundamental = [c for c in unified.columns if c in _fundamental_cols]
     return {
-        "solo_mercado": technical,
-        "mercado_sentimiento": technical + sentiment,
+        "solo_mercado":          technical,
+        "mercado_sentimiento":   technical + sentiment,
         "mercado_fundamentales": technical + fundamental,
-        "completa": technical + sentiment + fundamental,
+        "completa":              technical + sentiment + fundamental,
     }
 
 

@@ -333,25 +333,72 @@ def fetch_bvl_dataondemand(asset: Asset, url: str, start: str, end: str) -> pd.D
 # --------------------------------------------------------------------------
 # Derivación de ratios para el dataset DRL (P/E, ROE, DY)
 # --------------------------------------------------------------------------
-def compute_ratios(fundamentals: pd.DataFrame, market: pd.DataFrame) -> pd.DataFrame:
-    """Calcula P/E, ROE y DY a partir de cuentas SMV + precio de mercado.
+def compute_ratios(
+    fundamentals: pd.DataFrame,
+    market: pd.DataFrame | None = None,   # reservado para P/E futuro
+) -> pd.DataFrame:
+    """Calcula ratios fundamentales que no requieren número de acciones.
 
-    Cuentas usadas (en miles, misma moneda que el reporte):
-      P/E = precio / (INFO_UtilidadNeta / num_acciones)  [trailing twelve months]
-      ROE = INFO_UtilidadNeta / INFO_PatrimonioTotal      [al cierre del trimestre]
-      DY  = no disponible desde SMV; requiere fuente de dividendos adicional
+    Ratios implementados (todos derivables directamente de INFO_* del SMV):
+      roe         = UtilidadNeta / PatrimonioTotal
+      roa         = UtilidadNeta / ActivoTotal
+      net_margin  = UtilidadNeta / TotalIngreso
+      debt_equity = PasivoTotal  / PatrimonioTotal
+      debt_ratio  = PasivoTotal  / ActivoTotal
 
     Args:
         fundamentals: output de fetch_smv() en formato largo FUNDAMENTALS_SCHEMA
-        market:       DataFrame con columnas ['ticker', 'date', 'close', ...]
+        market:       no usado actualmente (reservado para P/E cuando se añada
+                      el número de acciones por empresa)
 
     Returns:
-        DataFrame con columnas [ticker, period, known_date, pe_ratio, roe, currency]
+        DataFrame ancho con columnas:
+        [ticker, period, known_date, currency,
+         roe, roa, net_margin, debt_equity, debt_ratio]
+        Una fila por (ticker, periodo). Los ratios sin denominador válido son NaN.
     """
-    raise NotImplementedError(
-        "compute_ratios pendiente: necesita num_acciones por empresa y "
-        "lógica TTM (trailing twelve months) para P/E."
-    )
+    info_accounts = {
+        "INFO_UtilidadNeta":   "utilidad_neta",
+        "INFO_PatrimonioTotal": "patrimonio",
+        "INFO_ActivoTotal":    "activo",
+        "INFO_TotalIngreso":   "ingreso",
+        "INFO_PasivoTotal":    "pasivo",
+    }
+
+    info = fundamentals[fundamentals["account"].isin(info_accounts)].copy()
+    if info.empty:
+        return pd.DataFrame(columns=[
+            "ticker", "period", "known_date", "currency",
+            "roe", "roa", "net_margin", "debt_equity", "debt_ratio",
+        ])
+
+    info["field"] = info["account"].map(info_accounts)
+    wide = info.pivot_table(
+        index=["ticker", "period", "known_date", "currency"],
+        columns="field",
+        values="value",
+        aggfunc="first",
+    ).reset_index()
+    wide.columns.name = None
+
+    # Asegurar que existen todas las columnas (algunas empresas pueden no tenerlas)
+    for col in ["utilidad_neta", "patrimonio", "activo", "ingreso", "pasivo"]:
+        if col not in wide.columns:
+            wide[col] = float("nan")
+
+    def _safe_div(num: pd.Series, den: pd.Series) -> pd.Series:
+        result = num / den.replace(0, float("nan"))
+        return result
+
+    wide["roe"]         = _safe_div(wide["utilidad_neta"], wide["patrimonio"])
+    wide["roa"]         = _safe_div(wide["utilidad_neta"], wide["activo"])
+    wide["net_margin"]  = _safe_div(wide["utilidad_neta"], wide["ingreso"])
+    wide["debt_equity"] = _safe_div(wide["pasivo"],        wide["patrimonio"])
+    wide["debt_ratio"]  = _safe_div(wide["pasivo"],        wide["activo"])
+
+    cols = ["ticker", "period", "known_date", "currency",
+            "roe", "roa", "net_margin", "debt_equity", "debt_ratio"]
+    return wide[cols].sort_values(["ticker", "period"]).reset_index(drop=True)
 
 
 # --------------------------------------------------------------------------
