@@ -1,0 +1,405 @@
+PIPELINE DE EXTRACCIÓN DE DATOS DE MERCADO Y DATOS FUNDAMENTALES
+Tesis: Aprendizaje por refuerzo profundo aplicado a la Bolsa de Valores de Lima (BVL)
+Autor: Rodrigo Holguin — Asesor: Dr. E. Villanueva
+Fecha de corte de este documento: junio 2026
+========================================================================
+
+
+1. UNIVERSO DE ACTIVOS
+------------------------------------------------------------------------
+El estudio abarca cinco empresas de la BVL, seleccionadas para representar
+sectores distintos y permitir evaluar diversificación en el entorno DRL:
+
+  CREDITC1   — Banco de Crédito del Perú (BCP)        [banca]
+  BUENAVC1   — Compañía de Minas Buenaventura           [minería]
+  ALICORC1   — Alicorp S.A.A.                           [alimentos/consumo]
+  SAGAC1     — Saga Falabella S.A.                      [retail]
+  CORAREC1   — Corporación Aceros Arequipa S.A.         [manufactura/siderurgia]
+
+La configuración completa (tickers, códigos RPJ de la SMV, ISINs, etc.) reside
+en config.yaml en la raíz del proyecto.
+
+
+========================================================================
+2. DATOS DE MERCADO (OHLCV DIARIO)
+========================================================================
+
+2.1. Fuentes utilizadas
+------------------------------------------------------------------------
+Se utilizaron dos fuentes en combinación:
+
+  FUENTE PRIMARIA — BVL dataondemand
+  Endpoint: GET https://dataondemand.bvl.com.pe/v1/stock-quote/share-values/{nemonico}
+            Parámetros: startDate, endDate (ISO 8601)
+  Cobertura efectiva: 2012-01-02 hasta 2025-12-31 para los cinco activos.
+  Limitación crítica: el endpoint entrega únicamente el precio de cierre
+  referencial oficial (closing price); no incluye apertura, máximo, mínimo
+  ni volumen. En consecuencia, las columnas open, high y low se rellenan con
+  el mismo valor de close, y volume queda como NaN para TODOS los registros
+  provenientes de esta fuente (3.300-3.500 filas por activo).
+
+  NOTA SOBRE EL DESCUBRIMIENTO DEL ENDPOINT: La API de la BVL no está
+  documentada públicamente. El endpoint share-values fue identificado mediante
+  análisis del bundle Angular (main.js) del sitio web oficial bvl.com.pe,
+  reverse-engineering de las llamadas XHR del navegador con DevTools, y
+  verificación empírica de parámetros de fecha. Se descartaron otros endpoints
+  de la misma familia (issuers/stock, stock-quote/market, stock-quote/home,
+  index-historical-data) por devolver errores 405 o datos no históricos.
+
+  FUENTE SECUNDARIA (fallback/complemento) — Yahoo Finance
+  Librería: yfinance (Ticker.history(), con auto_adjust=False)
+  Tickers utilizados:
+    CREDITC1  → CREDITC1.LM   cobertura: 2008-01-03 a 2025-12-30
+    BUENAVC1  → BVN            cobertura: 2005-01-03 a 2025-12-30 (ADR NYSE, USD)
+    ALICORC1  → ALICORC1.LM   cobertura: 2008-01-03 a 2025-12-30
+    SAGAC1    → SAGAC1.LM      sin datos recuperables (Yahoo sin cobertura)
+    CORAREC1  → CORAREC1.LM   sin datos recuperables (Yahoo sin cobertura)
+  Yahoo entrega OHLCV completo incluyendo volumen.
+
+2.2. Estrategia de combinación (merge BVL + Yahoo)
+------------------------------------------------------------------------
+La combinación se implementa en src/market/market_client.py, función
+fetch_market() y _merge_bvl_yahoo(). La lógica es:
+
+  a) Fechas presentes solo en Yahoo (anteriores a 2012-01-02): se usan los
+     datos Yahoo completos (OHLCV con volumen real).
+  b) Fechas presentes en BVL: el precio de cierre oficial de la BVL es
+     autoritativo. Open, high, low y volume se toman de Yahoo (si hay
+     coincidencia de fecha). Si Yahoo no cubre esa fecha, open=high=low=close
+     y volume=NaN.
+  c) Si BVL falla (error de red o sin datos): se usa Yahoo completo.
+  d) Si Yahoo falla o no tiene ticker: solo BVL (close-only).
+
+Resultado por activo:
+  CREDITC1:  cobertura 2008-2025, OHLCV enriquecido donde existe Yahoo
+  BUENAVC1:  cobertura 2012-2025 (BVL solamente; ver excepción abajo)
+  ALICORC1:  cobertura 2008-2025, OHLCV enriquecido donde existe Yahoo
+  SAGAC1:    cobertura 2012-2025, solo close (sin Yahoo disponible)
+  CORAREC1:  cobertura 2012-2025, solo close (sin Yahoo disponible)
+
+EXCEPCIÓN — BUENAVC1 / BVN:
+  El ticker de Yahoo para Buenaventura es BVN, un ADR listado en NYSE
+  denominado en dólares estadounidenses (USD). BUENAVC1 en la BVL cotiza en
+  soles peruanos (PEN) y es un instrumento distinto (diferente liquidez,
+  spreads y paridad). Por esta razón, el código implementa una verificación
+  explícita (same_instrument = asset.bvl != "BUENAVC1") que desactiva el
+  merge OHLCV para este activo. Los datos Yahoo de BVN se guardan como raw
+  de referencia pero NO se mezclan con los precios BVL en PEN.
+
+2.3. Control de calidad sobre datos de mercado
+------------------------------------------------------------------------
+- Filtro de cierres cero: el endpoint BVL puede devolver cierre=0 en días sin
+  referencia oficial. Estos registros se eliminan antes de almacenar
+  (df["close"] > 0).
+- Normalización de zona horaria: Yahoo devuelve fechas timezone-aware (Lima
+  está en America/Lima, UTC-5). Se convierten a datetime tz-naive por día
+  para compatibilidad con los registros BVL, que no incluyen zona horaria.
+- Reporte de discrepancias BVL vs Yahoo: en el período solapado se calcula
+  la diferencia porcentual entre los cierres de ambas fuentes y se reporta
+  cualquier día con divergencia superior al 2%, permitiendo detectar ajustes
+  de splits o dividendos no reconciliados.
+
+2.4. NO hay imputación de valores de mercado
+------------------------------------------------------------------------
+Los valores NaN en volume (originados en el endpoint BVL) se mantienen como
+NaN en todos los archivos intermedios. No se aplica ningún tipo de relleno
+(forward-fill, interpolación ni media) sobre los precios de mercado. Los
+huecos en cobertura histórica (por ejemplo, SAGAC1 y CORAREC1 antes de 2012)
+tampoco se imputan.
+
+2.5. Indicadores técnicos derivados
+------------------------------------------------------------------------
+Sobre la serie de cierre consolidada se calculan los siguientes indicadores
+(módulo src/market/technical_indicators.py):
+
+  ret_1d        — retorno logarítmico diario (pct_change sobre close)
+  sma_20        — media móvil simple 20 días
+  sma_50        — media móvil simple 50 días
+  ema_12        — media móvil exponencial 12 períodos
+  ema_26        — media móvil exponencial 26 períodos
+  macd          — diferencia EMA12 - EMA26
+  macd_signal   — EMA 9 períodos del MACD
+  rsi_14        — RSI estándar de 14 días (Wilder)
+  volatility_20 — desviación estándar de ret_1d en ventana 20 días,
+                  anualizada (× √252)
+
+Los primeros N días de cada indicador son NaN por diseño (ventana no completa),
+lo cual es el comportamiento esperado y correcto; no se aplica relleno.
+
+2.6. Almacenamiento de mercado
+------------------------------------------------------------------------
+Archivos raw (por fuente, sin combinar):
+  data/raw/market_{TICKER}_bvl.parquet
+  data/raw/market_{TICKER}_yahoo.parquet
+
+Archivo intermedio (combinado + indicadores):
+  data/interim/market_{TICKER}.parquet
+
+
+========================================================================
+3. DATOS FUNDAMENTALES (ESTADOS FINANCIEROS TRIMESTRALES)
+========================================================================
+
+3.1. Fuentes consideradas y decisión de fuente primaria
+------------------------------------------------------------------------
+Se evaluaron dos fuentes para datos fundamentales:
+
+  FUENTE PRIMARIA ELEGIDA — Web Service SOAP de Datos Abiertos de la SMV
+  (Superintendencia del Mercado de Valores del Perú)
+  WSDL: https://mvnet.smv.gob.pe/ws_od_eeff/WebServiceInfoFinanciera.asmx?WSDL
+  Justificación: fuente oficial regulatoria. Las empresas listadas en la BVL
+  están legalmente obligadas a presentar sus EEFF a la SMV. Los datos son
+  estructurados, de acceso gratuito, y representan la información pública
+  disponible bajo la misma timeline de publicación que un inversor real podría
+  haber tenido acceso.
+
+  FUENTE SECUNDARIA DESCARTADA — BVL dataondemand (financialstatements)
+  Endpoint evaluado: POST https://dataondemand.bvl.com.pe/v1/financialstatements/
+  Resultado: confirmado inoperativo a junio 2026. El endpoint responde con
+  HTTP 200 pero body=null para todos los tickers del universo. Se conserva el
+  código como stub por compatibilidad futura, pero NO aporta datos al pipeline.
+
+3.2. Operaciones del WSDL utilizadas
+------------------------------------------------------------------------
+El servicio SOAP expone las siguientes operaciones relevantes, todas con los
+parámetros Ejercicio (año, string), Periodo (trimestre "1"-"4", string) y
+Tipo ("I"=Individual, "C"=Consolidada):
+
+  obtener_InfoFinanciera   — resumen financiero de alto nivel
+  obtener_BalanceGeneral   — estado de situación financiera (activo/pasivo/pat.)
+  obtener_GanciaPerdida    — estado de resultados (PyG)
+  obtener_FlujoEfectivo    — estado de flujos de efectivo
+
+Cada llamada devuelve los datos de TODAS las empresas registradas en la SMV
+(aproximadamente 261 empresas en total, ~8 MB por respuesta). El filtrado por
+activo se realiza post-descarga usando el código RPJ de la empresa en el campo
+RPJ del response, con un fallback de coincidencia parcial por NombreEmpresa
+si el RPJ no produce resultados.
+
+Parámetros RPJ confirmados:
+  CREDITC1  → B80005   (Banco de Crédito del Perú)
+  BUENAVC1  → B20003   (Compañía de Minas Buenaventura S.A.A.)
+  ALICORC1  → B30006   (Alicorp S.A.A.)
+  SAGAC1    → 014313   (Saga Falabella S.A.)
+  CORAREC1  → CI0003   (Corporación Aceros Arequipa S.A.)
+
+Tipo de EEFF usado: "I" (Individual). El tipo Consolidado ("C") también está
+disponible en el WSDL pero no se utiliza en el pipeline actual.
+
+3.3. Cobertura temporal de fundamentales
+------------------------------------------------------------------------
+Horizonte solicitado: 2005-01-01 a 2025-12-31
+Periodos cubiertos (confirmados en archivos parquet):
+  Q1 2005 (2005-03-31) hasta Q4 2025 (2025-12-31) — 84 trimestres por activo.
+
+La SMV tiene cobertura desde al menos 2005 para todos los activos del universo.
+Los datos de 2024-2025 pudieron recuperarse; sin embargo, los trimestres más
+recientes pueden presentar menor densidad de empresas que hayan presentado a
+la fecha de descarga.
+
+Estadísticas de los archivos resultantes:
+  CREDITC1:  22.425 filas | 83 periodos | 443 cuentas | moneda: PEN
+  BUENAVC1:  17.928 filas | 84 periodos | 398 cuentas | monedas: PEN, USD
+  ALICORC1:  17.928 filas | 84 periodos | 398 cuentas | monedas: PEN, USD
+  SAGAC1:    17.928 filas | 84 periodos | 398 cuentas | moneda: PEN
+  CORAREC1:  17.924 filas | 84 periodos | 397 cuentas | moneda: PEN
+
+La diferencia en número de cuentas de CREDITC1 (443 vs ~398) se debe a que
+el BCP es un banco y utiliza la taxonomía contable SBS (Superintendencia de
+Banca y Seguros), que es más granular y distinta a la taxonomía NIIF/PCGE
+usada por empresas no financieras.
+
+3.4. Estructura del dataset de fundamentales (formato largo)
+------------------------------------------------------------------------
+Los datos se almacenan en formato largo (long format / tidy format), donde
+cada fila corresponde a una cuenta contable específica de un período trimestral:
+
+  Columnas: ticker | period | known_date | account | value | currency | source
+
+  ticker:     código de la acción en BVL (ej. "ALICORC1")
+  period:     fecha de cierre del trimestre en ISO 8601 (ej. "2023-12-31")
+  known_date: fecha estimada en que el EEFF se hizo público (ver 3.5)
+  account:    código de cuenta con prefijo de estado financiero (ver 3.6)
+  value:      monto de la cuenta (en miles de la moneda reportada)
+  currency:   "PEN" o "USD" según la moneda de presentación del EEFF
+  source:     siempre "smv" en el pipeline actual
+
+Los montos están expresados en miles de la moneda correspondiente, que es
+la unidad nativa que usa la SMV en sus respuestas.
+
+3.5. known_date y prevención de look-ahead bias
+------------------------------------------------------------------------
+El campo known_date es crítico para la integridad metodológica de cualquier
+modelo de decisión financiera. Representa el momento más temprano en que un
+inversor real podría haber accedido a la información del EEFF trimestral.
+
+Cálculo: known_date = fecha_fin_trimestre + 45 días
+
+Ejemplo: para Q3 2023 (período que cierra el 30-09-2023), known_date = 14-11-2023.
+
+El lag de 45 días es una aproximación conservadora al plazo regulatorio de
+presentación de EEFF a la SMV. En la integración del dataset final (R6),
+los fundamentales se incorporan al panel diario usando un merge_asof con
+dirección "backward" sobre known_date, lo que garantiza que en ningún día
+de trading se utilice información que no habría estado disponible en ese
+momento (prevención de look-ahead bias).
+
+3.6. Prefijos de cuentas y mapeo de estados financieros
+------------------------------------------------------------------------
+Los códigos de cuenta SMV se preprocesan con los siguientes prefijos:
+
+  BG_{Cuenta}        — Balance General (Situación Financiera)
+                       Monto1 = saldo al cierre del período
+  GP_Q_{Cuenta}      — Ganancias y Pérdidas, valor del trimestre aislado
+                       (Monto1 del WSDL)
+  GP_YTD_{Cuenta}    — Ganancias y Pérdidas, acumulado del ejercicio
+                       (Monto3 del WSDL)
+  CF_{Cuenta}        — Flujo de Efectivo, acumulado del ejercicio
+  INFO_{Campo}       — Resumen InfoFinanciera con campos de alto nivel:
+                       ActivoTotal, PatrimonioTotal, TotalIngreso,
+                       UtilidadNeta, PasivoTotal
+
+La operación obtener_GanciaPerdida devuelve dos montos simultáneamente por
+cuenta (Monto1=trimestre, Monto3=acumulado), y el pipeline los separa en dos
+registros con sufijos _Q y _YTD respectivamente.
+
+3.7. Notas especiales por empresa
+------------------------------------------------------------------------
+BUENAVC1 — Compañía de Minas Buenaventura:
+  Reporta sus EEFF a la SMV en dólares estadounidenses (Moneda="Dólares").
+  En el dataset, currency="USD" para estas filas. El pipeline mapea
+  correctamente la cadena "D lares" (con codificación de tilde corrupta en
+  algunas respuestas del WSDL) al código "USD" mediante un diccionario de
+  normalización explícito.
+
+CREDITC1 — Banco de Crédito del Perú:
+  Utiliza la taxonomía contable SBS, que tiene más cuentas (443 vs ~398 en
+  empresas no financieras). Los ratios derivados de INFO_* (ROE, ROA, etc.)
+  son calculables, pero indicadores como la razón deuda/activo tienen una
+  interpretación distinta en bancos (el "pasivo" incluye depósitos de clientes,
+  que es parte del modelo de negocio y no deuda financiera pura).
+
+SAGAC1 — Saga Falabella:
+  El código RPJ 014313 corresponde exclusivamente a Saga Falabella S.A.
+  (retailer de tiendas por departamento). Existen otros RPJ relacionados al
+  ecosistema Falabella en Perú (B80144 = Banco Falabella, 020045 = Falabella
+  Peru S.A.) que fueron identificados y excluidos deliberadamente.
+
+3.8. Sistema de caché de respuestas SMV
+------------------------------------------------------------------------
+Cada llamada al WSDL descarga los datos de TODAS las empresas (~261) para un
+período dado, con un tamaño de respuesta de aproximadamente 8 MB. Para no
+re-descargar estos datos al procesar el segundo, tercer, cuarto y quinto
+activo del universo, se implementa un sistema de caché en dos niveles:
+
+  Nivel 1 — caché en memoria: diccionario Python (_MEM_CACHE) que persiste
+  durante la ejecución del proceso. Elimina re-descargas cuando se procesa
+  el mismo trimestre para distintos activos en la misma sesión.
+
+  Nivel 2 — caché en disco: cada respuesta se serializa como JSON en
+  data/raw/smv_cache/{operacion}_{año}Q{trimestre}_{tipo}.json
+  (por ejemplo: obtener_BalanceGeneral_2023Q4_I.json). En ejecuciones
+  posteriores del pipeline, si el archivo existe, se lee del disco sin
+  realizar ninguna llamada de red.
+
+  El directorio data/raw/smv_cache/ contiene, al finalizar la extracción
+  completa, un archivo JSON por cada combinación (operación × trimestre ×
+  tipo) del rango 2005-2025, lo que representa ~4 operaciones × 84 periodos
+  = hasta 336 archivos JSON.
+
+3.9. NO hay imputación de datos fundamentales
+------------------------------------------------------------------------
+Los valores fundamentales se almacenan tal como los devuelve la SMV. No se
+aplica imputación ni relleno para:
+  - Cuentas ausentes en un trimestre determinado.
+  - Valores NaN en campos individuales.
+  - Períodos en los que una empresa no presentó EEFF (raro pero posible en
+    los primeros años del horizonte, 2005-2006).
+
+La propagación temporal de los valores fundamentales al dataset diario (que sí
+implica forward-fill desde known_date) es parte del proceso de integración
+(R6), no del proceso de extracción (R4).
+
+3.10. Ratios fundamentales derivados
+------------------------------------------------------------------------
+A partir de las cuentas INFO_* se calculan los siguientes ratios en el módulo
+fundamentals_client.py (función compute_ratios()):
+
+  ROE         = UtilidadNeta / PatrimonioTotal
+  ROA         = UtilidadNeta / ActivoTotal
+  net_margin  = UtilidadNeta / TotalIngreso
+  debt_equity = PasivoTotal  / PatrimonioTotal
+  debt_ratio  = PasivoTotal  / ActivoTotal
+
+Los ratios no requieren el número de acciones en circulación porque se derivan
+directamente de los montos absolutos reportados a la SMV. En caso de
+denominador igual a cero, el ratio se registra como NaN (división segura
+implementada para evitar divisiones por cero).
+
+Ratios NO implementados por falta de datos confiables:
+  P/E (Price-to-Earnings): requiere número de acciones en circulación. Se
+      investigaron tres fuentes alternativas (yfinance sharesOutstanding,
+      cuenta de Capital Emitido SMV, endpoint BVL share), ninguna entregó
+      una serie histórica confiable y consistente para los 84 trimestres del
+      horizonte. Queda como trabajo pendiente.
+  Dividend Yield (DY): requiere dividendos por acción, no disponibles en
+      las fuentes actuales.
+
+3.11. Almacenamiento de fundamentales
+------------------------------------------------------------------------
+Archivos raw por activo (formato largo, todas las cuentas SMV):
+  data/raw/fund_{TICKER}_smv.parquet
+
+Los archivos de caché de respuestas crudas del WSDL:
+  data/raw/smv_cache/
+
+
+========================================================================
+4. INTEGRACIÓN EN EL DATASET UNIFICADO (R6)
+========================================================================
+
+El módulo src/integration/build_dataset.py construye el panel final que
+combina las tres fuentes de señales sobre el calendario de días hábiles de
+la BVL:
+
+  Mercado + indicadores técnicos  (frecuencia diaria)
+  Sentimiento de noticias          (frecuencia diaria)
+  Fundamentales trimestrales       (propagados con forward-fill desde known_date)
+
+La clave del panel es (ticker, date). Para los días sin noticias, el
+sentimiento se imputa como 0.0 (neutral). Los fundamentales se propagan
+con pd.merge_asof (dirección "backward") desde la known_date de cada
+trimestre, garantizando que no se usa información futura.
+
+El dataset resultante soporta cuatro "vistas" de señales para los
+experimentos DRL:
+  1. Solo mercado (OHLCV + indicadores técnicos)
+  2. Mercado + sentimiento
+  3. Mercado + fundamentales
+  4. Completa (mercado + sentimiento + fundamentales)
+
+
+========================================================================
+5. RESUMEN DE COBERTURA FINAL
+========================================================================
+
+              | DATOS DE MERCADO          | DATOS FUNDAMENTALES
+  Activo      | Desde       Hasta  Fuente | Desde    Hasta   Periodos
+  ------------+--------------------------+----------------------------
+  CREDITC1    | 2008-01-03  2025-12-31  BVL+YH | 2005-03  2025-12  83 trim
+  BUENAVC1    | 2012-01-02  2025-12-31  BVL     | 2005-03  2025-12  84 trim
+  ALICORC1    | 2008-01-03  2025-12-31  BVL+YH | 2005-03  2025-12  84 trim
+  SAGAC1      | 2012-01-02  2025-12-31  BVL     | 2005-03  2025-12  84 trim
+  CORAREC1    | 2012-01-02  2025-12-31  BVL     | 2005-03  2025-12  84 trim
+
+  BVL+YH = BVL (close primario) + Yahoo Finance (O/H/L/volume)
+  BVL    = solo BVL (close; volume=NaN; sin Yahoo disponible)
+
+  Moneda de precios de mercado: PEN (soles peruanos) para todos.
+  Moneda BUENAVC1 Yahoo (BVN): USD — NO mezclado con BVL PEN.
+  Moneda de fundamentales: PEN para todos excepto BUENAVC1 (PEN + USD).
+
+
+========================================================================
+FIN DEL DOCUMENTO
+========================================================================

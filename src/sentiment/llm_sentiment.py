@@ -12,12 +12,15 @@ Buenas prácticas incluidas:
 from __future__ import annotations
 
 import json
+import re
+import urllib.request
 from pathlib import Path
 
 import pandas as pd
 
 PROMPT_VERSION = "v1"
 _LABELS = {"positivo": 1.0, "neutral": 0.0, "negativo": -1.0}
+_OLLAMA_URL = "http://localhost:11434/api/chat"
 
 _SYSTEM_PROMPT = (
     "Eres un analista financiero. Clasifica el sentimiento de la noticia sobre "
@@ -28,35 +31,83 @@ _SYSTEM_PROMPT = (
 
 
 def classify_article(title: str, text: str, company: str,
-                     provider: str = "anthropic") -> dict:
-    """Llama al LLM y devuelve {'sentiment','confidence'}.
+                     model: str = "gemma3:4b") -> dict:
+    """Llama a Ollama y devuelve {'sentiment', 'confidence'}.
 
-    TODO: cablear el proveedor real. Ejemplo Anthropic:
-
-        import anthropic
-        client = anthropic.Anthropic()
-        msg = client.messages.create(
-            model="claude-...", max_tokens=100,
-            system=_SYSTEM_PROMPT,
-            messages=[{"role": "user",
-                       "content": f"Empresa: {company}\\n{title}\\n{text[:2000]}"}])
-        return json.loads(msg.content[0].text)
+    Usa la API REST local de Ollama (http://localhost:11434).
+    Requiere que el servicio esté corriendo: `ollama serve`.
     """
-    raise NotImplementedError("Conectar proveedor LLM (anthropic/google/openai).")
+    user_content = f"Empresa: {company}\nTítulo: {title}\n{text[:2000]}"
+    payload = json.dumps({
+        "model": model,
+        "stream": False,
+        "messages": [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user",   "content": user_content},
+        ],
+    }).encode()
+
+    req = urllib.request.Request(
+        _OLLAMA_URL,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=180) as resp:
+        body = json.loads(resp.read())
+
+    raw = body["message"]["content"].strip()
+    return _parse_llm_json(raw)
+
+
+def _parse_llm_json(raw: str) -> dict:
+    """Extrae el JSON del texto del LLM; tolera markdown code fences."""
+    # quita ```json ... ``` si el modelo los añade
+    cleaned = re.sub(r"```(?:json)?|```", "", raw).strip()
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError:
+        # fallback: busca la primera llave JSON en el texto
+        m = re.search(r"\{[^}]+\}", cleaned)
+        if m:
+            data = json.loads(m.group())
+        else:
+            return {"sentiment": "neutral", "confidence": 0.0}
+
+    sentiment = str(data.get("sentiment", "neutral")).lower()
+    if sentiment not in _LABELS:
+        sentiment = "neutral"
+    confidence = float(data.get("confidence", 0.5))
+    return {"sentiment": sentiment, "confidence": confidence}
 
 
 def classify_dataframe(news: pd.DataFrame, company: str, cache_path: Path,
-                       provider: str = "anthropic") -> pd.DataFrame:
+                       model: str = "gemma3:4b",
+                       save_every: int = 50) -> pd.DataFrame:
     """Clasifica un DataFrame de noticias con caché por id de noticia."""
     cache = _load_cache(cache_path)
     scores = []
-    for _, row in news.iterrows():
+    total = len(news)
+    new_since_save = 0
+    for i, (_, row) in enumerate(news.iterrows()):
         key = str(row.get("id") or row.get("url"))
         if key not in cache:
-            res = classify_article(row.get("title", ""), row.get("text", ""),
-                                   company, provider)
+            title = str(row.get("title") or "")
+            # MediaCloud story_list no devuelve texto completo; el campo puede
+            # ser NaN, None o ausente. El clasificador trabaja principalmente
+            # con el título, que sí viene siempre y es suficiente para
+            # sentimiento financiero de corto plazo.
+            raw_text = row.get("text")
+            text = "" if (raw_text is None or pd.isna(raw_text)) else str(raw_text)
+            res = classify_article(title, text, company, model)
             cache[key] = res
+            new_since_save += 1
+            if new_since_save >= save_every:
+                _save_cache(cache_path, cache)
+                new_since_save = 0
         scores.append(_LABELS[cache[key]["sentiment"]])
+        if (i + 1) % save_every == 0 or (i + 1) == total:
+            print(f"    [{i + 1}/{total}] {company}", flush=True)
     _save_cache(cache_path, cache)
     out = news.copy()
     out["sentiment_score"] = scores

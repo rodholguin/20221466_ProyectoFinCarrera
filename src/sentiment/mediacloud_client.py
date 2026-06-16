@@ -15,13 +15,18 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pandas as pd
 
 from src.universe import Asset
 
 _TOKEN = os.environ.get("MEDIACLOUD_API_TOKEN", "")
+_PAGE_DELAY  = 1.0   # segundos entre páginas (evita rate limiting)
+_RETRY_MAX   = 5
+_RETRY_DELAY = 10.0  # segundos de espera inicial ante error de API
 
 
 def find_peru_collection(name: str = "Peru") -> list[dict]:
@@ -51,8 +56,18 @@ def list_peru_sources(collection_id: int) -> list[dict]:
 
 
 def fetch_stories(asset: Asset, collection_id: int, start: str, end: str,
-                  raw_dir: Path) -> pd.DataFrame:
-    """Descarga (paginando) las noticias del emisor dentro de la colección."""
+                  raw_dir: Path,
+                  source_allowlist: list[str] | None = None) -> pd.DataFrame:
+    """Descarga (paginando) las noticias del emisor dentro de la colección.
+
+    Incluye retry exponencial ante errores transitorios de la API y pausa
+    entre páginas para no superar el rate limit.
+
+    `source_allowlist`: dominios permitidos (ej. ["gestion.pe", "elcomercio.pe"]).
+    Si se provee, se descartan artículos de fuentes no incluidas en la lista,
+    eliminando tabloides, medios deportivos y fuentes extranjeras que se
+    cuelan en la colección nacional de MediaCloud.
+    """
     import mediacloud.api as mc
 
     search = mc.SearchApi(_TOKEN)
@@ -60,36 +75,93 @@ def fetch_stories(asset: Asset, collection_id: int, start: str, end: str,
     start_d = dt.date.fromisoformat(start)
     end_d = dt.date.fromisoformat(end)
 
-    stories, token, more = [], None, True
+    stories, token, more, page_n = [], None, True, 0
     while more:
-        page, token = search.story_list(
-            query,
-            start_date=start_d,
-            end_date=end_d,
-            collection_ids=[collection_id],   # <-- requisito de la API
-            pagination_token=token,
-        )
+        page_n += 1
+        for attempt in range(1, _RETRY_MAX + 1):
+            try:
+                page, token = search.story_list(
+                    query,
+                    start_date=start_d,
+                    end_date=end_d,
+                    collection_ids=[collection_id],
+                    pagination_token=token,
+                )
+                break
+            except Exception as exc:
+                wait = _RETRY_DELAY * (2 ** (attempt - 1))
+                print(f"    [pág {page_n} intento {attempt}/{_RETRY_MAX}] error: {exc} — "
+                      f"esperando {wait:.0f}s ...")
+                if attempt == _RETRY_MAX:
+                    raise
+                time.sleep(wait)
         stories += page
         more = token is not None
+        if more:
+            time.sleep(_PAGE_DELAY)
 
     df = pd.DataFrame(stories)
-    if not df.empty:
-        df["ticker"] = asset.bvl
-        raw_dir.mkdir(parents=True, exist_ok=True)
-        df.to_parquet(raw_dir / f"news_{asset.bvl}.parquet")
+    if df.empty:
+        return df
+
+    df["ticker"] = asset.bvl
+
+    if source_allowlist:
+        before = len(df)
+        df = _filter_by_source(df, source_allowlist)
+        print(f"    filtro de fuentes: {before} → {len(df)} noticias")
+
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(raw_dir / f"news_{asset.bvl}.parquet")
     return df
 
 
 def _build_query(asset: Asset) -> str:
-    """Query por emisor: nombre comercial + alias. Ajustar por activo."""
+    """Query booleana por emisor con términos de anclaje financiero.
+
+    Los términos ambiguos (Buenaventura, Falabella) se anclan con AND a
+    vocabulario económico para evitar capturar: la ciudad colombiana de
+    Buenaventura, el jugador de fútbol, la cadena Falabella de Chile, etc.
+    """
+    _FINANCIAL = (
+        "(accion OR acciones OR bolsa OR BVL OR utilidad OR inversion"
+        " OR mercado OR empresa OR minera OR produccion OR resultado OR ganancia)"
+    )
     aliases = {
-        "CREDITC1": '"Banco de Credito" OR "BCP" OR "Credicorp"',
-        "BUENAVC1": '"Buenaventura" OR "Minas Buenaventura"',
-        "ALICORC1": '"Alicorp"',
-        "SAGAC1": '"Saga Falabella" OR "Falabella"',
-        "CORAREC1": '"Aceros Arequipa" OR "Corporacion Aceros Arequipa"',
+        # BCP es sigla común; se ancla con términos bancarios/financieros
+        "CREDITC1": (
+            '(BCP OR Credicorp OR "Banco de Credito del Peru") AND '
+            + _FINANCIAL
+        ),
+        # "Buenaventura" sola captura la ciudad colombiana y jugadores de fútbol
+        "BUENAVC1": (
+            '("Minas Buenaventura" OR "Compañia de Minas Buenaventura") AND '
+            + _FINANCIAL
+        ),
+        # Alicorp es suficientemente específico; ancle suave para evitar notas triviales
+        "ALICORC1": f'Alicorp AND {_FINANCIAL}',
+        # "Falabella" sola captura la cadena chilena; "Saga" la acota a Perú
+        "SAGAC1":   (
+            '"Saga Falabella" AND ' + _FINANCIAL
+        ),
+        "CORAREC1": '"Aceros Arequipa"',
     }
     return aliases.get(asset.bvl, f'"{asset.name}"')
+
+
+def _filter_by_source(df: pd.DataFrame, allowlist: list[str]) -> pd.DataFrame:
+    """Filtra filas cuyo dominio (extraído de `url`) no está en el allowlist."""
+    allowed = {d.lower().lstrip("www.") for d in allowlist}
+
+    def _domain(url: str) -> str:
+        try:
+            netloc = urlparse(str(url)).netloc.lower()
+            return netloc.lstrip("www.")
+        except Exception:
+            return ""
+
+    mask = df["url"].apply(_domain).isin(allowed)
+    return df[mask].reset_index(drop=True)
 
 
 if __name__ == "__main__":

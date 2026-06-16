@@ -94,9 +94,17 @@ sources:
   sentiment:
     # Media Cloud API v4. story_list EXIGE collection_ids o sources.
     # El token va por variable de entorno MEDIACLOUD_API_TOKEN.
-    peru_national_collection_id: null   # TODO: resolver con DirectoryApi (ver módulo)
-    llm_provider: "anthropic"           # anthropic | google | openai
+    peru_national_collection_id: 34412158  # "Peru - National" (confirmado con DirectoryApi)
+    llm_provider: "ollama"              # ollama (gemma3:4b local)
+    llm_model: "gemma3:4b"              # modelo Ollama local
     daily_aggregation: "mean"           # mean | net_sentiment
+    # Solo medios económicos peruanos de referencia. Excluye tabloides,
+    # medios deportivos y fuentes extranjeras que se cuelan en la colección
+    # nacional de MediaCloud (ej: eltiempo.com colombiano).
+    source_allowlist:
+      - "gestion.pe"
+      - "elcomercio.pe"
+      - "larepublica.pe"
 
 paths:
   raw:       "data/raw"
