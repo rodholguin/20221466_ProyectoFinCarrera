@@ -1,15 +1,25 @@
-"""R3 — Pipeline de datos de mercado (OHLCV).
+"""R3 — Pipeline de datos de mercado (OHLCV) + capa de acciones corporativas.
 
 Fuentes:
   - BVL primaria : GET dataondemand.bvl.com.pe/v1/stock-quote/share-values/{nemonico}
                    Endpoint descubierto en el bundle Angular del sitio (main.js).
                    Devuelve precio de cierre diario (referencial oficial) desde 2012-01-02.
                    Limitacion: solo close; open=high=low=close, volume=NaN.
-  - Yahoo fallback: cubre el periodo pre-2012 para tickers con sufijo .LM,
-                   y da OHLCV completo para enriquecer los registros BVL.
-                   Nota: BVN (BUENAVC1) es un ADR NYSE en USD -> instrumento
-                   diferente; se guarda como raw para referencia pero NO se mezcla
-                   con los precios BVL en PEN.
+                   BVL determina el horizonte EFECTIVO del dataset de mercado
+                   (2012-2025): es la fuente "sana y original" (BVL/SMV) que
+                   manda sobre Yahoo. No se usan datos de mercado anteriores a
+                   2012 (solo Yahoo) en el dataset final.
+  - Yahoo (enriquecimiento puntual): SOLO completa open/high/low/volumen en
+                   fechas donde BVL YA tiene un registro (mismo instrumento;
+                   no aplica a BUENAVC1/BVN, que es un ADR USD). NO se usa para
+                   extender la cobertura hacia atrás del inicio de BVL: para
+                   tickers de baja liquidez (CREDITC1) se confirmó que el close
+                   de Yahoo en el período pre-BVL viene en una base de acciones
+                   distinta (ajustada a la fecha de descarga, no a la fecha
+                   cotizada -- ver corporate_actions.py), y mezclarlo generaba
+                   saltos artificiales >100%. Por eso el open/high/low de Yahoo
+                   se reescala por el factor acumulado de splits antes de
+                   fusionarlo con el close (siempre autoritativo) de la BVL.
 """
 from __future__ import annotations
 
@@ -17,6 +27,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from src.market.corporate_actions import build_adjusted_prices, fetch_actions, split_factor
 from src.universe import MARKET_SCHEMA, Asset
 
 # ── BVL (primaria) ────────────────────────────────────────────────────────────
@@ -106,14 +117,17 @@ def fetch_yahoo(asset: Asset, start: str, end: str) -> pd.DataFrame:
 
 # ── Orquestacion y merge ──────────────────────────────────────────────────────
 def fetch_market(asset: Asset, start: str, end: str, raw_dir: Path) -> pd.DataFrame:
-    """Obtiene datos de mercado fusionando BVL (primaria) con Yahoo (complemento).
+    """Obtiene datos de mercado: BVL primaria (determina el horizonte) +
+    Yahoo como enriquecimiento puntual de OHLCV + capa de acciones corporativas.
 
-    Estrategia de merge:
-      - Fechas BVL (2012+): close oficial de la BVL; OHLCV enriquecido con Yahoo
-        si es el mismo instrumento en PEN (no aplica para BUENAVC1/BVN USD).
-      - Fechas solo Yahoo (pre-2012): OHLCV completo de Yahoo.
-      - Si solo BVL: close-only.
-      - Si solo Yahoo: OHLCV completo.
+    Estrategia:
+      - Sin datos BVL -> sin datos de mercado (Yahoo no es un fallback de
+        cobertura; ver docstring del módulo).
+      - Con BVL: close oficial de la BVL; OHLCV enriquecido con Yahoo en las
+        fechas donde coinciden, si es el mismo instrumento en PEN (no aplica
+        para BUENAVC1/BVN USD).
+      - Tras consolidar close_raw, se agregan close_split_adj y
+        close_total_return (ver corporate_actions.py).
     """
     raw_dir.mkdir(parents=True, exist_ok=True)
     bvl = fetch_bvl(asset, start, end)
@@ -123,68 +137,90 @@ def fetch_market(asset: Asset, start: str, end: str, raw_dir: Path) -> pd.DataFr
         if not df.empty:
             df.to_parquet(raw_dir / f"market_{asset.bvl}_{name}.parquet")
 
-    if bvl.empty and yah.empty:
-        print(f"[market] {asset.bvl}: SIN DATOS en ninguna fuente.")
+    if bvl.empty:
+        print(f"[market] {asset.bvl}: SIN DATOS en la BVL (fuente primaria) -> "
+              f"sin datos de mercado (Yahoo no reemplaza a la BVL como fuente).")
         return pd.DataFrame(columns=MARKET_SCHEMA)
 
-    if bvl.empty:
-        return yah
-
-    if yah.empty:
-        return bvl
-
     # BVN (BUENAVC1 Yahoo) es ADR NYSE en USD != BUENAVC1 BVL en PEN.
-    # No mezclar precios de distintos instrumentos; Yahoo solo aporta el periodo pre-BVL.
     same_instrument = (asset.bvl != "BUENAVC1")
+    actions = fetch_actions(asset)
 
-    merged = _merge_bvl_yahoo(bvl, yah, enrich_ohlcv=same_instrument)
+    if not yah.empty and same_instrument:
+        merged = _merge_bvl_yahoo(bvl, yah, splits=actions["splits"])
+    else:
+        merged = bvl.copy()
 
-    if same_instrument:
-        _report_discrepancies(asset, bvl, yah)
+    result = _add_corporate_actions(asset, merged, end, actions=actions)
 
-    return merged
+    if not yah.empty and same_instrument:
+        _report_discrepancies(asset, result, yah)
+
+    return result
 
 
 def _merge_bvl_yahoo(bvl: pd.DataFrame, yah: pd.DataFrame,
-                     enrich_ohlcv: bool = True) -> pd.DataFrame:
-    """Combina BVL close (primario) con Yahoo OHLCV (complemento).
+                     splits: pd.Series | None = None) -> pd.DataFrame:
+    """Enriquece BVL (close SIEMPRE autoritativo) con open/high/low/volumen de
+    Yahoo en las fechas donde ambas fuentes coinciden.
 
-    - Fechas solo en Yahoo (pre-2012): fila Yahoo completa.
-    - Fechas en BVL: close de BVL; si enrich_ohlcv, open/high/low/volume de Yahoo.
+    Si `splits` no es None/vacío, el open/high/low de Yahoo se reescala por el
+    factor acumulado de splits antes de fusionar: para tickers de baja
+    liquidez (CREDITC1), ese open/high/low viene en la base de acciones
+    "actual" (a la fecha de descarga), no en la vigente el día cotizado, y
+    mezclarlo sin reescalar generaría un OHLC inconsistente con el close de
+    BVL en la misma fila (ver corporate_actions.py).
     """
-    bvl_dates = set(bvl["date"])
+    yah_ohlc = yah[["date", "open", "high", "low", "volume"]].copy()
 
-    pre_bvl = yah[~yah["date"].isin(bvl_dates)].copy()
+    if splits is not None and not splits.empty:
+        factor = split_factor(yah_ohlc["date"], splits).to_numpy()
+        for col in ("open", "high", "low"):
+            yah_ohlc[col] = yah_ohlc[col].to_numpy() * factor
 
-    if enrich_ohlcv:
-        overlap = bvl.merge(
-            yah[["date", "open", "high", "low", "volume"]],
-            on="date", how="left", suffixes=("", "_yah"),
-        )
-        for col in ["open", "high", "low", "volume"]:
-            yah_col = col + "_yah"
-            if yah_col in overlap.columns:
-                overlap[col] = overlap[yah_col].combine_first(overlap[col])
-                overlap.drop(columns=[yah_col], inplace=True)
-        bvl_part = overlap
-    else:
-        bvl_part = bvl
-
-    combined = pd.concat([pre_bvl, bvl_part], ignore_index=True)
-    return combined.sort_values("date").reset_index(drop=True)
+    merged = bvl.merge(yah_ohlc, on="date", how="left", suffixes=("", "_yah"))
+    for col in ("open", "high", "low", "volume"):
+        yah_col = f"{col}_yah"
+        if yah_col in merged.columns:
+            merged[col] = merged[yah_col].combine_first(merged[col])
+            merged.drop(columns=[yah_col], inplace=True)
+    return merged
 
 
-def _report_discrepancies(asset: Asset, bvl: pd.DataFrame, yah: pd.DataFrame,
+def _add_corporate_actions(asset: Asset, df: pd.DataFrame, end: str | None,
+                           actions: dict[str, pd.Series]) -> pd.DataFrame:
+    """Agrega close_raw, close_split_adj, close_total_return y los flags
+    is_split_adjusted/is_div_adjusted (ver corporate_actions.build_adjusted_prices)."""
+    df = df.sort_values("date").reset_index(drop=True)
+    df["close_raw"] = df["close"]
+
+    close_indexed = pd.Series(df["close_raw"].to_numpy(), index=pd.DatetimeIndex(df["date"]))
+    close_split_adj, close_total_return, flags = build_adjusted_prices(
+        asset, close_indexed, end=end, actions=actions)
+
+    df["close_split_adj"] = close_split_adj.to_numpy()
+    df["close_total_return"] = close_total_return.to_numpy()
+    df["is_split_adjusted"] = flags["is_split_adjusted"]
+    df["is_div_adjusted"] = flags["is_div_adjusted"]
+    return df
+
+
+def _report_discrepancies(asset: Asset, merged: pd.DataFrame, yah: pd.DataFrame,
                           tol: float = 0.02) -> None:
-    """Compara cierres BVL vs Yahoo en el periodo solapado y reporta diffs > tol."""
-    m = bvl.merge(yah, on="date", suffixes=("_bvl", "_yahoo"))
+    """Compara close_split_adj (BVL ajustado por splits) vs. close de Yahoo en
+    fechas solapadas. close_split_adj es comparable con el close de Yahoo con
+    auto_adjust=False: ambos quedan ajustados por splits a la fecha de
+    descarga pero NO por dividendos -- el close crudo de BVL, en cambio,
+    difiere de Yahoo por los splits acumulados desde cada fecha."""
+    m = merged[["date", "close_split_adj"]].merge(
+        yah[["date", "close"]], on="date")
     if m.empty:
         return
-    rel = (m["close_bvl"] - m["close_yahoo"]).abs() / m["close_yahoo"].replace(0, pd.NA)
+    rel = (m["close_split_adj"] - m["close"]).abs() / m["close"].replace(0, pd.NA)
     bad = m[rel > tol]
     if len(bad):
-        print(f"[reconcile] {asset.bvl}: {len(bad)} dias con diff de cierre > {tol:.0%}"
-              f" (de {len(m)} solapados)")
+        print(f"[reconcile] {asset.bvl}: {len(bad)} dias con diff "
+              f"(close_split_adj vs Yahoo) > {tol:.0%} (de {len(m)} solapados)")
 
 
 # Ejecutar el pipeline completo con: python -m src.market

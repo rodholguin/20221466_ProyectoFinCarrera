@@ -26,7 +26,13 @@ en config.yaml en la raíz del proyecto.
 
 2.1. Fuentes utilizadas
 ------------------------------------------------------------------------
-Se utilizaron dos fuentes en combinación:
+Se utilizaron dos fuentes, SIN ponderación simétrica: la BVL es la fuente
+primaria y determina el horizonte EFECTIVO del dataset de mercado (2012-2025);
+Yahoo es estrictamente un enriquecimiento puntual de OHLCV, nunca un sustituto
+de cobertura. Esta jerarquía (BVL/SMV "manda" sobre Yahoo) se decidió tras
+encontrar que, para tickers de baja liquidez, el close de Yahoo no es
+comparable con el de la BVL fuera del período en que ambas fuentes coinciden
+(ver 2.3 y la sección 2.7, "Acciones corporativas").
 
   FUENTE PRIMARIA — BVL dataondemand
   Endpoint: GET https://dataondemand.bvl.com.pe/v1/stock-quote/share-values/{nemonico}
@@ -46,45 +52,66 @@ Se utilizaron dos fuentes en combinación:
   de la misma familia (issuers/stock, stock-quote/market, stock-quote/home,
   index-historical-data) por devolver errores 405 o datos no históricos.
 
-  FUENTE SECUNDARIA (fallback/complemento) — Yahoo Finance
+  FUENTE DE ENRIQUECIMIENTO PUNTUAL (NO de cobertura) — Yahoo Finance
   Librería: yfinance (Ticker.history(), con auto_adjust=False)
   Tickers utilizados:
-    CREDITC1  → CREDITC1.LM   cobertura: 2008-01-03 a 2025-12-30
-    BUENAVC1  → BVN            cobertura: 2005-01-03 a 2025-12-30 (ADR NYSE, USD)
-    ALICORC1  → ALICORC1.LM   cobertura: 2008-01-03 a 2025-12-30
+    CREDITC1  → CREDITC1.LM   (también .splits/.dividends, ver 2.7)
+    BUENAVC1  → BVN            ADR NYSE, USD — instrumento distinto
+    ALICORC1  → ALICORC1.LM   (también .splits/.dividends, ver 2.7)
     SAGAC1    → SAGAC1.LM      sin datos recuperables (Yahoo sin cobertura)
     CORAREC1  → CORAREC1.LM   sin datos recuperables (Yahoo sin cobertura)
-  Yahoo entrega OHLCV completo incluyendo volumen.
+  Yahoo entrega OHLCV completo incluyendo volumen, pero SOLO se usa en fechas
+  donde la BVL ya tiene un registro (ver 2.2). Los archivos raw por fuente
+  (data/raw/market_{TICKER}_yahoo.parquet) conservan el historial COMPLETO de
+  Yahoo (incluido el período anterior a 2012) únicamente como referencia/
+  diagnóstico — ese período NO entra al dataset combinado.
 
-2.2. Estrategia de combinación (merge BVL + Yahoo)
+2.2. Estrategia de combinación (BVL primaria + enriquecimiento Yahoo)
 ------------------------------------------------------------------------
 La combinación se implementa en src/market/market_client.py, función
 fetch_market() y _merge_bvl_yahoo(). La lógica es:
 
-  a) Fechas presentes solo en Yahoo (anteriores a 2012-01-02): se usan los
-     datos Yahoo completos (OHLCV con volumen real).
-  b) Fechas presentes en BVL: el precio de cierre oficial de la BVL es
-     autoritativo. Open, high, low y volume se toman de Yahoo (si hay
-     coincidencia de fecha). Si Yahoo no cubre esa fecha, open=high=low=close
-     y volume=NaN.
-  c) Si BVL falla (error de red o sin datos): se usa Yahoo completo.
-  d) Si Yahoo falla o no tiene ticker: solo BVL (close-only).
+  a) Sin datos BVL para un activo: SIN datos de mercado para ese activo.
+     Yahoo NUNCA actúa como fuente de cobertura de respaldo (decisión de
+     diseño: la data "sana y original" de BVL/SMV manda sobre Yahoo).
+  b) Con BVL: el precio de cierre oficial de la BVL es SIEMPRE autoritativo
+     (columna close / close_raw). Open, high, low y volume se completan con
+     Yahoo únicamente en las fechas donde Yahoo también tiene un registro
+     para ese mismo día. Si Yahoo no cubre esa fecha, open=high=low=close y
+     volume=NaN.
+  c) El open/high/low de Yahoo se reescala por el factor acumulado de splits
+     (corporate_actions.split_factor) antes de fusionarlo con el close de la
+     BVL — ver 2.7, "por qué reescalar el OHLC de Yahoo".
+  d) BUENAVC1 (ver excepción abajo): NUNCA se enriquece con Yahoo; el
+     resultado es BVL puro (close, y open=high=low=close, volume=NaN).
 
-Resultado por activo:
-  CREDITC1:  cobertura 2008-2025, OHLCV enriquecido donde existe Yahoo
-  BUENAVC1:  cobertura 2012-2025 (BVL solamente; ver excepción abajo)
-  ALICORC1:  cobertura 2008-2025, OHLCV enriquecido donde existe Yahoo
-  SAGAC1:    cobertura 2012-2025, solo close (sin Yahoo disponible)
-  CORAREC1:  cobertura 2012-2025, solo close (sin Yahoo disponible)
+Resultado por activo (horizonte efectivo 2012-2025 para los cinco):
+  CREDITC1:  BVL + OHLC enriquecido con Yahoo donde coincide la fecha
+  BUENAVC1:  BVL solamente (ver excepción abajo)
+  ALICORC1:  BVL + OHLC enriquecido con Yahoo donde coincide la fecha
+  SAGAC1:    BVL solamente (sin Yahoo disponible)
+  CORAREC1:  BVL solamente (sin Yahoo disponible)
+
+NOTA HISTÓRICA — datos pre-2012 descartados del dataset final:
+  CREDITC1 y ALICORC1 tienen cobertura Yahoo desde 2008 (BUENAVC1/BVN desde
+  2005). En una primera versión del pipeline, ese período se usaba como
+  relleno de cobertura pre-BVL. Se descartó esa estrategia: para CREDITC1 se
+  confirmó que el close de Yahoo en ese tramo está en una base de acciones
+  distinta a la de la BVL (ver 2.7) y generaba un salto artificial del 421%
+  exactamente en el empalme 2011-12-30 → 2012-01-02. Por decisión explícita,
+  el dataset de mercado final usa únicamente el horizonte de la BVL
+  (2012-2025); los archivos raw de Yahoo conservan el historial completo
+  solo como referencia.
 
 EXCEPCIÓN — BUENAVC1 / BVN:
   El ticker de Yahoo para Buenaventura es BVN, un ADR listado en NYSE
   denominado en dólares estadounidenses (USD). BUENAVC1 en la BVL cotiza en
   soles peruanos (PEN) y es un instrumento distinto (diferente liquidez,
   spreads y paridad). Por esta razón, el código implementa una verificación
-  explícita (same_instrument = asset.bvl != "BUENAVC1") que desactiva el
-  merge OHLCV para este activo. Los datos Yahoo de BVN se guardan como raw
-  de referencia pero NO se mezclan con los precios BVL en PEN.
+  explícita (same_instrument = asset.bvl != "BUENAVC1") que desactiva por
+  completo el merge OHLCV para este activo. Los datos Yahoo de BVN se
+  guardan como raw de referencia pero NUNCA se mezclan con los precios BVL
+  en PEN (ni el close, ni el open/high/low/volumen).
 
 2.3. Control de calidad sobre datos de mercado
 ------------------------------------------------------------------------
@@ -94,32 +121,47 @@ EXCEPCIÓN — BUENAVC1 / BVN:
 - Normalización de zona horaria: Yahoo devuelve fechas timezone-aware (Lima
   está en America/Lima, UTC-5). Se convierten a datetime tz-naive por día
   para compatibilidad con los registros BVL, que no incluyen zona horaria.
-- Reporte de discrepancias BVL vs Yahoo: en el período solapado se calcula
-  la diferencia porcentual entre los cierres de ambas fuentes y se reporta
-  cualquier día con divergencia superior al 2%, permitiendo detectar ajustes
-  de splits o dividendos no reconciliados.
+- Reporte de discrepancias BVL vs Yahoo (_report_discrepancies): en el
+  período solapado se compara close_split_adj (BVL ajustado por splits, ver
+  2.7) contra el close de Yahoo, y se reporta cualquier día con divergencia
+  superior al 2%. Se usa close_split_adj y NO el close crudo de BVL porque
+  el close de Yahoo (auto_adjust=False) SÍ viene ajustado por splits a la
+  fecha de descarga -- comparar contra el close crudo de BVL generaría miles
+  de "discrepancias" que en realidad son solo splits acumulados, no errores.
+  Aun así, ~10-13% de los días solapados de CREDITC1/ALICORC1 superan el 2%
+  (mediana ~3%, ruido normal entre fuentes); un puñado de días puntuales
+  (uno por cada split, hasta ~28%) corresponde al desfase de 1-2 días entre
+  la ex-date que reporta yfinance y la fecha en que la BVL ajusta el precio
+  -- ver limitación conocida en 2.7.
 
 2.4. NO hay imputación de valores de mercado
 ------------------------------------------------------------------------
 Los valores NaN en volume (originados en el endpoint BVL) se mantienen como
 NaN en todos los archivos intermedios. No se aplica ningún tipo de relleno
 (forward-fill, interpolación ni media) sobre los precios de mercado. Los
-huecos en cobertura histórica (por ejemplo, SAGAC1 y CORAREC1 antes de 2012)
-tampoco se imputan.
+huecos en cobertura histórica tampoco se imputan: si la BVL no tiene un
+registro para una fecha posterior al inicio de su cobertura, esa fecha
+simplemente no aparece en el dataset (no se rellena con Yahoo ni con ningún
+otro mecanismo -- ver 2.2).
 
 2.5. Indicadores técnicos derivados
 ------------------------------------------------------------------------
-Sobre la serie de cierre consolidada se calculan los siguientes indicadores
-(módulo src/market/technical_indicators.py):
+Se calculan sobre close_total_return (ver 2.7), no sobre el close as-traded:
+es la serie que ve el agente DRL, libre de los saltos artificiales que
+introducen los splits/acciones liberadas sobre el precio crudo. Módulo
+src/market/technical_indicators.py:
 
-  ret_1d        — retorno logarítmico diario (pct_change sobre close)
-  sma_20        — media móvil simple 20 días
-  sma_50        — media móvil simple 50 días
+  ret_1d        — retorno diario sobre close_total_return (pct_change)
+  ret_1d_raw    — retorno diario sobre close_raw (precio efectivamente
+                  negociado), conservado para análisis de liquidez/contexto
+                  que sí requieran el precio crudo
+  sma_20        — media móvil simple 20 días (sobre close_total_return)
+  sma_50        — media móvil simple 50 días (sobre close_total_return)
   ema_12        — media móvil exponencial 12 períodos
   ema_26        — media móvil exponencial 26 períodos
   macd          — diferencia EMA12 - EMA26
   macd_signal   — EMA 9 períodos del MACD
-  rsi_14        — RSI estándar de 14 días (Wilder)
+  rsi_14        — RSI estándar de 14 días (Wilder), sobre close_total_return
   volatility_20 — desviación estándar de ret_1d en ventana 20 días,
                   anualizada (× √252)
 
@@ -128,12 +170,108 @@ lo cual es el comportamiento esperado y correcto; no se aplica relleno.
 
 2.6. Almacenamiento de mercado
 ------------------------------------------------------------------------
-Archivos raw (por fuente, sin combinar):
+Archivos raw (por fuente, sin combinar; Yahoo conserva su historial completo
+incluso fuera del horizonte 2012-2025, solo como referencia):
   data/raw/market_{TICKER}_bvl.parquet
   data/raw/market_{TICKER}_yahoo.parquet
 
-Archivo intermedio (combinado + indicadores):
+Archivo intermedio (BVL + enriquecimiento Yahoo + acciones corporativas +
+indicadores técnicos, horizonte 2012-2025):
   data/interim/market_{TICKER}.parquet
+
+
+2.7. Acciones corporativas: close_raw, close_split_adj, close_total_return
+------------------------------------------------------------------------
+Módulo: src/market/corporate_actions.py. Integrado en fetch_market()
+(market_client.py), que agrega tres columnas de precio a cada
+market_{TICKER}.parquet:
+
+  close_raw           — precio efectivamente negociado (= close). Uso:
+                         ratios y contexto de volumen/liquidez.
+  close_split_adj     — ajustado por splits/acciones liberadas, convención
+                         CRSP (factor acumulado hacia atrás). Base de un P/E
+                         consistente con el EPS.
+  close_total_return  — ajustado por splits y dividendos reinvertidos. Es la
+                         serie sobre la que se calculan los indicadores
+                         técnicos (ver 2.5) -- la señal que ve el agente DRL.
+
+Flags por ticker (constantes en todas las filas de ese activo):
+  is_split_adjusted — True si se aplicó un ajuste de splits confirmado
+  is_div_adjusted   — True si se aplicó reinversión de dividendos confirmada
+  Si ambos son False, close_split_adj = close_total_return = close_raw.
+
+Fuentes de acciones corporativas por ticker (cobertura heterogénea):
+
+  CREDITC1, ALICORC1 — yfinance Ticker(<ticker>.LM).splits / .dividends.
+    Validación cruzada (jun-2026): para CREDITC1, el producto acumulado de
+    los ratios de split entre 2013-07-01 y 2023-08-09 (11 splits) da 4.1834,
+    que reproduce con un error de 0.04% el desfase de escala observado entre
+    el close crudo de la BVL y el close de Yahoo en ese mismo período
+    (~4.18x, medido en marzo-mayo 2013) -- confirma que los ratios de
+    yfinance son correctos para CREDITC1, a pesar de que su close
+    (auto_adjust=False) viene, para este ticker de muy baja liquidez
+    (~33k acciones/día), ya ajustado por splits a la fecha de descarga (no a
+    la fecha cotizada). is_split_adjusted=True, is_div_adjusted=True para
+    ambos (CREDITC1 tiene 15 splits y 23 dividendos en el horizonte;
+    ALICORC1 tiene 0 splits en el horizonte -- su único split en yfinance es
+    2026-03-23, posterior al fin del horizonte -- y 19 dividendos).
+  BUENAVC1 — BVN (Yahoo) es el ADR NYSE en USD; sus splits/dividendos NO
+    corresponden a la acción en PEN que cotiza en la BVL. Sin una fuente
+    automatizada de hechos de importancia BVL/SMV en PEN para confirmar
+    splits o reconstruir dividendos en soles, se deja SIN ajustar
+    (is_split_adjusted=False, is_div_adjusted=False; close_split_adj =
+    close_total_return = close_raw). Los 2 splits de BVN en yfinance (2003,
+    2008) son anteriores al horizonte y no se usan en ningún caso.
+  SAGAC1, CORAREC1 — sin cobertura Yahoo. detect_split_candidates() señala
+    saltos overnight (|ret_1d| > 0.40) en close_raw para revisión manual
+    contra avisos de la BVL/SMV (hechos de importancia / entrega de acciones
+    liberadas). No hay una fuente automatizada de confirmación, así que por
+    defecto quedan SIN ajustar (is_split_adjusted=False, is_div_adjusted=
+    False). En el horizonte 2012-2025 no se detectaron candidatos para
+    ninguno de los dos (no hay saltos >40% en su close_raw).
+
+Caso de validación documentado -- acción liberada del BCP (CREDITC1):
+  El 2014-06-03 yfinance registra un split de CREDITC1.LM con ratio 1.258522.
+  En el close_raw de la BVL, el salto ocurre un día después (lag de
+  liquidación/registro entre fuentes): 2014-06-03 cierra en S/ 6.40 y
+  2014-06-04 abre/cierra en S/ 5.00, una caída de -21.9% en un día sin
+  movimiento de mercado equivalente. En close_split_adj, ambos días quedan en
+  ~S/ 1.82-1.86, sin salto. El mismo patrón se repite, con magnitudes
+  distintas, en cada una de las 15 acciones liberadas de CREDITC1 detectadas
+  en el horizonte (ver notebooks/exploracion_datos_bvl.ipynb, sección 9).
+
+Política de faltantes (sin acciones corporativas confirmadas):
+  close_split_adj = close_raw y close_total_return = close_split_adj,
+  is_split_adjusted = is_div_adjusted = False. Aplica a BUENAVC1, SAGAC1 y
+  CORAREC1 en el estado actual del pipeline.
+
+Resultado verificado (jun-2026) sobre el horizonte 2012-2025, los 5 activos:
+  - Ningún market_{TICKER}.parquet tiene NaN en close_raw/close_split_adj/
+    close_total_return.
+  - Ningún retorno diario sobre close_total_return supera el 100% (máximo
+    observado: 46.9%, en BUENAVC1 -- ver limitación abajo) en ninguno de los
+    5 activos. Antes de corregir el merge BVL/Yahoo (ver 2.2), CREDITC1 y
+    BUENAVC1 presentaban saltos diarios de hasta +421%/+397% originados en
+    el merge, no en acciones corporativas reales.
+
+Limitaciones conocidas:
+  - Desfase ex-date de 1-2 días: la fecha de split que reporta yfinance no
+    siempre coincide con el día exacto en que la BVL ajusta el precio. Esto
+    deja un residuo de hasta ~25-28% en un solo día puntual, exactamente en
+    la fecha de cada split, en close_split_adj/close_total_return de
+    CREDITC1 -- por debajo del umbral de salto anómalo (>100%) de este
+    criterio de aceptación, pero documentado como ruido conocido.
+  - BUENAVC1 tiene un salto no confirmado de +46.9% el 2020-09-21 en
+    close_raw (y por lo tanto en las tres columnas, al no haber ajuste
+    aplicado). detect_split_candidates() lo señala en el log del pipeline;
+    no se pudo confirmar ni descartar como acción corporativa real por falta
+    de acceso automatizado a hechos de importancia BVL/SMV en PEN. Queda
+    pendiente de revisión manual.
+  - El open/high/low enriquecido desde Yahoo para CREDITC1 se reescala por
+    el factor de split (ver 2.2c), pero esto depende de que los ratios de
+    yfinance sean correctos; no hay una segunda fuente independiente para
+    validar el OHLC reescalado (solo el close, vía el caso de validación
+    documentado arriba).
 
 
 ========================================================================
@@ -383,21 +521,32 @@ experimentos DRL:
 5. RESUMEN DE COBERTURA FINAL
 ========================================================================
 
-              | DATOS DE MERCADO          | DATOS FUNDAMENTALES
-  Activo      | Desde       Hasta  Fuente | Desde    Hasta   Periodos
-  ------------+--------------------------+----------------------------
-  CREDITC1    | 2008-01-03  2025-12-31  BVL+YH | 2005-03  2025-12  83 trim
-  BUENAVC1    | 2012-01-02  2025-12-31  BVL     | 2005-03  2025-12  84 trim
-  ALICORC1    | 2008-01-03  2025-12-31  BVL+YH | 2005-03  2025-12  84 trim
-  SAGAC1      | 2012-01-02  2025-12-31  BVL     | 2005-03  2025-12  84 trim
-  CORAREC1    | 2012-01-02  2025-12-31  BVL     | 2005-03  2025-12  84 trim
+              | DATOS DE MERCADO (horizonte efectivo 2012-2025) | DATOS FUNDAMENTALES
+  Activo      | Desde       Hasta  Fuente | split/div  | Desde    Hasta   Periodos
+  ------------+---------------------------+------------+----------------------------
+  CREDITC1    | 2012-01-02  2025-12-31  BVL+YH | sí/sí | 2005-03  2025-12  83 trim
+  BUENAVC1    | 2012-01-02  2025-12-31  BVL     | no/no | 2005-03  2025-12  84 trim
+  ALICORC1    | 2012-01-02  2025-12-31  BVL+YH | no*/sí| 2005-03  2025-12  84 trim
+  SAGAC1      | 2012-01-02  2025-12-31  BVL     | no/no | 2005-03  2025-12  84 trim
+  CORAREC1    | 2012-01-02  2025-12-31  BVL     | no/no | 2005-03  2025-12  84 trim
 
-  BVL+YH = BVL (close primario) + Yahoo Finance (O/H/L/volume)
-  BVL    = solo BVL (close; volume=NaN; sin Yahoo disponible)
+  BVL+YH = BVL (close primario) + Yahoo Finance (O/H/L/volume, solo en fechas
+           donde coinciden ambas fuentes; ver 2.2)
+  BVL    = solo BVL (close; open=high=low=close; volume=NaN; sin Yahoo)
+  split/div = is_split_adjusted / is_div_adjusted (ver 2.7)
+  * ALICORC1 no tiene splits DENTRO del horizonte 2012-2025 (su único split
+    en yfinance, 2026-03-23, es posterior); is_split_adjusted=False no
+    implica que falte la fuente, sino que no hubo splits que aplicar.
 
   Moneda de precios de mercado: PEN (soles peruanos) para todos.
-  Moneda BUENAVC1 Yahoo (BVN): USD — NO mezclado con BVL PEN.
+  Moneda BUENAVC1 Yahoo (BVN): USD — NUNCA mezclado con BVL PEN (ni close
+  ni OHLCV).
   Moneda de fundamentales: PEN para todos excepto BUENAVC1 (PEN + USD).
+  Datos de mercado 2008-2011 (CREDITC1/ALICORC1, solo Yahoo) y 2005-2011
+  (BUENAVC1/BVN, solo Yahoo): se conservan en data/raw/market_*_yahoo.parquet
+  como referencia, pero NO forman parte del dataset de mercado final
+  (decisión de diseño: la BVL/SMV son la fuente "sana y original" y mandan
+  sobre Yahoo -- ver 2.2).
 
 
 ========================================================================
