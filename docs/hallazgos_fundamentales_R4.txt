@@ -1,0 +1,393 @@
+HALLAZGOS Y METODOLOGÍA — DATOS FUNDAMENTALES (R4)
+Insumo para la redacción de la tesis: cómo se descubrió la fuente, qué se
+extrajo, qué decisiones de calidad de datos se tomaron y qué hallazgos son
+relevantes para la discusión metodológica y de resultados.
+Tesis: Aprendizaje por refuerzo profundo aplicado a la Bolsa de Valores de Lima (BVL)
+Autor: Rodrigo Holguin — Asesor: Dr. E. Villanueva
+Fecha de corte de este documento: junio 2026
+========================================================================
+
+Este documento complementa a docs/pipeline_extraccion_datos.txt (referencia
+técnica completa del pipeline, secciones 2-3). Aquí el énfasis es narrativo:
+cómo se llegó a la fuente de datos, qué se intentó y falló, y qué
+descubrimientos son material para la tesis (no solo para el código).
+
+
+========================================================================
+1. OBJETIVO DE R4
+========================================================================
+Obtener indicadores fundamentales trimestrales (balance, resultados, flujo
+de efectivo) para las 5 empresas del universo, con un campo de fecha de
+conocimiento público (known_date) que permita incorporarlos al panel diario
+del agente DRL sin look-ahead bias, y derivar de ahí ratios financieros
+(rentabilidad, apalancamiento) como señal complementaria al precio.
+
+
+========================================================================
+2. CRONOLOGÍA DEL SONDEO (descubrimiento de la fuente)
+========================================================================
+A diferencia de R3 (mercado), donde el endpoint de la BVL se encontró
+inspeccionando el bundle Angular del sitio web, en R4 NO hubo un bundle
+público que inspeccionar para fundamentales: el sondeo fue por prueba y
+error contra dos sistemas candidatos, documentado en tres scripts
+sucesivos (scripts/probe_fundamentals.py, probe_fundamentals2.py,
+probe_fundamentals3.py).
+
+2.1. Sonda 1 (probe_fundamentals.py) — exploración amplia, dos candidatos
+------------------------------------------------------------------------
+Se probaron en paralelo dos fuentes candidatas:
+
+  a) BVL dataondemand, familia "financialstatements": se intentó con
+     decenas de combinaciones de payload (GET y POST, ticker en query y en
+     path, nombres de campo en inglés y español: company/nemonico/ticker/
+     emisor, from/to, year/quarter, anio/trimestre) contra
+     /v1/financialstatements/ y variantes (/v1/issuers/financials,
+     /v1/issuers/eeff, /v1/issuers/financial-info, /v1/balance-sheet,
+     /v1/income-statement, /v1/cash-flow, /v2/financialstatements/, entre
+     otros). TODOS devolvieron HTTP 200 con body=null, o 404. Ninguna
+     combinación de parámetros activó datos reales. Este resultado se
+     reconfirmó de forma exhaustiva en la sonda 2 (sección B) y quedó
+     establecido como definitivo: ver sección 5 de este documento.
+
+  b) SMV WSDL (mvnet.smv.gob.pe), descubierto por su URL pública de
+     "Datos Abiertos": se introspeccionó la lista de operaciones del WSDL
+     con zeep (Client(wsdl).wsdl...), confirmando 7 operaciones
+     (obtener_BalanceGeneral, obtener_GanciaPerdida,
+     obtener_ResultadosIntegrales, obtener_FlujoEfectivo,
+     obtener_CambiosPatrimonio, obtener_InfoFinanciera, obtener_EFData).
+     Las primeras llamadas de prueba usaron nombres de parámetro
+     ADIVINADOS por convención común (empresa/anio/trimestre/tipo, con
+     valores "Individual"/"Consolidada") — todas fallaron con error de
+     tipo/parámetro inválido. El WSDL SÍ respondía (a diferencia de BVL),
+     pero con la firma incorrecta.
+
+2.2. Sonda 2 (probe_fundamentals2.py) — parámetros reales del WSDL
+------------------------------------------------------------------------
+Se abandonó la convención adivinada y se probó sistemáticamente contra los
+nombres de parámetro que el propio WSDL expone en su definición de tipos:
+Ejercicio, Periodo, Tipo. Para Periodo se probó una grilla de valores
+plausibles ("4", "T4", "4T", "IV", "Q4", "A", "Anual", "04") hasta
+encontrar la combinación que devolvía datos no vacíos: Ejercicio="2023",
+Periodo="4" (el dígito del trimestre como string), Tipo="I" (no
+"Individual"). Con esa firma confirmada, se repitió la llamada para las 5
+operaciones principales y se inspeccionó la respuesta XML cruda para
+entender la forma del payload (lista plana de objetos, uno por empresa y
+cuenta contable, SIN parámetro de filtro por empresa — el servicio
+devuelve las ~261 empresas registradas en la SMV en cada llamada).
+También se probó obtener_EFData, que tiene una firma de grid paginado
+(page/rows/sidx/sord/_search) distinta a las demás; no se integró al
+pipeline porque las otras 5 operaciones ya cubrían lo necesario.
+En esta misma sonda se reconfirmó, con aún más variantes de parámetros,
+que los endpoints de BVL dataondemand para fundamentales seguían
+devolviendo 200-null para los 5 tickers del universo.
+
+2.3. Sonda 3 (probe_fundamentals3.py) — mapeo del universo y cobertura
+------------------------------------------------------------------------
+Con la firma de llamada ya resuelta, esta sonda respondió las preguntas
+de mapeo necesarias para integrar el WSDL al pipeline:
+  - Nombre exacto de cada empresa en el registro SMV (búsqueda parcial por
+    término, ya que los nombres no son idénticos a los nemónicos BVL) y su
+    código RPJ asociado (ver tabla en sección 3).
+  - Estructura de cuentas disponibles para una empresa de prueba (Alicorp,
+    elegida por ser una empresa no financiera "simple", sin la taxonomía
+    especial de bancos) en BalanceGeneral, GanciaPerdida, FlujoEfectivo y
+    ResultadosIntegrales — de aquí salieron los archivos
+    data/interim/smv_alicorp_*.json y smv_empresas_2023q4.txt, que se
+    conservan en el repo como evidencia del proceso de descubrimiento (no
+    son parte del pipeline operativo; el caché operativo vive en
+    data/raw/smv_cache/, ver sección 4).
+  - Cobertura histórica: se recorrió año por año desde 2023 hacia atrás
+    hasta 2005 confirmando que cada año tenía datos para Alicorp,
+    estableciendo que la SMV cubre desde al menos 2005 sin necesidad de
+    relleno.
+  - InfoFinanciera de las 5 empresas en el último trimestre, incluyendo
+    una prueba con Tipo="C" (Consolidada) para BCP/Credicorp, que se
+    descartó en favor de Tipo="I" (Individual) por consistencia con el
+    resto del universo (ver decisión en sección 3).
+
+
+========================================================================
+3. CONTRATO CONFIRMADO DEL WSDL SMV
+========================================================================
+URL: https://mvnet.smv.gob.pe/ws_od_eeff/WebServiceInfoFinanciera.asmx?WSDL
+
+Parámetros de las operaciones principales (idénticos en las 5):
+  Ejercicio (string, año, p.ej. "2023")
+  Periodo   (string, trimestre "1"-"4")
+  Tipo      (string, "I"=Individual o "C"=Consolidada -- se usa "I" para
+            las 5 empresas del universo, por consistencia y porque el
+            individual es el que efectivamente reportan a tiempo todas)
+
+El servicio NO acepta filtro por empresa: cada llamada devuelve TODAS las
+empresas registradas en la SMV (~261) para ese (Ejercicio, Periodo, Tipo).
+El filtrado al universo de 5 activos se hace en cliente, por el campo RPJ
+(código único de registro), con fallback a coincidencia parcial de
+NombreEmpresa si el RPJ no aparece en una respuesta puntual.
+
+Códigos RPJ confirmados por sondeo (no están documentados públicamente en
+ningún lado; se obtuvieron buscando cada nombre de empresa dentro de la
+respuesta completa de obtener_InfoFinanciera):
+
+  Ticker    | RPJ    | NombreEmpresa en SMV                     | Moneda
+  ----------|--------|-------------------------------------------|--------
+  CREDITC1  | B80005 | BANCO DE CREDITO DEL PERU                  | PEN
+  BUENAVC1  | B20003 | COMPAÑIA DE MINAS BUENAVENTURA S.A.A.      | USD desde 2006Q4 (PEN antes, ver 5.3)
+  ALICORC1  | B30006 | ALICORP S.A.A.                              | PEN (1 trimestre en USD, ver 5.4)
+  SAGAC1    | 014313 | SAGA FALABELLA S.A.                         | PEN
+  CORAREC1  | CI0003 | CORPORACION ACEROS AREQUIPA S.A.            | PEN
+
+Estructura de una fila de respuesta (BalanceGeneral/GanciaPerdida):
+  RPJ, TipoEmpresa, NombreEmpresa, RUC, Ejercicio, TipoInformacion,
+  Trimestre, Moneda, Cuenta, DescripcionCuenta, Monto1, Monto2, [Monto3,
+  Monto4 en GanciaPerdida]
+
+Semántica de Monto1-4 (confirmada por inspección + cruce con cifras
+conocidas de Alicorp):
+  BalanceGeneral: Monto1 = saldo al cierre del período actual,
+                  Monto2 = saldo al cierre del período anterior (comparativo)
+  GanciaPerdida:  Monto1 = valor del trimestre aislado,
+                  Monto2 = mismo trimestre, año anterior,
+                  Monto3 = acumulado del ejercicio actual (YTD),
+                  Monto4 = acumulado del ejercicio anterior (YTD)
+
+obtener_InfoFinanciera devuelve un resumen de alto nivel por fila/empresa
+(ActivoTotal, PatrimonioTotal, TotalIngreso, UtilidadNeta, PasivoTotal),
+sin necesidad de filtrar por código de cuenta -- es la fuente de los
+ratios (sección 6).
+
+Normalización de moneda: el campo Moneda llega como "Soles" o, con una
+codificación de tilde corrupta observada en algunas respuestas del WSDL,
+"D lares" en vez de "Dólares". El pipeline mapea ambas variantes (y
+"Dolares", "USD", "PEN") a un código de moneda limpio ("PEN"/"USD") con un
+diccionario de normalización explícito.
+
+
+========================================================================
+4. IMPLEMENTACIÓN: DE LA SONDA AL PIPELINE
+========================================================================
+Una vez confirmado el contrato, la implementación (src/fundamentals/
+fundamentals_client.py) y su puesta en producción de datos pasó por varias
+corridas, cada una con más alcance que la anterior:
+
+  scripts/test_fundamentals_quick.py — primera prueba de fetch_smv() ya
+    implementado, solo Alicorp, 2022-2023: validó conteo de cuentas y
+    periodos antes de correr el universo completo.
+  scripts/test_fundamentals_all.py — verificación de las 5 empresas,
+    2022-2023, usando ya el caché en disco.
+  scripts/gen_fundamentals.py — primera generación completa de los 5
+    parquets, pero acotada a 2020-2023 (esta fue la corrida que reflejaba
+    el notebook de fundamentales en su versión original, antes de
+    extenderlo).
+  scripts/fetch_fund_extended.py — corrida final, 2005-01-01 a
+    2025-12-31, la que generó los data/raw/fund_{TICKER}_smv.parquet
+    actuales (84/83 periodos por activo, ver sección 5).
+
+known_date (fecha de conocimiento público) se calcula como cierre de
+trimestre + 45 días, un lag conservador frente al plazo regulatorio real
+de presentación de EEFF a la SMV. Es el campo que R6 usará para propagar
+fundamentales al panel diario sin incurrir en look-ahead bias (merge_asof
+backward).
+
+Caché en dos niveles para no re-descargar las ~261 empresas por cada
+(operación × trimestre) al procesar los 5 activos del universo: caché en
+memoria de proceso (_MEM_CACHE) y caché en disco por archivo JSON en
+data/raw/smv_cache/{operacion}_{año}Q{trimestre}_{tipo}.json. Esto es
+distinto de los archivos data/interim/smv_alicorp_*.json y
+smv_empresas_2023q4.txt, que son artefactos de la sonda 3 (sección 2.3),
+no del caché operativo.
+
+
+========================================================================
+5. RESULTADOS Y HALLAZGOS RELEVANTES PARA LA TESIS
+========================================================================
+
+5.1. Cobertura sin huecos 2005-2025 (relevante para la discusión de
+     limitaciones de trabajos previos)
+------------------------------------------------------------------------
+El plan de trabajo original asumía, siguiendo lo reportado por la tesis de
+maestría de Ancajima (trabajo previo de referencia para este proyecto),
+que el período 2004-2006 vendría ~25% vacío en fundamentales y requeriría
+una política de relleno documentada (forward-fill/interpolación). Al
+extraer del WSDL SMV se confirmó cobertura COMPLETA, sin huecos, desde
+2005-Q1 (12 trimestres 2005-2007 verificados uno por uno, los 5 activos
+con 83-84 periodos sobre un máximo posible de 84). Esto es un hallazgo
+metodológico citable: la fuente regulatoria (SMV) tiene mejor cobertura
+histórica que la fuente que usó el trabajo previo (probablemente BVL
+dataondemand, que en este proyecto se confirmó inoperativa para
+fundamentales -- ver 5.2), y por lo tanto NO fue necesario implementar
+ninguna política de imputación. La política de datos faltantes finalmente
+adoptada es "no hay imputación de ningún tipo" (cuentas ausentes en un
+trimestre, valores NaN puntuales, o trimestres no presentados quedan tal
+cual; ver pipeline_extraccion_datos.txt sección 3.9).
+
+5.2. BVL dataondemand confirmado inoperativo para fundamentales
+------------------------------------------------------------------------
+A diferencia del mercado (R3), donde BVL es la fuente primaria, para
+fundamentales la familia de endpoints /v1/financialstatements/ y variantes
+(issuers/financials, issuers/eeff, issuers/financial-info) responde
+sistemáticamente 200 con body=null para los 5 tickers del universo, sin
+que ninguna variante de parámetros (en dos rondas de sondeo, con
+decenas de combinaciones) la active. Se concluyó que la fuente
+verdaderamente primaria y única viable es la SMV; el código conserva un
+stub de BVL por compatibilidad futura pero no aporta datos.
+
+5.3. BUENAVC1 cambió su moneda de reporte de PEN a USD entre 2006-Q3 y
+     2006-Q4
+------------------------------------------------------------------------
+Hallazgo nuevo (no visible hasta extender el notebook de fundamentales al
+rango completo 2005-2025; con el recorte previo a 2020-2023 este cambio
+de moneda ocurrido en 2006 no aparecía en ningún gráfico). Compañía de
+Minas Buenaventura reportó sus primeros 7 trimestres a la SMV en soles
+(Moneda="Soles") y a partir de 2006-Q4 cambió a dólares (Moneda="Dólares"),
+consistente con ser una minera cuyos ingresos están atados a comodities
+cotizados en USD (oro, plata). Implicación práctica: los ratios (ROE, ROA,
+etc.) no se ven afectados porque numerador y denominador están en la misma
+moneda dentro de cada fila; los montos absolutos (ActivoTotal, etc.) NO son
+comparables en una sola moneda a través de ese punto de corte sin una
+conversión de tipo de cambio, que se decidió NO implementar (ver discusión
+de costo/beneficio en docs/pipeline_extraccion_datos.txt y la conversación
+de este informe). El notebook de fundamentales excluye automáticamente
+esos 7 trimestres de los gráficos de montos absolutos (no de los de
+ratios) y lo señala por consola al ejecutarse.
+
+5.4. ALICORC1 reportó un trimestre puntual (2025-Q4) en USD
+------------------------------------------------------------------------
+Mismo fenómeno que 5.3 pero acotado a una sola presentación: todos los
+demás 83 trimestres de Alicorp están en soles. No se pudo determinar (ni
+es el objetivo de este pipeline determinar) si es un cambio de política de
+reporte que se mantendrá o una particularidad puntual de esa presentación;
+queda documentado como tal. Mismo tratamiento que 5.3: excluido de los
+gráficos de montos absolutos, presente en los de ratios.
+
+5.5. CREDITC1/BCP usa la taxonomía contable SBS, no NIIF/PCGE
+------------------------------------------------------------------------
+El BCP, como banco supervisado por la SBS (Superintendencia de Banca y
+Seguros), reporta con un plan de cuentas más granular y distinto al de
+las empresas no financieras: 443 cuentas únicas en el horizonte completo
+frente a ~397-398 en las otras 4 empresas. Los ratios INFO_* (ROE, ROA)
+son calculables igual, pero indicadores como deuda/activo tienen una
+lectura distinta en un banco (el "pasivo" incluye depósitos de clientes,
+que es el modelo de negocio, no apalancamiento financiero en el sentido
+de una empresa no financiera). Relevante para la sección de la tesis que
+discuta comparabilidad entre sectores dentro del mismo universo de 5
+activos.
+
+5.6. Desambiguación de SAGAC1 frente a otras entidades del ecosistema
+     Falabella en el Perú
+------------------------------------------------------------------------
+El RPJ 014313 (Saga Falabella S.A., el retailer de tiendas por
+departamento) no es el único código relacionado a "Falabella" en el
+registro SMV: existen también B80144 (Banco Falabella) y 020045
+(Falabella Perú S.A., otra entidad del grupo). Se identificaron y
+excluyeron deliberadamente en el filtrado por nombre, usando el RPJ exacto
+como filtro primario precisamente para evitar esta clase de confusión.
+
+5.7. Ratios implementados y su independencia del número de acciones
+------------------------------------------------------------------------
+compute_ratios() (fundamentals_client.py) deriva ROE, ROA, margen neto,
+deuda/patrimonio y deuda/activo directamente de las cuentas INFO_* del
+SMV, sin necesitar el número de acciones en circulación de cada empresa
+(a diferencia de P/E y DY). Esto los hizo implementables de inmediato con
+los datos ya extraídos, mientras que P/E y DY quedaron pendientes de una
+fuente de acciones en circulación que no se encontró confiable -- ver 5.8.
+
+5.8. P/E y Dividend Yield: evaluados exhaustivamente, no implementados
+------------------------------------------------------------------------
+Se evaluó en detalle (jun-2026) la viabilidad de derivar P/E vía valor
+nominal SMV o memorias anuales, con validación cruzada contra BAP (BCP) y
+BVN (Buenaventura). Conclusión: viabilidad baja para los 5 activos --
+el valor nominal por acción no está en el WSDL (solo el monto agregado de
+capital emitido), las memorias anuales viven en un sistema no explorado y
+representarían un sub-proyecto nuevo, la operación obtener_CambiosPatrimonio
+del WSDL no respondió en una prueba en vivo, y yfinance.get_shares_full()
+solo cubre parcialmente el horizonte (desde 2016-2019) con datos ruidosos.
+BAP es el holding Credicorp (no BCP individual) y es un cross-check débil;
+BVN sí es la misma entidad que Buenaventura pero igual sin fuente de
+acciones confiable. El único camino acotado con viabilidad real sería
+reconstruir las acciones de CREDITC1 reutilizando el factor de splits ya
+validado en R3 (corporate_actions.py) -- cubriría solo 1 de 5 activos, no
+implementado. DY es distinto: ya casi disponible para CREDITC1/ALICORC1
+porque R3 ya descarga dividendos por acción en PEN; de implementarse,
+sería de esfuerzo bajo. Detalle completo del análisis en
+docs/pipeline_extraccion_datos.txt sección 3.10.1.
+
+
+========================================================================
+6. POLÍTICA DE IMPUTACIÓN DE DATOS (resumen para metodología de tesis)
+========================================================================
+NO se aplica imputación de ningún tipo a los datos fundamentales:
+  - Cuentas ausentes en un trimestre determinado: quedan ausentes (no se
+    completan con el valor del trimestre anterior ni con cero).
+  - Valores NaN puntuales devueltos por el WSDL: se conservan como NaN.
+  - Períodos no presentados por una empresa: no ocurrió en la práctica
+    para el universo de 5 activos (cobertura completa 2005-2025, ver 5.1),
+    por lo que la política "no imputar" no tuvo que probarse en un caso
+    real, pero es la política vigente si llegara a ocurrir en una
+    actualización futura del dataset.
+  - Tampoco se realiza ninguna conversión de tipo de cambio para
+    homogeneizar moneda entre activos o entre trimestres de un mismo
+    activo (ver 5.3 y 5.4): cada fila conserva la moneda en la que la SMV
+    la reportó, en la columna currency.
+La única transformación temporal que SÍ se aplica es la propagación hacia
+adelante de los fundamentales al panel diario en R6 (forward-fill desde
+known_date vía merge_asof), que es una proyección de frecuencia, no una
+imputación de valores faltantes.
+
+
+========================================================================
+7. VISUALIZACIONES DISPONIBLES (catálogo para reutilizar en la tesis)
+========================================================================
+Para el catálogo de notebooks/exploracion_datos_bvl.ipynb (mercado, R3),
+ver docs/hallazgos_mercado_R3.txt sección 7 -- documento hermano de este,
+con la misma estructura. Aquí solo el notebook de fundamentales.
+
+notebooks/exploracion_fundamentales_bvl.ipynb ya está ejecutado con el
+dataset completo y vigente (jun-2026) y produce las figuras/tablas
+descritas abajo. Sirve como banco de figuras candidatas para los capítulos
+de metodología y resultados de la tesis; cada entrada indica qué pregunta
+responde, útil para decidir qué figura acompaña qué afirmación del texto.
+------------------------------------------------------------------------
+  Sec. 2  Resumen estadístico — tabla con periodos, fechas, cuentas,
+          moneda y último ROE/ROA por activo.
+  Sec. 3  Estructura del Balance (Activo/Pasivo/Patrimonio) — 5 paneles de
+          barras apiladas + línea de identidad contable, 2005-2025 (con
+          los trimestres de moneda distinta excluidos y señalados, ver 5.3
+          y 5.4). Útil para mostrar el tamaño/escala relativa de las 5
+          empresas y la diferencia estructural del banco (sec. 5.5).
+  Sec. 4  Cuenta de Resultados (Ingresos/Utilidad Neta YTD) — mismo
+          tratamiento de exclusión de outliers de moneda.
+  Sec. 5  Ratios fundamentales — evolución trimestral 2005-2025, 4 paneles
+          (ROE, ROA, margen neto, debt ratio) con las 5 empresas
+          superpuestas. Candidato principal para la sección de resultados
+          que describa la señal fundamental que ve el agente.
+  Sec. 6  Comparativa entre empresas — último trimestre disponible, barras
+          side-by-side de los 4 ratios.
+  Sec. 7  Heatmap de ratios — las 5 empresas x 84 trimestres, uno por
+          ratio. Vista panorámica de toda la serie, útil para detectar
+          regímenes (crisis, ciclos sectoriales) a simple vista.
+  Sec. 8  Vista de datos crudos (formato largo) — tabla, apéndice técnico.
+
+
+========================================================================
+8. LIMITACIONES Y TRABAJO PENDIENTE
+========================================================================
+  - P/E y DY no implementados (ver 5.8); DY es la extensión de esfuerzo
+    más bajo si se retoma este trabajo.
+  - El cambio de moneda de BUENAVC1 (5.3) y el trimestre puntual de
+    ALICORC1 (5.4) no tienen conversión de tipo de cambio; cualquier
+    análisis que necesite montos absolutos comparables en una sola moneda
+    a través de esos puntos de corte debe implementarla por separado.
+  - obtener_CambiosPatrimonio (operación del WSDL) no se llegó a evaluar
+    por falta de respuesta del servicio en una prueba en vivo; queda como
+    fuente no descartada pero tampoco confirmada para una futura revisión
+    de P/E.
+  - Tipo="C" (Consolidado) del WSDL no se usa para ningún activo; se
+    decidió Tipo="I" (Individual) por consistencia, pero no se comparó
+    sistemáticamente contra el consolidado (relevante sobre todo para
+    CREDITC1/BCP, cuyo consolidado a nivel Credicorp puede diferir
+    materialmente del individual).
+
+
+========================================================================
+FIN DEL DOCUMENTO
+========================================================================

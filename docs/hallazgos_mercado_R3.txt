@@ -1,0 +1,380 @@
+HALLAZGOS Y METODOLOGÍA — DATOS DE MERCADO (R3)
+Insumo para la redacción de la tesis: cómo se descubrió la fuente, qué se
+extrajo, qué decisiones de calidad de datos se tomaron y qué hallazgos son
+relevantes para la discusión metodológica y de resultados.
+Tesis: Aprendizaje por refuerzo profundo aplicado a la Bolsa de Valores de Lima (BVL)
+Autor: Rodrigo Holguin — Asesor: Dr. E. Villanueva
+Fecha de corte de este documento: junio 2026
+========================================================================
+
+Este documento complementa a docs/pipeline_extraccion_datos.txt (referencia
+técnica completa del pipeline, sección 2) y es el equivalente, para mercado,
+de docs/hallazgos_fundamentales_R4.txt. Aquí el énfasis es narrativo: cómo
+se llegó a la fuente de datos, qué se intentó y falló, y qué descubrimientos
+son material para la tesis (no solo para el código).
+
+
+========================================================================
+1. OBJETIVO DE R3
+========================================================================
+Obtener precios de cierre diarios (idealmente OHLCV) de las 5 empresas del
+universo desde 2005 (o lo más atrás posible), limpios de saltos artificiales
+de fuente o de acciones corporativas no ajustadas, para alimentar al agente
+DRL con una señal de precio "sana" y calcular los indicadores técnicos que
+acompañan al modelo.
+
+
+========================================================================
+2. CRONOLOGÍA DEL SONDEO (descubrimiento del endpoint de la BVL)
+========================================================================
+A diferencia de R4 (fundamentales), donde la fuente terminó siendo un WSDL
+SOAP con URL pública, en R3 la fuente es un endpoint REST NO documentado de
+la propia bolsa, descubierto por ingeniería inversa del sitio web público
+bvl.com.pe. El proceso quedó registrado en seis scripts sucesivos.
+
+2.1. Sonda 1 (scripts/probe_bvl.py) — exploración a ciegas
+------------------------------------------------------------------------
+Sin conocer todavía qué framework usaba el sitio, se probó una batería de
+rutas REST "típicas" adivinadas por convención (/v1/quotes/, /v1/marketdata/,
+/v1/prices/, /v1/history/, /v1/timeseries/, /v1/eod/, /v1/cotizaciones/,
+/v1/precios/, etc.) contra dataondemand.bvl.com.pe, además de variantes con
+el ticker en el path y en query string. Ninguna acertó. En paralelo se
+intentó localizar los bundles JavaScript del sitio asumiendo que era una SPA
+Nuxt/Vue (carpetas /_nuxt/, /static/js/) -- esta hipótesis de framework
+resultó INCORRECTA (ver 2.3) pero sirvió para descartar rutas.
+
+2.2. Sonda 2 (scripts/grep_bvl_bundles.py) — grep sistemático de bundles
+------------------------------------------------------------------------
+En vez de adivinar rutas, se descargó la página de ficha de un emisor
+(bvl.com.pe/emisores/SAGAC1), se extrajeron TODOS los <script src=...> del
+HTML, y se grepeó cada bundle JS descargado con expresiones regulares
+diseñadas para capturar rutas de API (prefijos /api, /v\d, /services,
+/market, /emisores, /cotizaciones, /precios, /acciones) y URLs completas con
+palabras clave (api, v\d, data, quotes, price, market). También se probaron
+subdominios alternativos (api.bvl.com.pe, services.bvl.com.pe,
+market.bvl.com.pe, data.bvl.com.pe, ws.bvl.com.pe). Este barrido fue el que
+permitió identificar CUÁL de los bundles (el más pesado, con nombre tipo
+main.<hash>.js) contenía las referencias a la API real -- a partir de aquí
+el sondeo se concentra en ESE archivo específico.
+
+2.3. Sonda 3 (scripts/extract_bvl_config.py) — configuración del bundle main.js
+------------------------------------------------------------------------
+Con el bundle ya identificado (main.1ca3dd889220439bbef2.js), se extrajeron
+las variables de configuración de entorno embebidas en el código compilado:
+patrones API_URL/API_URL_2, bloques de objeto de entorno, posibles API keys
+o tokens hardcodeados (ninguno relevante encontrado -- el endpoint resultó
+no requerir autenticación más allá de headers Origin/Referer), y el patrón
+de compilación de Angular (`e.production=`), que confirmó que el sitio está
+construido en Angular (no Nuxt/Vue, como se había asumido en la sonda 1) y
+que la base real de la API es api.bvl.com.pe.
+
+2.4. Sonda 4 (scripts/probe_bvl_api.py) — endpoints de api.bvl.com.pe
+------------------------------------------------------------------------
+Con el dominio correcto confirmado, se probó la familia /v1/stock-quote/*
+(daily, market, home, share, share-value) ya vista mencionada en el bundle,
+y otros candidatos de mercado (market-summary, reference-prices, issuers,
+index-historical-data, corporate-actions). Varios devolvieron 405 (método
+no permitido, sugiriendo que existen pero con otro verbo HTTP) en vez de 404
+-- pista que se siguió en la sonda 5. En paralelo se grepeó el contexto
+textual alrededor de la palabra "stock-quote" dentro del bundle para
+encontrar los nombres reales de parámetros (nemonico, fechaDesde, startDate)
+que el frontend Angular efectivamente envía.
+
+2.5. Sonda 5 (scripts/probe_bvl_historical.py) — el endpoint ganador
+------------------------------------------------------------------------
+Se reintentaron con POST los endpoints que habían devuelto 405 (sin éxito:
+seguían sin servir datos), y se probó específicamente
+/v1/stock-quote/share-values/{nemonico} CON EL TICKER EN EL PATH (no como
+query param) combinando variantes de nombre de parámetro de fecha
+(from/to, fechaDesde/fechaHasta, startDate/endDate). Esta combinación es la
+que finalmente devolvió datos reales. El grep final del bundle confirmó que
+"share-values", "startDate" y "endDate" son, efectivamente, los términos que
+usa el frontend real de la BVL.
+
+2.6. Sonda 6 (scripts/probe_bvl_stockquote.py + probe_bvl_range.py) —
+     confirmación y rango histórico
+------------------------------------------------------------------------
+probe_bvl_stockquote.py reconfirmó el endpoint ganador junto a varios otros
+candidatos descartados (/v1/stock-quote/daily -- un endpoint de gráfico que
+se exploró pero NO es el que terminó usando el pipeline; /v1/index-historical-
+data, /v1/issuers, /v1/financial-statements/, etc., todos sin datos útiles
+para precios diarios). probe_bvl_range.py hizo la verificación final,
+pidiendo el rango completo 2005-01-01 a 2025-12-31 para los 5 tickers y
+confirmando que el endpoint share-values, a pesar de aceptar cualquier rango
+solicitado, solo tiene datos reales desde 2012-01-02 en adelante para los 5
+activos (de ahí la decisión de horizonte efectivo, ver sección 5.2).
+
+2.7. Verificación posterior a la implementación (scripts/check_data.py)
+------------------------------------------------------------------------
+Ya con market_client.py implementado, este script comparó el close de BVL
+contra el de Yahoo para ALICORC1 y BUENAVC1 en el período solapado,
+calculando la razón Yahoo/close-BVL. Para ALICORC1 esta razón resultó
+estable (~1, sin desfase de escala). Importante: este script NO incluyó a
+CREDITC1 en la comparación -- por eso el desfase de escala de CREDITC1.LM
+(ver sección 5.3) no se detectó en esta verificación temprana y quedó sin
+descubrir hasta la revisión de cierre de R3 documentada en este informe.
+
+
+========================================================================
+3. CONTRATO CONFIRMADO
+========================================================================
+3.1. BVL — endpoint de cotizaciones (fuente primaria)
+------------------------------------------------------------------------
+  GET https://dataondemand.bvl.com.pe/v1/stock-quote/share-values/{nemonico}
+  Parámetros: startDate, endDate (ISO 8601)
+  Headers necesarios: User-Agent de navegador, Origin=https://www.bvl.com.pe,
+    Referer=https://www.bvl.com.pe/ (sin estos headers el endpoint responde
+    distinto/rechaza la solicitud -- comportamiento típico de protección
+    anti-scraping básica, no autenticación real).
+  Respuesta: {"values": [[fecha, close], ...]} -- un par por día, SOLO precio
+    de cierre referencial oficial. No incluye apertura, máximo, mínimo ni
+    volumen (de ahí la necesidad de Yahoo como enriquecimiento, ver 3.2).
+  Cobertura real: 2012-01-02 en adelante para los 5 activos del universo,
+    independientemente del rango solicitado.
+  Endpoints descartados durante el sondeo (existen pero no sirven para esto):
+    /v1/stock-quote/daily (gráfico, no serie completa), /v1/issuers/stock,
+    /v1/index-historical-data, /v1/financial-statements/ (ver también R4,
+    docs/hallazgos_fundamentales_R4.txt sección 5.2, mismo endpoint
+    confirmado inoperativo para fundamentales).
+
+3.2. Yahoo Finance — enriquecimiento OHLCV puntual (NO fuente de cobertura)
+------------------------------------------------------------------------
+  Librería: yfinance, Ticker(<ticker>).history(start=, end=, auto_adjust=False)
+  Tickers: CREDITC1.LM, ALICORC1.LM, BVN (BUENAVC1, ADR NYSE en USD);
+    SAGAC1.LM y CORAREC1.LM no tienen cobertura en Yahoo (history() vacío).
+  Yahoo entrega OHLCV completo con volumen, pero -- decisión de cierre de R3,
+  ver sección 5 -- solo se usa para completar open/high/low/volumen en
+  fechas donde la BVL YA tiene un registro para ese mismo día. No se usa
+  para extender la cobertura hacia atrás del inicio de la BVL.
+  También se usa yfinance para acciones corporativas: Ticker(<ticker>).splits
+  y .dividends (ver sección 4, corporate_actions.py).
+
+
+========================================================================
+4. IMPLEMENTACIÓN: ARCHIVOS Y FUNCIONES CLAVE
+========================================================================
+src/market/market_client.py
+  fetch_bvl(asset, start, end)      -- GET share-values, filtra close<=0,
+                                        rellena open=high=low=close, volume=NaN.
+  fetch_yahoo(asset, start, end)    -- yf.Ticker(...).history(), normaliza
+                                        tz-aware -> tz-naive por día.
+  fetch_market(asset, start, end, raw_dir) -- orquestador: si no hay BVL, sin
+                                        datos (Yahoo no es fallback de
+                                        cobertura); si hay BVL, fusiona con
+                                        Yahoo via _merge_bvl_yahoo y agrega
+                                        acciones corporativas via
+                                        _add_corporate_actions.
+  _merge_bvl_yahoo(bvl, yah, splits) -- close SIEMPRE de BVL; open/high/low/
+                                        volumen de Yahoo solo en fechas
+                                        coincidentes, reescalados por
+                                        split_factor antes de fusionar.
+  _add_corporate_actions(asset, df, end, actions) -- agrega close_raw,
+                                        close_split_adj, close_total_return,
+                                        is_split_adjusted, is_div_adjusted.
+  _report_discrepancies(asset, merged, yah) -- compara close_split_adj (no
+                                        el close crudo) contra el close de
+                                        Yahoo en fechas solapadas, reporta
+                                        diferencias > 2%.
+
+src/market/corporate_actions.py (nuevo en el cierre de R3)
+  fetch_actions(asset)              -- splits/dividendos por ticker, según
+                                        la fuente disponible (ver 3.2).
+  split_factor(dates, splits)       -- factor acumulado de splits vigente en
+                                        cada fecha; público, lo usa también
+                                        market_client.py para reescalar OHLC.
+  apply_split_adjustment(close_raw, splits) -- ajuste CRSP hacia atrás.
+  apply_total_return(close_raw, splits, dividends) -- ajuste de splits +
+                                        reinversión de dividendos.
+  detect_split_candidates(close_raw, threshold=0.40) -- saltos overnight sin
+                                        split confirmado, para revisión manual.
+  build_adjusted_prices(asset, close_raw, end, actions) -- orquestador de
+                                        las tres columnas + flags.
+
+src/market/technical_indicators.py
+  add_indicators(df) -- ret_1d/sma_20/sma_50/ema_12/ema_26/macd/macd_signal/
+                        rsi_14/volatility_20 sobre close_total_return (no
+                        sobre close); conserva ret_1d_raw sobre close_raw.
+
+src/universe.py
+  MARKET_SCHEMA -- esquema canónico [ticker, date, open, high, low, close,
+                  volume, source] de los archivos raw por fuente.
+
+
+========================================================================
+5. RESULTADOS Y HALLAZGOS RELEVANTES PARA LA TESIS
+========================================================================
+
+5.1. Bug de merge BVL/Yahoo: saltos artificiales de hasta +421%
+------------------------------------------------------------------------
+La primera versión del merge (anterior al cierre de R3) rellenaba CUALQUIER
+fecha sin registro en BVL con la fila completa de Yahoo, incluyendo el
+close, si esa fecha caía dentro del rango de cobertura de Yahoo. Esto
+producía saltos diarios artificiales de hasta +421% (CREDITC1) y +397%
+(BUENAVC1) que no eran acciones corporativas reales sino artefactos de
+mezclar dos fuentes en bases distintas (ver 5.3 y 5.4). Detectado y
+corregido en esta sesión de cierre de R3: ahora Yahoo solo aporta
+open/high/low/volumen en fechas donde BVL ya tiene un registro, nunca el
+close, y nunca para extender cobertura hacia atrás del inicio de BVL.
+
+5.2. Decisión: horizonte efectivo de mercado 2012-2025, no 2005-2025
+------------------------------------------------------------------------
+Decisión explícita del usuario: la BVL/SMV deben ser la fuente "sana y
+original" que manda sobre Yahoo. En consecuencia, el dataset de mercado
+final NO incluye el período 2008-2011 (CREDITC1/ALICORC1, solo Yahoo) ni
+2005-2011 (BUENAVC1/BVN, solo Yahoo) que sí estaba disponible antes del
+cierre de R3. Los archivos raw de Yahoo (data/raw/market_{TICKER}_yahoo.parquet)
+conservan ese historial completo solo como referencia/diagnóstico -- nunca
+entra al dataset combinado. Contraste relevante para la tesis: fundamentales
+(R4) SÍ cubre 2005-2025 completo (ver docs/hallazgos_fundamentales_R4.txt
+sección 5.1); los dos horizontes NO coinciden y cualquier integración (R6)
+debe tenerlo presente.
+
+5.3. Descubrimiento: el close de Yahoo para CREDITC1.LM viene ya
+     ajustado por splits a la fecha de descarga, no a la fecha cotizada
+------------------------------------------------------------------------
+Hallazgo técnico central de esta sesión, y el que motivó 5.1 y 5.2. A pesar
+de auto_adjust=False (que debería devolver precios crudos, no ajustados),
+el close de Yahoo para CREDITC1.LM (ticker de muy baja liquidez, ~33k
+acciones/día) resultó estar en la base de acciones "vigente hoy", no en la
+vigente en cada fecha histórica. Validación: el producto acumulado de los
+ratios de Ticker.splits entre dos fechas cualesquiera reproduce, con un
+error de apenas 0.04%, el desfase de escala observado entre el close de
+Yahoo y el close crudo de la BVL en ese mismo tramo (verificado en
+marzo-mayo 2013: desfase ~4.18x, producto de splits 2013-07-01 a 2023-08-09
+= 4.1834). Esto confirma que los ratios de Ticker.splits de yfinance SÍ son
+correctos para CREDITC1, y es la base de la corrección de 5.1 y del
+reescalado de OHLC de 5.5.
+
+5.4. Caso de validación documentado: la acción liberada del BCP de
+     junio-2014
+------------------------------------------------------------------------
+yfinance registra un split de CREDITC1.LM el 2014-06-03 (ratio 1.258522).
+En el close_raw de la BVL, el salto ocurre un día después (2014-06-04: de
+S/ 6.40 a S/ 5.00, -21.9% sin movimiento de mercado equivalente) -- desfase
+de liquidación entre fuentes, ver limitación en 8. En close_split_adj, ambos
+días quedan en ~S/ 1.82-1.86, sin salto. El mismo patrón se repite, con
+magnitudes distintas, en cada una de las 15 acciones liberadas de CREDITC1
+detectadas en el horizonte 2012-2025 (ver notebooks/exploracion_datos_bvl.ipynb,
+sección 9, para el gráfico).
+
+5.5. Reescalado del open/high/low de Yahoo por el factor de split
+------------------------------------------------------------------------
+Consecuencia directa de 5.3: si el close de Yahoo viene en la base "de
+hoy", su open/high/low también. Antes de fusionarlos con el close crudo de
+BVL (que sí está en la base "como cotizó ese día"), _merge_bvl_yahoo los
+multiplica por split_factor(fecha) -- la misma función que usa
+corporate_actions.py para calcular close_split_adj -- para devolverlos a la
+base correcta. Sin este paso, el open/high/low de CREDITC1 antes de su
+último split (2023-08-09) habría quedado en una escala distinta a la del
+close en la misma fila.
+
+5.6. BUENAVC1: salto no confirmado de +46.9% el 2020-09-21
+------------------------------------------------------------------------
+Único caso detectado por detect_split_candidates() sin una fuente
+automatizada para confirmarlo o descartarlo (BVN es el ADR USD de
+Buenaventura; sus splits/dividendos no corresponden a la acción en PEN, y no
+existe un endpoint de "hechos de importancia" BVL/SMV accesible para
+verificar si fue una acción corporativa real -- ver también
+docs/hallazgos_fundamentales_R4.txt sección 5.8, mismo tipo de límite de
+fuente). Queda sin ajustar (is_split_adjusted=False), documentado para
+revisión manual.
+
+5.7. P/E y Dividend Yield: la pieza de R3 en una decisión que se tomó en R4
+------------------------------------------------------------------------
+corporate_actions.py descarga (para CREDITC1 y ALICORC1) splits Y
+dividendos por acción en PEN -- el insumo que le faltaba a R4 para calcular
+Dividend Yield sin tocar SMV. También se evaluó (sin implementar) reusar el
+factor de split YA VALIDADO de CREDITC1 para reconstruir su historial de
+acciones en circulación y habilitar P/E acotado a ese único activo. Detalle
+completo de la decisión (por qué no se implementó para ningún activo) en
+docs/hallazgos_fundamentales_R4.txt sección 5.8 -- ahí vive el análisis
+porque P/E y DY son ratios de fundamentales, aunque la pieza que los hace
+parcialmente viables nació en R3.
+
+
+========================================================================
+6. POLÍTICA DE IMPUTACIÓN DE DATOS (resumen para metodología de tesis)
+========================================================================
+NO se aplica imputación de ningún tipo a los datos de mercado:
+  - volume: queda NaN para todas las filas que provienen de BVL (el
+    endpoint share-values no lo entrega); no se rellena con cero ni con
+    interpolación.
+  - Huecos de cobertura de la BVL (días sin registro) después de su fecha
+    de inicio: NO se rellenan con Yahoo ni con ningún otro mecanismo --
+    simplemente esa fecha no aparece en el dataset (ver 5.1, la corrección
+    de esta sesión fue justamente eliminar un relleno indebido).
+  - Saltos detectados por detect_split_candidates() sin fuente de
+    confirmación (5.6): se dejan SIN ajustar, no se "corrigen" a ciegas
+    asumiendo que son splits.
+La única transformación que sí se aplica sistemáticamente es el ajuste por
+acciones corporativas (close_split_adj, close_total_return), que no es una
+imputación de valores faltantes sino una corrección de escala/base de
+acciones sobre datos que sí existen.
+
+
+========================================================================
+7. VISUALIZACIONES DISPONIBLES (catálogo para reutilizar en la tesis)
+========================================================================
+notebooks/exploracion_datos_bvl.ipynb ya está ejecutado con el dataset
+completo y vigente (horizonte 2012-2025, jun-2026). Cada entrada indica qué
+pregunta responde, útil para decidir qué figura acompaña qué afirmación del
+texto de la tesis.
+
+  Sec. 2  Resumen estadístico — tabla con registros, fechas, rango de
+          precio y NaN de volumen por activo. Tabla "descripción del
+          dataset" para metodología.
+  Sec. 3  Cobertura temporal por fuente (BVL vs Yahoo) — 5 paneles
+          temporales mostrando qué fuente cubre qué período por activo
+          (lee los archivos raw completos, incluido el historial Yahoo
+          pre-2012 que NO entra al dataset combinado -- útil precisamente
+          para mostrar visualmente por qué se descartó ese tramo, ver 5.2).
+  Sec. 4  Precios normalizados (base 100) — rendimiento relativo entre las
+          5 empresas en un solo gráfico.
+  Sec. 5  Indicadores técnicos por empresa — panel de 4 subgráficos
+          (precio+SMA, MACD, RSI, volumen) por activo, últimos 3 años.
+          Candidato directo para ilustrar el espacio de observación del
+          agente DRL.
+  Sec. 6  Distribución de retornos diarios — histogramas de ret_1d (sobre
+          close_total_return) por activo, con media y desviación.
+  Sec. 7  Volatilidad anualizada (rolling 20 días) — serie temporal
+          comparada entre los 5 activos.
+  Sec. 8  Correlación de retornos entre empresas — heatmap de correlación,
+          insumo directo para la discusión de diversificación del universo
+          (motivación de elegir 1 activo por sector).
+  Sec. 9  Acciones corporativas (close_raw / close_split_adj /
+          close_total_return) — gráfico de las 3 series para CREDITC1 con
+          zoom al caso de la acción liberada de jun-2014 (5.4), más tablas
+          de saltos anómalos por serie (antes/después del ajuste) y de
+          flags is_split_adjusted/is_div_adjusted por activo. Es la
+          evidencia visual de 5.1-5.5 -- clave para la sección de
+          metodología que justifique por qué se ajusta el precio antes de
+          alimentar al agente.
+  Sec. 10-11  Vistas de muestra de datos raw e interim (tablas, no
+          gráficos) — apéndice técnico, no para el cuerpo de la tesis.
+
+
+========================================================================
+8. LIMITACIONES Y TRABAJO PENDIENTE
+========================================================================
+  - Desfase ex-date de 1-2 días entre la fecha de split que reporta
+    yfinance y la fecha en que la BVL ajusta el precio (5.4): deja un
+    residuo de hasta ~25-28% en un solo día puntual por split en
+    close_split_adj/close_total_return de CREDITC1 -- por debajo del umbral
+    de salto anómalo (>100%), pero es ruido conocido, no corregido.
+  - BUENAVC1 (5.6): un salto de +46.9% sin confirmar ni descartar como
+    acción corporativa real, por falta de acceso automatizado a hechos de
+    importancia BVL/SMV en PEN.
+  - El reescalado de OHLC de Yahoo (5.5) depende de que los ratios de
+    yfinance sean correctos; solo hay una validación independiente para el
+    close (5.3), no para el open/high/low reescalado en sí.
+  - SAGAC1 y CORAREC1 no tienen ninguna fuente de splits/dividendos (sin
+    cobertura Yahoo); detect_split_candidates() no encontró candidatos en
+    el horizonte 2012-2025, pero eso no garantiza que no haya habido
+    acciones corporativas con un salto menor al umbral de detección (40%).
+  - P/E y Dividend Yield: ver docs/hallazgos_fundamentales_R4.txt sección
+    5.8 y 8 (la decisión y sus matices viven ahí, no aquí).
+
+
+========================================================================
+FIN DEL DOCUMENTO
+========================================================================

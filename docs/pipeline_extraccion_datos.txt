@@ -4,6 +4,15 @@ Autor: Rodrigo Holguin — Asesor: Dr. E. Villanueva
 Fecha de corte de este documento: junio 2026
 ========================================================================
 
+Este documento es la referencia técnica del pipeline (contratos de API,
+esquemas, decisiones de calidad de datos). Para una narrativa orientada a
+la redacción de la tesis (cómo se descubrió cada fuente, qué se intentó y
+falló, los hallazgos relevantes para metodología/resultados, y un catálogo
+de las visualizaciones disponibles en los notebooks), ver:
+  docs/hallazgos_mercado_R3.txt        -- mercado (R3)
+  docs/hallazgos_fundamentales_R4.txt  -- fundamentales (R4)
+========================================================================
+
 
 1. UNIVERSO DE ACTIVOS
 ------------------------------------------------------------------------
@@ -404,11 +413,28 @@ registros con sufijos _Q y _YTD respectivamente.
 3.7. Notas especiales por empresa
 ------------------------------------------------------------------------
 BUENAVC1 — Compañía de Minas Buenaventura:
-  Reporta sus EEFF a la SMV en dólares estadounidenses (Moneda="Dólares").
-  En el dataset, currency="USD" para estas filas. El pipeline mapea
-  correctamente la cadena "D lares" (con codificación de tilde corrupta en
-  algunas respuestas del WSDL) al código "USD" mediante un diccionario de
-  normalización explícito.
+  Reporta sus EEFF a la SMV en dólares estadounidenses (Moneda="Dólares")
+  desde 2006-Q4 en adelante. En el dataset, currency="USD" para esas filas.
+  El pipeline mapea correctamente la cadena "D lares" (con codificación de
+  tilde corrupta en algunas respuestas del WSDL) al código "USD" mediante un
+  diccionario de normalización explícito.
+  EXCEPCIÓN -- primeros 7 trimestres (2005-Q1 a 2006-Q3): reportó en PEN
+  (Moneda="Soles"), NO en USD. El cambio de moneda funcional ocurrió entre
+  2006-Q3 y 2006-Q4. Cualquier análisis que agregue montos absolutos (no
+  ratios) de BUENAVC1 a través de ese punto de corte debe tratar ambos
+  tramos por separado o convertir a una sola moneda; los ratios (ROE, ROA,
+  etc.) no se ven afectados porque numerador y denominador están en la misma
+  moneda dentro de cada fila. Confirmado al extender
+  notebooks/exploracion_fundamentales_bvl.ipynb al horizonte completo
+  2005-2025 (antes solo mostraba 2020-2023 y no era visible).
+
+ALICORC1 — Alicorp:
+  Reporta en PEN en todos los trimestres salvo 2025-Q4, que la SMV devuelve
+  en dólares (Moneda="Dólares" / "D lares") para esa única presentación. No
+  se confirmó si es un cambio de política de reporte o una particularidad
+  puntual de esa presentación específica. Mismo tratamiento que el caso de
+  BUENAVC1 arriba: los montos absolutos de ese trimestre no son comparables
+  en soles con el resto de la serie; los ratios no se ven afectados.
 
 CREDITC1 — Banco de Crédito del Perú:
   Utiliza la taxonomía contable SBS, que tiene más cuentas (443 vs ~398 en
@@ -474,14 +500,88 @@ directamente de los montos absolutos reportados a la SMV. En caso de
 denominador igual a cero, el ratio se registra como NaN (división segura
 implementada para evitar divisiones por cero).
 
-Ratios NO implementados por falta de datos confiables:
-  P/E (Price-to-Earnings): requiere número de acciones en circulación. Se
-      investigaron tres fuentes alternativas (yfinance sharesOutstanding,
-      cuenta de Capital Emitido SMV, endpoint BVL share), ninguna entregó
-      una serie histórica confiable y consistente para los 84 trimestres del
-      horizonte. Queda como trabajo pendiente.
-  Dividend Yield (DY): requiere dividendos por acción, no disponibles en
-      las fuentes actuales.
+3.10.1. Ratios NO implementados: P/E y DY (evaluación de viabilidad, jun-2026)
+------------------------------------------------------------------------
+P/E (Price-to-Earnings) requiere número de acciones en circulación (para
+EPS = UtilidadNeta_TTM / acciones, y luego P/E = close_split_adj / EPS).
+Se evaluaron las fuentes disponibles y ninguna alcanza fiabilidad para el
+horizonte completo (2012-2025) en los 5 activos:
+
+  - yfinance sharesOutstanding (.info): solo da el valor ACTUAL, no una
+    serie histórica por trimestre.
+  - yfinance Ticker.get_shares_full(): sí da una serie con fechas, pero
+    cobertura parcial (CREDITC1.LM y ALICORC1.LM desde ~2019; BVN desde
+    ~2016 -- no cubre 2012-2018/2015) y con valores duplicados e
+    inconsistentes en la misma fecha (revisiones, no una cifra limpia).
+  - Capital Emitido SMV (cuenta BG_1D0701) / valor nominal: el WSDL entrega
+    el capital emitido en soles/dólares, pero NO el valor nominal por acción
+    (necesario para convertir monto -> número de acciones); ese dato vive en
+    estatutos/prospectos, fuera del WSDL, y puede cambiar en el horizonte
+    (reorganizaciones de capital). Además Capital Emitido mezcla acciones
+    comunes, "acciones de inversión" (instrumento peruano con derechos
+    distintos) y acciones en cartera -- requeriría desagregación adicional,
+    y para CREDITC1 (banco, taxonomía SBS) la estructura de cuentas es
+    distinta a la de las demás.
+  - obtener_CambiosPatrimonio (Estado de Cambios en el Patrimonio, WSDL
+    SMV): operación NO explorada hasta ahora porque, al probarla en vivo
+    (Ejercicio=2023, Periodo=4), no respondió en más de 10 minutos (se tuvo
+    que cancelar la llamada), a diferencia de las otras 4 operaciones que sí
+    usa el pipeline y que responden en segundos. No se pudo confirmar si
+    contiene un campo de número de acciones ni evaluar su fiabilidad.
+  - Memorias anuales (PDF): viven en un sistema distinto al WSDL (portal de
+    información societaria de SMV/BVL, no documentado en este pipeline).
+    Implementarlo significa descubrir ese endpoint/portal desde cero,
+    descargar y extraer datos no estructurados de ~70 documentos (5
+    empresas x ~14 años) -- del tamaño de un sub-proyecto nuevo, no un
+    complemento de R4.
+
+  Cross-check externo: solo 2 de los 5 activos tienen un proxy de mercado
+  para validar. BAP (Credicorp Ltd, NYSE) es el HOLDING que controla BCP
+  más Pacífico Seguros, Mibanco, Prima AFP y Atlantic Security Bank -- su
+  P/E refleja al grupo completo, no a BCP individual, así que solo permite
+  una validación de orden de magnitud, no una reconciliación real (ver
+  xcheck en config.yaml). BVN (NYSE) sí es la misma entidad que Buenaventura
+  (ADR vs. acción local), por lo que ahí el cross-check sería más sólido --
+  pero igual carece de una fuente de acciones en circulación confiable para
+  el horizonte completo (ver get_shares_full arriba). ALICORC1, SAGAC1 y
+  CORAREC1 no tienen ningún proxy de mercado externo.
+
+  Camino acotado, NO implementado, que sí sería viable como tarea separada:
+  para CREDITC1 ya se cuenta con los ratios de splits/acciones liberadas
+  VALIDADOS contra el comportamiento real del precio de la BVL (ver 2.7,
+  corporate_actions.py). Con una sola ancla de acciones en circulación
+  actual (yfinance .info o la ficha pública del emisor en la BVL), se podría
+  reconstruir la serie histórica de acciones dividiendo por ese mismo factor
+  de split ya validado, sin depender de valor nominal ni de memorias
+  anuales. Aun así: (a) solo cubriría CREDITC1 -- ALICORC1 no tiene splits
+  en el horizonte que anclar, SAGAC1/CORAREC1 no tienen ninguna fuente de
+  splits, y BUENAVC1 tendría como mucho el cross-check de BVN pero no una
+  fuente de acciones confiable; (b) asume que TODOS los cambios de acciones
+  de CREDITC1 se deben a las acciones liberadas ya detectadas (sin ofertas
+  primarias u otros movimientos de capital no capturados como "split"); y
+  (c) seguiría sin cross-check real fuera de BCP/BAP (débil) y Buenaventura/
+  BVN. Es decir: aun en el mejor caso, P/E quedaría disponible (con
+  incertidumbre documentada) solo para 1 de los 5 activos, y las demás 4
+  empresas seguirían sin P/E sin importar cuánto esfuerzo se invierta, por
+  falta de fuente.
+
+  DECISIÓN: no se implementa P/E para ninguno de los 5 activos. Es trabajo
+  pendiente solo en el sentido de "posible spike acotado a futuro para
+  CREDITC1 exclusivamente"; para BUENAVC1, ALICORC1, SAGAC1 y CORAREC1 es
+  una limitación de fuente de datos, no de esfuerzo invertido.
+
+DY (Dividend Yield) requiere dividendos por acción. A diferencia de cuando
+  se escribió la primera versión de este documento, esto ya NO es un dato
+  inexistente para todos los activos: corporate_actions.py (R3, ver 2.7) ya
+  descarga dividendos por acción en PEN vía yfinance para CREDITC1 y
+  ALICORC1 (23 y 19 pagos respectivamente en el horizonte), los mismos que
+  usa close_total_return. DY = dividendo trailing 12 meses / close_raw (o
+  close_split_adj) sería calculable para esos 2 activos sin tocar SMV ni
+  necesitar acciones en circulación ni EPS -- no implementado todavía, pero
+  de esfuerzo bajo. Para BUENAVC1 (dividendos del ADR en USD, no
+  corresponden a la acción en PEN -- ver 2.7) y SAGAC1/CORAREC1 (sin
+  cobertura Yahoo) sigue sin haber una fuente de dividendos en PEN, igual
+  que con P/E: es una limitación de fuente, no de esfuerzo.
 
 3.11. Almacenamiento de fundamentales
 ------------------------------------------------------------------------
@@ -541,7 +641,8 @@ experimentos DRL:
   Moneda de precios de mercado: PEN (soles peruanos) para todos.
   Moneda BUENAVC1 Yahoo (BVN): USD — NUNCA mezclado con BVL PEN (ni close
   ni OHLCV).
-  Moneda de fundamentales: PEN para todos excepto BUENAVC1 (PEN + USD).
+  Moneda de fundamentales: PEN para todos excepto BUENAVC1 (PEN 2005Q1-2006Q3,
+  USD desde 2006Q4) y un trimestre puntual de ALICORC1 (USD en 2025Q4); ver 3.7.
   Datos de mercado 2008-2011 (CREDITC1/ALICORC1, solo Yahoo) y 2005-2011
   (BUENAVC1/BVN, solo Yahoo): se conservan en data/raw/market_*_yahoo.parquet
   como referencia, pero NO forman parte del dataset de mercado final
