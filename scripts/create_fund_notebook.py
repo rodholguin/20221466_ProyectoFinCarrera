@@ -29,7 +29,9 @@ cells = []
 cells.append(md_cell(
     "# Exploración de Datos Fundamentales — 5 Empresas BVL\n\n"
     "Visualización del pipeline R4: indicadores fundamentales trimestrales obtenidos\n"
-    "del web service SOAP de Datos Abiertos de la SMV (2020-Q1 a 2023-Q4).\n\n"
+    "del web service SOAP de Datos Abiertos de la SMV (2005-Q1 a 2025-Q4). Incluye\n"
+    "acciones en circulación, EPS TTM y los ratios de valoración **P/E** y **DY**\n"
+    "(ver secciones 5b y docs/pipeline §3.10.2).\n\n"
     "| Ticker | Empresa | Sector | Moneda |\n"
     "|--------|---------|--------|--------|\n"
     "| CREDITC1 | Banco de Crédito del Perú | Banca | PEN |\n"
@@ -82,23 +84,27 @@ cells.append(code_cell(
 cells.append(md_cell("## 1. Carga de datos", "cell-02"))
 
 cells.append(code_cell(
-    "from src.fundamentals.fundamentals_client import compute_ratios\n\n"
-    "fund = {}\n"
+    "from src.fundamentals.fundamentals_client import compute_ratios\n"
+    "from src.universe import Config\n\n"
+    "ASSETS = {a.bvl: a for a in Config.load('../config.yaml').assets}\n\n"
+    "fund, ratio_list = {}, []\n"
     "for ticker in TICKERS:\n"
     "    p = DATA_RAW / f'fund_{ticker}_smv.parquet'\n"
     "    if p.exists():\n"
     "        fund[ticker] = pd.read_parquet(p)\n"
     "        df_t = fund[ticker]\n"
+    "        # asset=... añade shares_outstanding, net_income_ttm y eps_ttm (insumos P/E)\n"
+    "        ratio_list.append(compute_ratios(df_t, asset=ASSETS[ticker]))\n"
     "        print(f'✓ {ticker}: {len(df_t)} filas, '\n"
     "              f'{df_t[\"period\"].nunique()} periodos, '\n"
     "              f'moneda={df_t[\"currency\"].unique().tolist()}')\n"
     "    else:\n"
-    "        print(f'✗ {ticker}: no encontrado — ejecutar scripts/gen_fundamentals.py')\n\n"
+    "        print(f'✗ {ticker}: no encontrado — ejecutar scripts/fetch_fund_extended.py')\n\n"
     "all_fund = pd.concat(list(fund.values()), ignore_index=True)\n"
     "all_fund['period'] = pd.to_datetime(all_fund['period'])\n\n"
-    "ratios = compute_ratios(all_fund)\n"
+    "ratios = pd.concat(ratio_list, ignore_index=True)\n"
     "ratios['period'] = pd.to_datetime(ratios['period'])\n"
-    "print(f'\\nRatios calculados: {len(ratios)} filas')",
+    "print(f'\\nRatios calculados: {len(ratios)} filas, columnas={list(ratios.columns)}')",
     "cell-03",
 ))
 
@@ -141,7 +147,7 @@ cells.append(md_cell(
 cells.append(code_cell(
     "fig, axes = plt.subplots(3, 2, figsize=(14, 14), constrained_layout=True)\n"
     "axes_flat = axes.flatten()\n"
-    "fig.suptitle('Estructura del Balance (miles de unidad monetaria) — SMV 2020-2023',\n"
+    "fig.suptitle('Estructura del Balance (miles de unidad monetaria) — SMV 2005-2025',\n"
     "             fontsize=13, fontweight='bold')\n\n"
     "for i, ticker in enumerate(TICKERS):\n"
     "    ax = axes_flat[i]\n"
@@ -197,7 +203,7 @@ cells.append(md_cell(
 cells.append(code_cell(
     "fig, axes = plt.subplots(3, 2, figsize=(14, 14), constrained_layout=True)\n"
     "axes_flat = axes.flatten()\n"
-    "fig.suptitle('Ingresos y Utilidad Neta (miles de unidad monetaria, YTD) — SMV 2020-2023',\n"
+    "fig.suptitle('Ingresos y Utilidad Neta (miles de unidad monetaria, YTD) — SMV 2005-2025',\n"
     "             fontsize=13, fontweight='bold')\n\n"
     "for i, ticker in enumerate(TICKERS):\n"
     "    ax = axes_flat[i]\n"
@@ -285,7 +291,7 @@ cells.append(code_cell(
     "]\n\n"
     "fig, axes = plt.subplots(2, 2, figsize=(14, 9), constrained_layout=True)\n"
     "axes_flat = axes.flatten()\n"
-    "fig.suptitle('Ratios Fundamentales — Evolución Trimestral (2020-2023)',\n"
+    "fig.suptitle('Ratios Fundamentales — Evolución Trimestral (2005-2025)',\n"
     "             fontsize=13, fontweight='bold')\n\n"
     "for ax, (col, title, fmt_str, ylim) in zip(axes_flat, RATIO_META):\n"
     "    for ticker, color in zip(TICKERS, COLORES):\n"
@@ -309,9 +315,74 @@ cells.append(code_cell(
     "cell-12",
 ))
 
+# ── Sección 5b ────────────────────────────────────────────────────────────────
+cells.append(md_cell(
+    "## 5b. Acciones en circulación, EPS TTM y valoración (P/E, DY)\n\n"
+    "Serie histórica de **acciones en circulación** reconstruida como "
+    "`(Capital Emitido − Acciones en Cartera) / valor nominal` (SMV), con el "
+    "`quantity` de la BVL como ancla y validación (coinciden al dígito en 4/5) y el "
+    "ancla SEC 20-F para BUENAVC1 (capital en USD sin nominal limpio → constante "
+    "253.72M). A partir de ahí:\n\n"
+    "- **P/E** = `close_raw × acciones / UtilidadNeta_TTM` = capitalización / utilidad "
+    "TTM (invariante a splits; se usa `close_raw`, no `close_split_adj`).\n"
+    "- **DY** = dividendos por acción TTM (PEN, fuente BVL R3) / `close_raw`.\n\n"
+    "P/E y DY son ratios **diarios** y viven en el panel unificado R6 "
+    "(`data/processed/dataset_unificado.parquet`); aquí se grafican desde ese panel. "
+    "Metodología y validación: docs/pipeline §3.10.2, hallazgos R4 §5.9.",
+    "cell-12b",
+))
+
+cells.append(code_cell(
+    "# Acciones en circulación reconstruidas (trimestral)\n"
+    "fig, axes = plt.subplots(3, 2, figsize=(14, 12), constrained_layout=True)\n"
+    "axf = axes.flatten()\n"
+    "fig.suptitle('Acciones en circulación = (Capital Emitido − tesorería) / nominal (SMV)',\n"
+    "             fontsize=13, fontweight='bold')\n"
+    "for i, ticker in enumerate(TICKERS):\n"
+    "    ax = axf[i]\n"
+    "    s = ratios[ratios['ticker'] == ticker].sort_values('period')\n"
+    "    if s.empty or 'shares_outstanding' not in s.columns:\n"
+    "        ax.set_visible(False); continue\n"
+    "    ax.plot(s['period'], s['shares_outstanding'] / 1e6,\n"
+    "            color=COLOR_MAP[ticker], linewidth=1.8, marker='o', markersize=3)\n"
+    "    ax.set_title(f'{ticker} — {NOMBRES[ticker]}', fontweight='bold', color=COLOR_MAP[ticker])\n"
+    "    ax.set_ylabel('Millones de acciones')\n"
+    "    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f'{v:,.0f}'))\n"
+    "axf[-1].set_visible(False)\n"
+    "plt.show()",
+    "cell-12c",
+))
+
+cells.append(code_cell(
+    "# P/E y DY diarios desde el panel unificado R6\n"
+    "panel = pd.read_parquet('../data/processed/dataset_unificado.parquet')\n"
+    "fig, (axpe, axdy) = plt.subplots(2, 1, figsize=(14, 9), constrained_layout=True)\n"
+    "fig.suptitle('Valoración diaria — P/E y Dividend Yield (panel R6, 2012-2025)',\n"
+    "             fontsize=13, fontweight='bold')\n"
+    "for ticker in TICKERS:\n"
+    "    g = panel[panel['ticker'] == ticker].sort_values('date')\n"
+    "    if g.empty:\n"
+    "        continue\n"
+    "    axpe.plot(g['date'], g['pe'].clip(lower=0, upper=60),\n"
+    "              label=f'{ticker} ({NOMBRES[ticker]})', color=COLOR_MAP[ticker], linewidth=1.0)\n"
+    "    axdy.plot(g['date'], g['dy'] * 100,\n"
+    "              label=f'{ticker} ({NOMBRES[ticker]})', color=COLOR_MAP[ticker], linewidth=1.0)\n"
+    "axpe.set_title('P/E (recortado a [0, 60]; NaN en años de pérdida)', fontweight='bold')\n"
+    "axpe.set_ylabel('P/E (×)')\n"
+    "axpe.legend(fontsize=8, ncol=5, loc='upper center')\n"
+    "axdy.set_title('Dividend Yield (%) — dividendo TTM por acción / close_raw', fontweight='bold')\n"
+    "axdy.set_ylabel('DY (%)')\n"
+    "axdy.legend(fontsize=8, ncol=5, loc='upper center')\n"
+    "for ax in (axpe, axdy):\n"
+    "    ax.xaxis.set_major_locator(mdates.YearLocator(2))\n"
+    "    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))\n"
+    "plt.show()",
+    "cell-12d",
+))
+
 # ── Sección 6 ─────────────────────────────────────────────────────────────────
 cells.append(md_cell(
-    "## 6. Comparativa entre empresas — Último trimestre (2023-Q4)\n\n"
+    "## 6. Comparativa entre empresas — Último trimestre disponible\n\n"
     "Comparación side-by-side de ratios para el último período disponible.\n"
     "BUENAVC1 se muestra con moneda diferente (USD); los ratios son adimensionales "
     "y por tanto comparables entre monedas.",

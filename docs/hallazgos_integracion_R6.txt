@@ -1,0 +1,513 @@
+HALLAZGOS Y METODOLOGÍA — INTEGRACIÓN DEL DATASET UNIFICADO (R6)
+Insumo para la redacción de la tesis: qué decisiones de integración se
+tomaron, por qué, y qué hallazgos del notebook de resultados son material
+para la discusión metodológica y de resultados.
+Tesis: Aprendizaje por refuerzo profundo aplicado a la Bolsa de Valores de Lima (BVL)
+Autor: Rodrigo Holguin — Asesor: Dr. E. Villanueva
+Fecha de corte de este documento: junio 2026
+========================================================================
+
+Este documento complementa a docs/pipeline_extraccion_datos.txt (sección 4,
+referencia técnica del panel unificado) y es el equivalente, para
+integración, de docs/hallazgos_mercado_R3.txt, hallazgos_fundamentales_R4.txt
+y hallazgos_sentimiento_R5.txt. A diferencia de R3-R5 (cada uno una fuente
+nueva), R6 no agrega datos nuevos: combina las tres fuentes ya cerradas
+sobre un calendario común, y es precisamente en esa combinación donde
+aparecieron la mayoría de las decisiones documentadas aquí — ninguna
+estaba resuelta de antemano en R3/R4/R5.
+
+
+========================================================================
+1. OBJETIVO DE R6
+========================================================================
+Construir el panel único (ticker, date) que combina mercado + indicadores
+técnicos (R3), sentimiento de noticias (R5) y fundamentales trimestrales
+(R4) sobre el calendario de días hábiles de la BVL, sin look-ahead bias en
+ninguna de las tres fuentes, y dejando explícitas (no escondidas detrás de
+un relleno silencioso) las decisiones sobre qué hacer en los huecos de
+cada fuente. El resultado es el espacio de observación final que verá el
+agente DRL; las 4 "vistas" de señales de R8 (solo mercado, +sentimiento,
++fundamentales, completa) son selecciones de columnas sobre este mismo
+panel, no datasets separados.
+
+
+========================================================================
+2. CRONOLOGÍA Y DECISIONES DE DISEÑO
+========================================================================
+A diferencia de R3/R4/R5, donde el trabajo era descubrir o construir una
+fuente, en R6 el trabajo fue de diseño puro: ninguna decisión de esta
+sección tenía un "dato correcto" que descubrir, todas requerían un
+criterio explícito. Quedan registradas en el orden en que se discutieron.
+
+2.1. Dónde vive el calendario bursátil: en R6 (dataset), no en OE1 (entorno)
+------------------------------------------------------------------------
+Primera pregunta de diseño: ¿el calendario de días hábiles debe construirse
+al armar el dataset (R6) o al construir el entorno DRL (OE1)? Se decidió
+que en R6, porque el calendario define las FILAS del panel — sin decidir
+qué días son válidos no hay panel que construir. La separación de
+responsabilidades quedó así: R6 decide qué días existen como fila (la
+unión de fechas con cotización de cualquiera de los 5 activos, ver 2.3);
+OE1 solo debe consumir el índice de fechas ya resuelto, sin reconciliar
+calendarios ni fuentes. Delegarlo a OE1 habría obligado al entorno a
+reconciliar 5 series con índices de fecha distintos en tiempo de
+ejecución, duplicando lógica que ya pertenece a la capa de datos.
+
+2.2. Política de huecos de sentimiento: sin decaimiento precalculado
+------------------------------------------------------------------------
+Decisión heredada de una sesión previa (2026-06-22) y confirmada en esta:
+el decaimiento del sentimiento NO se precalcula. El asesor sugirió que la
+tasa de decaimiento se aprenda junto con las redes del agente, en vez de
+fijar un half-life a mano (que sería un hiperparámetro optimizado sobre
+una métrica proxy, no sobre el reward real del agente) — y evita el
+dilema de "half-life único para los 5 activos vs. calibrado por activo".
+El panel guarda 4 columnas crudas en vez de un score ya decaído:
+  sentiment_score_last — último score observado, forward-fill crudo
+                         (0 antes de la primera noticia histórica real).
+  days_since_news      — días hábiles desde esa noticia (0 el día de la
+                         noticia).
+  has_news              — 1/0 si hubo noticia ese día.
+  n_articles             — conteo de noticias del día (0 en huecos, sin
+                         ambigüedad, a diferencia del score).
+Referencia conceptual (no una arquitectura adoptada): redes con
+decaimiento aprendido sobre series con datos irregulares, ej. GRU-D
+(Che et al., 2018), capa `exp(-softplus(w·Δt))` con w entrenable —
+usada solo como pista de que days_since_news puede alimentar directamente
+una capa que aprenda a descontar la señal, sin que el investigador fije w.
+
+2.3. Roll-forward de noticias en día no bursátil + reagregación
+------------------------------------------------------------------------
+Hallazgo que motivó esta decisión: al cruzar las fechas de
+sentiment_{TICKER}.parquet (R5) contra el calendario de mercado, entre 7.4%
+y 25.1% de los días con noticia caen en un día NO bursátil (ver 5.2 para
+el detalle por activo) — la gran mayoría fines de semana, el resto
+feriados BVL. Sin una regla explícita, esas noticias simplemente se
+perderían al construir el panel.
+  Decisión: roll-forward al SIGUIENTE día hábil. No al anterior, porque
+  asignar una noticia del sábado al viernes sería look-ahead (el viernes
+  ya cerró antes de que la noticia existiera). Si ese día hábil ya tenía
+  noticia propia, se reagregan con media ponderada por n_articles
+  (consistente con daily_aggregation: mean de R5, ver config.yaml).
+  Aclaración conceptual importante (surgió como pregunta directa en la
+  sesión): roll-forward y forward-fill son DOS mecanismos distintos que
+  se componen, no el mismo. Roll-forward resuelve a qué fila del
+  calendario va una noticia que no tiene fila propia (un evento puntual).
+  Forward-fill (2.2) es lo que pasa los días siguientes SIN noticia nueva:
+  sentiment_score_last se mantiene, pero has_news vuelve a 0 y
+  days_since_news sigue creciendo — la noticia no queda "fresca para
+  siempre", solo su último valor persiste hasta la siguiente.
+
+2.4. Ancla sintética para days_since_news antes de la primera noticia real
+------------------------------------------------------------------------
+Con forward-fill puro, days_since_news sería NaN antes de la primera
+noticia histórica de un activo (no hay "última noticia" de la cual
+contar). Se decidió anclar el día 0 del panel de cada activo como si
+hubiera un evento neutral ahí (igual que sentiment_score_last=0 antes de
+la primera noticia) — days_since_news crece de forma normal desde el
+inicio del panel, sin inventar un segundo valor sentinela arbitrario ni
+dejar NaN para que el agente tenga que enmascarar.
+
+2.5. days_since_news se guarda crudo; log1p se aplica en OE1, no en R6
+------------------------------------------------------------------------
+La cola de days_since_news es muy pesada (máximos de 277 a 403 días
+hábiles según el activo, ver 5.2) — alimentarla cruda a una red puede ser
+problemático numéricamente. Se evaluó si transformarla (log) antes de
+guardarla en el panel. Decisión: NO — se guarda cruda en
+dataset_unificado.parquet, y la transformación log1p (no log puro, porque
+days_since_news=0 en días con noticia y log(0) no está definido) se aplica
+en OE1 al construir la observación del agente. Mismo principio que 2.1:
+R6 guarda datos limpios/crudos, OE1 decide cómo darle forma a la entrada
+del modelo — así una sesión futura puede cambiar de log1p a otra
+normalización sin re-correr el pipeline de datos.
+
+2.6. Fundamentales: propagación con merge_asof (sin cambios de fondo)
+------------------------------------------------------------------------
+A diferencia de las decisiones anteriores, esta YA estaba resuelta desde
+el andamiaje inicial de R6 (commit fd1c8d7, 12-jun) y solo se confirmó/
+validó en esta sesión: pd.merge_asof(direction="backward") sobre
+known_date asigna a cada día de mercado el último trimestre que YA era
+público, nunca uno futuro. Se verificó contra los datos reales que el
+primer known_date de los 5 activos es 2005-05-15 (ver
+fundamentals_client.compute_ratios), muy anterior al inicio del horizonte
+de mercado (2012-01-02) — no hay huecos de NaN al inicio del panel que
+forzaran una decisión adicional de relleno.
+
+2.7. Días sin cotización de un activo (is_no_trade): precio stale,
+     no se completa OHLCV
+------------------------------------------------------------------------
+Al reindexar cada activo sobre el calendario común (2.1) quedaron
+expuestos huecos donde la BVL abrió pero un activo específico no cotizó:
+SAGAC1 192 días (9 episodios, el mayor de 41 sesiones consecutivas,
+2012-09 a 2015-04), BUENAVC1 14 días (un episodio, nov-dic 2014), CREDITC1
+2 días; ALICORC1 y CORAREC1 sin huecos (ver 5.3). Decisión: se arrastra el
+último close_total_return/close_raw conocido ("stale price", sin
+operación real) y se RECALCULAN los indicadores técnicos
+(technical_indicators.add_indicators) sobre la serie ya completa, en vez
+de arrastrar a ciegas los valores de los indicadores ya calculados — así
+ret_1d=0 y volatility_20 decaen correctamente durante el tramo sin
+operación, y el salto real al reanudar la negociación se refleja íntegro
+ese día. Una columna is_no_trade (0/1) marca estas filas para que el
+entorno (OE1) pueda modelar el costo de iliquidez en vez de tratarlas
+como una sesión real (ver nota sobre CREDITC1 en config.yaml: "limpiar
+huecos/cierres estancados y modelar el costo de iliquidez en el
+entorno"). NO se completa open/high/low/volumen: esa ruta ya se había
+descartado explícitamente en docs/justificacion_cierre_vs_ohlcv.txt — el
+agente solo usa close_total_return, ningún indicador implementado usa
+OHLCV.
+
+2.8. Corrección de rsi_14: bug de fórmula preexistente de R3, no imputación
+------------------------------------------------------------------------
+Al validar 2.7 se encontró que rsi_14 ya tenía 27.5% de NaN en los
+parquets originales de R3 (ANTES de cualquier cambio de esta sesión), muy
+desigual por activo (ver 5.4). Causa: _rsi() en
+src/market/technical_indicators.py hacía loss.replace(0, np.nan) — cuando
+una ventana de 14 días no tenía ninguna pérdida, el RSI quedaba indefinido
+en vez de calcularse. Se aclaró explícitamente (surgió como pregunta
+directa en la sesión) que esto NO es imputación: el precio, el delta
+diario, la ganancia y la pérdida de cada ventana son datos 100% reales y
+observados, nada falta — lo roto era el manejo de un caso límite de la
+fórmula, no un hueco de datos. Se diagnosticaron dos causas distintas
+antes de corregir:
+  - pérdida=0 PERO ganancia>0 (36% de los NaN originales): NO es ambiguo.
+    RS=ganancia/0→∞→RSI=100 es el límite exacto de la fórmula de Wilder,
+    igual que TA-Lib/pandas-ta. Corregirlo es restaurar la fórmula
+    estándar, no una suposición.
+  - pérdida=0 Y ganancia=0 (64% restante, concentrado en activos
+    ilíquidos): ventana totalmente plana, 0/0 verdaderamente indefinido —
+    requiere una convención. Se eligió RSI=50 (sin señal de momentum) en
+    vez de la convención más común (RSI=100 también aquí), porque ahí no
+    hubo movimiento real que justifique "fuerza alcista" — y porque estas
+    ventanas suelen coincidir con tramos is_no_trade (2.7), donde ya hay
+    una bandera explícita de "no hay información real aquí".
+Implementado en _rsi() (R3), no en R6, para que se mantenga consistente
+si se regenera market_*.parquet directamente; se recalcularon los 5
+market_{TICKER}.parquet existentes (sin volver a llamar a las APIs de
+BVL/Yahoo, solo recomputando indicadores sobre el close ya descargado).
+
+
+========================================================================
+3. CONTRATO CONFIRMADO — ESQUEMA DEL PANEL UNIFICADO
+========================================================================
+Clave: (ticker, date). 17,565 filas = 5 activos x 3,513 días bursátiles
+(calendario unión de los 5 activos, 2012-01-02 a 2025-12-31). 36 columnas:
+
+  Identificación        ticker, date
+
+  Mercado (R3)           open, high, low, close, volume, source,
+                         close_raw, close_split_adj, close_total_return,
+                         is_split_adjusted, is_div_adjusted
+
+  No-trade (R6, 2.7)     is_no_trade
+
+  Indicadores técnicos   ret_1d, ret_1d_raw, sma_20, sma_50, ema_12,
+  (recalculados en R6    ema_26, macd, macd_signal, rsi_14, volatility_20
+  sobre la serie ya
+  completa, 2.7-2.8)
+
+  Sentimiento (R6, 2.2-  sentiment_score_last, days_since_news, has_news,
+  2.5, fuente R5)        n_articles
+
+  Fundamentales (R6,     period, known_date, currency, roe, roa,
+  2.6, fuente R4)        net_margin, debt_equity, debt_ratio, pe, dy
+                         (+ auxiliares shares_outstanding, net_income_ttm,
+                         eps_ttm). pe y dy añadidos jul-2026 (ver 5.5 y la
+                         nota de actualización en la sección de limitaciones).
+
+Tipos: sentiment_score_last ∈ [-1, 1] continuo; days_since_news entero
+≥ 0; has_news/is_no_trade ∈ {0, 1}; n_articles entero ≥ 0; ratios
+fundamentales float (NaN solo si el denominador es 0, no por huecos del
+panel, ver 2.6).
+
+
+========================================================================
+4. IMPLEMENTACIÓN: ARCHIVOS Y FUNCIONES CLAVE
+========================================================================
+src/integration/build_dataset.py
+  build_trading_calendar(market)        -- unión de fechas de los 5
+                                            activos (2.1).
+  _roll_forward_dates(dates, calendar)  -- mapea cada fecha al primer día
+                                            del calendario >= esa fecha.
+  _align_sentiment_to_calendar(sentiment_ticker, calendar) -- roll-forward
+                                            + reagregación ponderada (2.3).
+  _days_since_news(has_news)            -- días hábiles desde la última
+                                            noticia, con ancla sintética
+                                            en la fila 0 (2.4).
+  _fill_no_trade_days(panel)            -- arrastre de precio + recálculo
+                                            de indicadores + bandera
+                                            is_no_trade (2.7).
+  build_unified(market, sentiment, fundamentals_ratios, trading_calendar=None)
+                                          -- orquestador; trading_calendar
+                                            es opcional (se deriva de
+                                            market si no se pasa).
+  feature_views(unified)                -- las 4 vistas de señales de R8.
+  save(unified, processed_dir)          -- escribe dataset_unificado.parquet.
+
+src/market/technical_indicators.py
+  _rsi(close, window=14)                -- corregido en esta sesión (2.8).
+  add_indicators(df)                    -- sin cambios de interfaz; ahora
+                                            también se invoca desde R6
+                                            sobre la serie reindexada.
+
+scripts/run_r6_integration.py — orquestador: lee market_{TICKER}.parquet
+  (interim), sentiment_{TICKER}.parquet (interim) y fund_{TICKER}_smv.parquet
+  (raw, vía compute_ratios) de los 5 activos, llama a build_unified() y
+  guarda data/processed/dataset_unificado.parquet.
+
+Notebook: notebooks/exploracion_integracion_bvl.ipynb (catálogo en
+sección 7).
+
+
+========================================================================
+5. RESULTADOS Y HALLAZGOS RELEVANTES PARA LA TESIS
+========================================================================
+Todos los números de esta sección provienen de
+notebooks/exploracion_integracion_bvl.ipynb, ejecutado el 2026-06-23 sobre
+data/processed/dataset_unificado.parquet (17,565 filas, 5/5 activos).
+
+5.1. El calendario unificado expone una asimetría de liquidez ya conocida
+------------------------------------------------------------------------
+  Ticker    | Filas propias (R3) | Calendario unificado | Huecos is_no_trade
+  ----------|--------------------|-----------------------|--------------------
+  CREDITC1  |              3,511 |                 3,513 |                  2
+  BUENAVC1  |              3,499 |                 3,513 |                 14
+  ALICORC1  |              3,513 |                 3,513 |                  0
+  SAGAC1    |              3,321 |                 3,513 |                192
+  CORAREC1  |              3,513 |                 3,513 |                  0
+SAGAC1 concentra el 92% de los huecos del panel (192 de 208) en 9 episodios
+entre 2012-09 y 2015-04, el mayor de 41 sesiones consecutivas (~2 meses
+calendario) sin que el activo cotizara. Es la misma asimetría de
+iliquidez ya documentada en R3 (volumen permanentemente NaN para
+BUENAVC1/SAGAC1/CORAREC1, ver docs/justificacion_cierre_vs_ohlcv.txt),
+vista ahora desde el ángulo de "filas completas faltantes" en vez de
+"columna faltante".
+
+5.2. Roll-forward recupera entre 0.9 y 1.6 puntos de cobertura de noticias
+------------------------------------------------------------------------
+  Ticker    | Días con noticia (R5) | Antes del roll-forward | Después | % antes | % después
+  ----------|------------------------|--------------------------|---------|---------|----------
+  CREDITC1  |                  2,734 |                    2,047 |   2,132 |   58.3% |    60.7%
+  BUENAVC1  |                    697 |                      641 |     672 |   18.2% |    19.1%
+  ALICORC1  |                  1,085 |                      911 |     991 |   25.9% |    28.2%
+  SAGAC1    |                    331 |                      266 |     324 |    7.6% |     9.2%
+  CORAREC1  |                    495 |                      427 |     477 |   12.2% |    13.6%
+"Antes" = noticias de R5 cuya fecha YA cae en un día bursátil (lo que se
+obtendría sin esta decisión, simplemente descartando lo demás). En total
+se recuperan 304 días-activo que antes se habrían perdido fuera del
+calendario (validado con un caso real: sábado 2013-07-20 de CREDITC1,
+score 0.0/2 artículos, se funde con el lunes nativo 2013-07-22, score
+1.0/1 artículo, dando 0.333/3 artículos — exactamente la media ponderada
+esperada). days_since_news tiene cola muy pesada y desigual por activo:
+máximos de 277 (ALICORC1) a 403 (SAGAC1) días hábiles sin noticia — ver
+notebook sección 3 para los histogramas crudo y log1p por activo.
+
+5.3. Huecos de no-trade: concentrados en el tiempo, no dispersos
+------------------------------------------------------------------------
+Los 9 episodios de SAGAC1 (tamaños 41, 39, 30, 26, 20, 19, 9, 4, 4
+sesiones) están TODOS entre 2012-09-04 y 2015-04-06 — los primeros ~3
+años del horizonte de mercado, no repartidos a lo largo de los 14 años.
+Después de 2015 no se detectó ningún hueco para SAGAC1. El episodio de
+BUENAVC1 (14 sesiones, nov-dic 2014) y los 2 días de CREDITC1 (nov 2012)
+son puntuales. Implicación para el diseño de experimentos: cualquier
+ventana de evaluación que incluya 2012-2015 para SAGAC1 va a contener
+tramos largos de is_no_trade=1; ventanas posteriores a 2015 no.
+
+5.4. Corrección de rsi_14: el bug afectaba más a los activos más ilíquidos
+------------------------------------------------------------------------
+  Ticker    | NaN con fórmula anterior | % anterior | NaN corregido | % corregido
+  ----------|---------------------------|------------|----------------|-------------
+  CREDITC1  |                        83 |       2.4% |             14 |        0.4%
+  BUENAVC1  |                     1,093 |      31.2% |             14 |        0.4%
+  ALICORC1  |                        23 |       0.7% |             14 |        0.4%
+  SAGAC1    |                     2,637 |      79.4% |             14 |        0.4%
+  CORAREC1  |                       933 |      26.6% |             14 |        0.4%
+El NaN residual (14 filas por activo, 0.4%) es el mínimo irreducible: las
+primeras 14 sesiones de cada serie, sin suficiente historia para una
+ventana de 14 días. Correlación directa con liquidez: SAGAC1 (el activo
+con más huecos is_no_trade, 5.1, y menos cobertura de noticias, 5.2) es
+también el que tenía más NaN de RSI antes de corregir la fórmula — los
+tres hallazgos de esta sección describen la misma realidad subyacente
+(SAGAC1 es estructuralmente el activo más ilíquido del universo) desde
+tres ángulos distintos del pipeline. Del total de filas corregidas, 1,690
+(36%) son el caso "sin pérdidas, con ganancia" (RSI=100, sin ambigüedad) y
+3,848 (64% del total tras incluir las filas is_no_trade que también caen
+en ventanas totalmente planas) son el caso "ventana plana" (RSI=50, ver
+2.8).
+
+5.5. Fundamentales: cero NaN en el panel, propagación visiblemente
+     escalonada
+------------------------------------------------------------------------
+roe, roa, net_margin, debt_equity y debt_ratio no tienen NINGÚN NaN en las
+17,565 filas del panel (el primer known_date de los 5 activos, 2005-05-15,
+es anterior al inicio del horizonte de mercado). El gráfico de ROE de
+CREDITC1 2019-2021 (notebook sección 5) muestra visualmente los escalones
+discretos del merge_asof: el valor cambia exactamente en cada known_date,
+no de forma gradual ni con interpolación.
+
+Excepción (jul-2026): pe y dy, añadidos después, NO comparten esta propiedad
+de "cero NaN". dy no tiene NaN (dividendos TTM = 0 donde no hubo pagos), pero
+pe SÍ tiene NaN por diseño: es NaN cuando la utilidad TTM ≤ 0 (años de
+pérdida), no por huecos de propagación. Cobertura de pe ~86% del panel (93-96%
+en los 4 no-mineros; 55% en BUENAVC1, minera con varios años de pérdida). Es
+una ausencia SEMÁNTICA (no hay P/E significativo con utilidad negativa), no un
+hueco de datos; el entorno OE1 debe tratar el NaN de pe como "sin señal de
+valoración" ese día, no imputarlo.
+
+
+========================================================================
+6. POLÍTICA DE IMPUTACIÓN DE DATOS (resumen para metodología de tesis)
+========================================================================
+A diferencia de R3-R5 (donde la respuesta es simplemente "no se imputa
+nada"), en R6 conviven tres tratamientos distintos de huecos, y es
+importante para la tesis no llamarlos todos "imputación" por igual:
+
+  - Sentimiento (días sin noticia, 2.2): SÍ es una elección explícita de
+    cómo representar la ausencia de información (sentiment_score_last=0
+    inicial, forward-fill después, days_since_news creciente) — pero NO
+    se imputa el score en sí en los días sin noticia: has_news=0 y
+    n_articles=0 dejan sin ambigüedad qué fue observado ese día y qué fue
+    heredado.
+  - Días sin cotización de un activo (is_no_trade, 2.7): esto SÍ es una
+    forma de imputación en sentido estricto — se asume un valor
+    (close_total_return constante) para una observación que genuinamente
+    no existe (el activo no operó). Se marca explícitamente con
+    is_no_trade=1 para que no se confunda con una sesión real, y se
+    limita a la serie de precio (no se inventa open/high/low/volumen).
+  - Corrección de rsi_14 (2.8): esto NO es imputación. Los datos de
+    entrada (precio, delta, ganancia, pérdida) nunca faltaron; se corrigió
+    el manejo de un caso límite de la fórmula (pérdida=0). El caso
+    pérdida=0/ganancia>0 es un valor matemáticamente exacto (RSI=100, sin
+    margen de elección); el caso 0/0 sí requirió una convención (RSI=50),
+    pero es una convención sobre cómo INTERPRETAR un valor indefinido de
+    un indicador derivado, no una suposición sobre datos de mercado
+    faltantes.
+  - Fundamentales (2.6): tampoco es imputación. merge_asof no inventa
+    ningún valor — propaga hacia adelante un valor real (el último
+    trimestre publicado) hasta que hay uno más nuevo; no hay periodos sin
+    cobertura dentro del horizonte de mercado que requirieran una
+    decisión de relleno.
+
+
+========================================================================
+7. VISUALIZACIONES DISPONIBLES (catálogo para reutilizar en la tesis)
+========================================================================
+notebooks/exploracion_integracion_bvl.ipynb está ejecutado con el dataset
+completo y vigente (5/5 activos, jun-2026).
+
+  Sec. 1  Carga y resumen general — shape del panel, rango de fechas,
+          activos. Punto de partida, no para citar directamente.
+  Sec. 2  Calendario bursátil — tabla de filas propias por activo vs.
+          calendario unificado. Evidencia visual de 5.1.
+  Sec. 3  Sentimiento — tabla de cobertura antes/después del roll-forward
+          (evidencia de 5.2), ejemplo real de colisión/reagregación
+          (CREDITC1 jul-2013), histogramas de days_since_news crudo y
+          log1p por activo (10 paneles).
+  Sec. 4  Ancla sintética — tabla de la primera fila de cada activo,
+          confirmando 0 NaN en days_since_news/sentiment_score_last.
+  Sec. 5  Fundamentales — chequeo de NaN=0, gráfico de ROE de los 5
+          activos (escalones de merge_asof) + zoom CREDITC1 2019-2021.
+          Evidencia de 5.5.
+  Sec. 5b Valoración P/E y DY (añadida jul-2026) — evidencia de la nota de
+          actualización de la sección de limitaciones y de 5.5 (excepción).
+          Dos figuras para el capítulo de resultados/metodología:
+          - FIG. "P/E y DY diarios (2 paneles, 2012-2025)": las 5 empresas
+            superpuestas. Úsese para describir la señal de VALORACIÓN que ve
+            el agente y el contraste sectorial (banco P/E ~13, minera con
+            tramos NaN por pérdidas y P/E muy alto cuando la utilidad se
+            acerca a 0, cíclica del acero barata; DY alto y volátil en retail
+            y acero). También soporta la mención de que el P/E es NaN en años
+            de pérdida (ausencia semántica, no hueco).
+          - FIG. "CREDITC1 2019-2021: P/E diario vs EPS TTM escalonado": el P/E
+            (línea) se mueve a diario mientras el EPS TTM (escalón, eje der.)
+            solo salta en cada known_date. Es la figura IDÓNEA para ilustrar
+            la NATURALEZA de integración de R6: un ratio que combina precio
+            diario (R3) con fundamentales trimestrales (R4) sin look-ahead.
+          Acompaña además una tabla de cobertura de P/E/DY y mediana por
+          activo (para la tabla-resumen del capítulo).
+  Sec. 6  Días sin cotización — tabla de episodios/racha máxima por
+          activo (evidencia de 5.1/5.3), gráfico de SAGAC1 con la racha
+          de 4 sesiones is_no_trade y el salto real al reanudar. Candidato
+          directo para ilustrar la decisión de "stale price" en la
+          sección de metodología.
+  Sec. 7  Corrección de rsi_14 — tabla NaN antes/después por activo
+          (evidencia de 5.4), conteo de RSI=100 vs RSI=50 introducidos,
+          ejemplo SAGAC1 dentro y al salir del hueco de 4 sesiones.
+  Sec. 8  Vistas de señales R8 — listado de columnas de las 4
+          configuraciones (solo_mercado, mercado_sentimiento,
+          mercado_fundamentales, completa).
+  Sec. 9  Síntesis — resumen numérico final (shape, cobertura, NaN por
+          columna clave).
+
+
+========================================================================
+8. LIMITACIONES Y TRABAJO PENDIENTE
+========================================================================
+  - days_since_news se guarda crudo (2.5); la transformación log1p para
+    la observación del agente es una decisión de OE1, NO implementada
+    aquí ni en este documento — queda como contrato pendiente con esa
+    etapa, no como limitación de R6 en sí.
+  - El patrón "fila presente con close repetido y volumen NaN" que ya
+    existía en R3 para activos ilíquidos (ver
+    docs/justificacion_cierre_vs_ohlcv.txt) es distinto de is_no_trade
+    (que marca filas AUSENTES en el parquet original de R3) y no quedó
+    unificado bajo la misma bandera — is_no_trade no detecta ese patrón
+    más sutil de "stale price con fila presente". No se evaluó si vale la
+    pena fusionarlos en una sola noción de iliquidez.
+  - El umbral is_no_trade es binario (0/1); no distingue duración del
+    hueco (un activo que no cotizó 1 día vs. 41 días consecutivos
+    recibe la misma bandera) — un costo de iliquidez en OE1 que quiera
+    escalar con la duración del hueco necesitará derivarla de rachas
+    consecutivas de is_no_trade, no de la columna en sí.
+  - No se implementó una alternativa de reagregación de sentimiento
+    ponderada por confidence (la confianza del LLM, ver
+    docs/hallazgos_sentimiento_R5.txt 5.2/6) al fusionar noticias por
+    roll-forward — se pondera solo por n_articles, igual que la
+    agregación diaria original de R5.
+  - [ACTUALIZADO jul-2026] P/E y Dividend Yield YA están implementados e
+    integrados al panel (columnas pe, dy en las vistas mercado_fundamentales
+    y completa); ver docs/pipeline_extraccion_datos.txt §3.10.2 y
+    docs/hallazgos_fundamentales_R4.txt §5.9. A diferencia de los ratios INFO_*
+    (ROE/ROA/…), que se propagan por known_date y no tienen NaN en el
+    horizonte, pe y dy se calculan a nivel DIARIO en el panel:
+      pe = close_raw / eps_ttm   (NaN cuando la utilidad TTM ≤ 0: años de
+           pérdida; cobertura ~86% del panel, 55% en BUENAVC1)
+      dy = dividendos_TTM_por_acción / close_raw   (sin NaN)
+    Los insumos shares_outstanding/eps_ttm salen de fundamentals_client
+    (acciones en circulación = (Capital Emitido − tesorería)/nominal; BUENAVC1
+    con ancla SEC), y los dividendos de la capa de acciones corporativas (R3).
+
+  Pendientes / caveats específicos de P/E y DY (para el capítulo de la tesis;
+  las figuras que los sustentan están en el notebook Sec. 5b, ver 7):
+    - Normalización para OE1: pe y dy son señales sesgadas y con cola pesada
+      (picos de P/E cuando la utilidad TTM se acerca a 0; DY con picos de
+      20-30% en retail/acero). Igual que con days_since_news (log1p), la
+      transformación/winsorización para la observación del agente es una
+      decisión de OE1, NO de R6 — queda como contrato pendiente con esa etapa.
+      La FIG. de P/E/DY diarios de Sec. 5b hace visible ese sesgo.
+    - NaN de P/E = ausencia SEMÁNTICA (utilidad ≤ 0), no hueco de datos. OE1
+      debe tratarlo como "sin señal de valoración" ese día (p.ej. máscara o
+      valor sentinela), no imputarlo. Afecta sobre todo a BUENAVC1 (45% del
+      horizonte con P/E indefinido por años de pérdida).
+    - P/E de nombres ILÍQUIDOS es ruidoso: CREDITC1 (BCP) tiene free float muy
+      bajo y su precio cotizado puede quedar estancado/no representativo, lo
+      que distorsiona su capitalización y P/E (su market cap implícita supera a
+      la del holding Credicorp, señal de precio no representativo). Interpretar
+      el P/E de CREDITC1 con cautela; la FIG. de Sec. 5b lo muestra.
+    - DY es el rendimiento REALIZADO trailing 12m de TODA la caja repartida
+      (dividendos ordinarios + extraordinarios), NO un DY "recurrente"
+      suavizado. Es una decisión deliberada (factual, point-in-time, sin
+      clasificación subjetiva ni look-ahead); se verificó que los picos altos
+      son dividendos reales (retail/acero de alto payout), no devoluciones de
+      capital (las amortizaciones de autocartera de ALICORC1 no entran en la
+      serie de dividendos). Un DY recurrente quedaría como feature complementario
+      opcional, no implementado.
+    - BUENAVC1: utilidad en USD convertida a PEN por trimestre al TC BCRP de
+      fin de trimestre antes de sumar el TTM (aproximación frente a convertir
+      cada mes a su TC); y su conteo de acciones es el ancla SEC constante (el
+      SMV reporta su capital en USD, sin nominal limpio). Ver pipeline §3.10.2.
+    - shares_outstanding, net_income_ttm y eps_ttm quedan en el panel como
+      columnas AUXILIARES (trazabilidad/figuras), pero NO están en feature_views
+      (el agente ve solo pe y dy, no los insumos).
+
+
+========================================================================
+FIN DEL DOCUMENTO
+========================================================================

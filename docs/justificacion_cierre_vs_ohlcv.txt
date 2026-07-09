@@ -1,0 +1,110 @@
+JUSTIFICACIÓN: USAR SOLO PRECIO DE CIERRE (NO OHLCV COMPLETO) PARA EL AGENTE
+Tesis: Aprendizaje por refuerzo profundo aplicado a la Bolsa de Valores de Lima (BVL)
+Autor: Rodrigo Holguin — Asesor: Dr. E. Villanueva
+Fecha: junio 2026
+========================================================================
+
+CONTEXTO
+------------------------------------------------------------------------
+De los 5 activos del universo, solo CREDITC1 y ALICORC1 tienen OHLCV real
+(enriquecido con Yahoo donde coincide con la BVL); BUENAVC1, SAGAC1 y
+CORAREC1 solo tienen precio de cierre (open=high=low=close, volume=NaN),
+por límite de la fuente primaria (BVL dataondemand) y falta de cobertura
+Yahoo. Ver docs/hallazgos_mercado_R3.txt y docs/pipeline_extraccion_datos.txt
+sección 2 para el detalle técnico completo de esa asimetría.
+
+Pregunta evaluada: para un agente DRL que opera a frecuencia DIARIA (no
+intradía), ¿es necesario perseguir OHLCV completo para los 5 activos, o
+basta con el precio de cierre?
+
+
+DECISIÓN
+------------------------------------------------------------------------
+Se usa únicamente el precio de cierre (close_total_return) como insumo de
+precio para los 5 activos del universo. No se busca completar OHLCV para
+BUENAVC1/SAGAC1/CORAREC1 ni se usa el OHLCV ya disponible de CREDITC1/
+ALICORC1 como feature adicional del agente.
+
+
+RAZONES
+------------------------------------------------------------------------
+1. Los indicadores técnicos ya implementados (src/market/technical_indicators.py)
+   se calculan exclusivamente sobre close_total_return: ret_1d, sma_20,
+   sma_50, ema_12, ema_26, macd, macd_signal, rsi_14, volatility_20. Ninguno
+   usa open/high/low/volume. El OHLCV de CREDITC1/ALICORC1 no entra hoy en
+   ningún cálculo del pipeline.
+
+2. El agente decide una vez al día, no intradía. El rango open-high-low del
+   día en curso no es información sobre la que el agente pueda actuar de
+   forma causal (al momento de decidir, ese rango ya transcurrió); su único
+   aporte real sería como insumo de un estimador de volatilidad más
+   eficiente (tipo Parkinson/Garman-Klass) frente al estimador close-to-close
+   ya usado en volatility_20 -- una ganancia de eficiencia estadística, no
+   de señal: el retorno diario ya captura el movimiento relevante.
+
+3. El volumen no está disponible para 3 de 5 activos bajo ninguna
+   circunstancia (ni pagando, ver discusión de proveedores externos en esta
+   misma sesión). No puede ser una feature uniforme del agente sin dejar a
+   3/5 activos con un valor faltante permanente.
+
+4. Usar OHLCV completo solo para CREDITC1/ALICORC1 le daría al agente una
+   representación de estado más rica para 2 de 5 activos que para los otros
+   3 -- una asimetría de información dentro del mismo portafolio, difícil de
+   justificar metodológicamente frente a usar cierre de forma uniforme en
+   los 5.
+
+
+TRADEOFF ACEPTADO
+------------------------------------------------------------------------
+Se pierde la posibilidad de un estimador de volatilidad range-based (más
+eficiente estadísticamente que el close-to-close) y cualquier señal de
+liquidez/convicción basada en volumen. A cambio, el agente recibe una
+representación de estado consistente y comparable entre los 5 activos del
+universo, construida sobre la misma fuente (BVL, "sana y original") y el
+mismo tipo de ajuste (close_total_return) para todos.
+
+
+REFERENCIA
+------------------------------------------------------------------------
+Ver docs/hallazgos_mercado_R3.txt sección 7 (notebooks/exploracion_datos_bvl.ipynb,
+sec. 5: panel de indicadores técnicos) para la evidencia visual de que el
+espacio de observación actual del agente ya es 100% close-based.
+
+
+========================================================================
+ADENDA (jul-2026): CONFIRMADO EN LA FUENTE — LA BVL NO EXPONE OHLCV
+========================================================================
+Se cerró el "Rol 2" (OHLC/volumen histórico nativo BVL) inspeccionando el
+propio web component del sitio (assets/web-components/issuer-details/main.js, el
+"custom element" que renderiza el gráfico de la ficha de emisor, antes no
+inspeccionable):
+
+- El gráfico de precios es una LÍNEA DE CIERRE, no velas: el código NO referencia
+  open/high/low en ninguna parte.
+- Usa el MISMO endpoint que ya consumimos, /v1/stock-quote/share-values (GET
+  /{nemonico} = nuestro fetch_bvl; POST = solo la variante multi-ticker del
+  "Comparar"). Ambas formas devuelven únicamente cierre.
+- No hay serie histórica de volumen (la única mención a "volume" es un texto de
+  un criterio de liquidez). /v1/stock-quote/daily = intradía de la sesión actual;
+  /v1/traded-amount/daily = solo el snapshot más reciente.
+
+=> La BVL NO PUBLICA OHLC ni volumen histórico para estos instrumentos; su
+producto es un cierre referencial. Usar solo cierre deja de ser una "elección"
+y pasa a ser el LÍMITE de la fuente autoritativa.
+
+Proveedores de pago (para constancia): Bloomberg, LSEG/Refinitiv (Datastream) y
+S&P Capital IQ sí cargan OHLCV diario de la BVL (institucionales, caros); hay
+APIs más baratas con cobertura parcial/variable de Lima (EODHD, marketstack,
+twelvedata). PERO el techo lo pone la ILIQUIDEZ: para nombres de baja rotación
+(CREDITC1 ~33k acc/día, días sin negociación) el OHLC es degenerado
+(open=high=low=close) y el volumen escaso/nulo — pagar compra limpieza, no rango
+intradía informativo. Ya se había concluido que el volumen no está disponible ni
+pagando para 3 de 5 activos. La fuente de acciones corporativas migró a la BVL
+nativa (ver docs/hallazgos_dividendos_acciones_bvl.txt); yfinance queda solo como
+enriquecimiento OHLC de CREDITC1/ALICORC1 (Opción B), único origen posible de
+algo de OHLC y que el agente diario no usa.
+
+
+========================================================================
+FIN DEL DOCUMENTO
+========================================================================

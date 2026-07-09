@@ -1,0 +1,408 @@
+HALLAZGOS Y METODOLOGÍA — SENTIMIENTO DE NOTICIAS (R5)
+Insumo para la redacción de la tesis: cómo se construyó el corpus de
+noticias, cómo se clasificó su sentimiento, qué decisiones de calidad de
+datos se tomaron y qué hallazgos son relevantes para la discusión
+metodológica y de resultados.
+Tesis: Aprendizaje por refuerzo profundo aplicado a la Bolsa de Valores de Lima (BVL)
+Autor: Rodrigo Holguin — Asesor: Dr. E. Villanueva
+Fecha de corte de este documento: junio 2026
+========================================================================
+
+Este documento complementa a docs/pipeline_extraccion_datos.txt (que aún
+no tiene una sección dedicada a R5) y es el equivalente, para sentimiento,
+de docs/hallazgos_mercado_R3.txt y docs/hallazgos_fundamentales_R4.txt.
+Aquí el énfasis es narrativo: qué se decidió y por qué, y qué hallazgos
+del notebook de resultados son material para la tesis (no solo para el
+código).
+
+
+========================================================================
+1. OBJETIVO DE R5
+========================================================================
+Construir, para las 5 empresas del universo, una señal diaria de
+sentimiento de prensa derivada de noticias en español, que sirva como
+feature adicional (complementaria a mercado R3 y fundamentales R4) en el
+espacio de observación del agente DRL — la hipótesis de trabajo es que el
+sentimiento de las noticias contiene información que anticipa, aunque sea
+parcialmente, el movimiento de precio de la sesión siguiente.
+
+
+========================================================================
+2. CRONOLOGÍA Y DECISIONES DE DISEÑO
+========================================================================
+A diferencia de R3/R4, donde la "cronología del sondeo" fue descubrir un
+endpoint o contrato no documentado, en R5 la fuente (Media Cloud API v4,
+SDK público `pip install mediacloud`) y el motor de clasificación (Ollama,
+servidor REST local) son herramientas documentadas. El trabajo de diseño
+estuvo en otro lado: elegir la colección correcta, acotar las consultas
+para evitar ambigüedad de nombres, y decidir cómo clasificar miles de
+noticias sin incurrir en costo de API ni en una corrida de días.
+
+2.1. Localización de la colección nacional de Perú
+------------------------------------------------------------------------
+`find_peru_collection()` (src/sentiment/mediacloud_client.py) usa el
+DirectoryApi de Media Cloud para buscar colecciones cuyo nombre contiene
+"Peru"/"Perú". El id resultante, **34412158** ("Peru National"), quedó
+fijado en config.yaml -> sources.sentiment.peru_national_collection_id.
+Es la misma colección para los 5 activos.
+
+2.2. Sondeo de volumen antes de descargar (scripts/probe_mediacloud_volume.py)
+------------------------------------------------------------------------
+Antes de comprometerse a una descarga completa (cada `fetch_stories()`
+puede traer miles de filas y consumir cuota de API), este script estimó
+con `SearchApi.story_count()` (sin paginar contenido, solo conteo) cuántas
+noticias por año había para cada ticker con una primera versión de las
+queries, 2012-2025. Confirmó que el volumen era viable y que CREDITC1
+(BCP) iba a ser, por lejos, el activo con más cobertura mediática —
+expectativa que se confirmó después con los datos reales (7,933 noticias
+frente a 380-1,585 de los demás, ver 5.1).
+
+2.3. Diseño de la consulta booleana por activo (`_build_query`)
+------------------------------------------------------------------------
+src/sentiment/mediacloud_client.py:119-149. Los alias de empresa ambiguos
+se anclan con AND a un vocabulario financiero (`_FINANCIAL`: accion,
+bolsa, BVL, utilidad, inversion, mercado, empresa, minera, produccion,
+resultado, ganancia) para reducir falsos positivos:
+  - CREDITC1: "BCP" es sigla común a otras cosas -> se ancla.
+  - BUENAVC1: "Buenaventura" sola captura la ciudad colombiana homónima y
+    a futbolistas de apellido Buenaventura -> se ancla y se exige la frase
+    "Minas Buenaventura"/"Compañia de Minas Buenaventura".
+  - SAGAC1: "Falabella" sola captura la cadena chilena -> se exige la
+    frase "Saga Falabella".
+  - ALICORC1: nombre suficientemente específico, ancla financiera suave.
+  - CORAREC1: **sin ancla financiera**, solo la frase `"Aceros Arequipa"`
+    — esta asimetría de diseño es la causa directa del hallazgo de ruido
+    temático documentado en 5.3.
+
+2.4. Filtro de fuentes (`source_allowlist`)
+------------------------------------------------------------------------
+config.yaml limita la descarga a 3 medios nacionales (gestion.pe,
+elcomercio.pe, larepublica.pe), aplicado en `_filter_by_source()` por
+dominio extraído de la URL. Decisión de calidad/cobertura para excluir
+tabloides, medios deportivos y fuentes extranjeras que se cuelan en la
+colección nacional agregada de Media Cloud. Costo de esta decisión: el
+sentimiento de BUENAVC1 (que cotiza también en NYSE como BVN) no capta
+nada de prensa financiera internacional (Reuters, Bloomberg, etc.).
+
+2.5. Elección del modelo de clasificación: LLM local (Ollama gemma3:4b)
+------------------------------------------------------------------------
+Decisión de costo y privacidad frente a una API de pago: clasificar
+~11,500 noticias con un proveedor en la nube (OpenAI, Anthropic, etc.)
+habría tenido costo por token y dependencia de cuota/rate limits para un
+volumen de esta escala. Se optó por Ollama corriendo localmente
+(http://localhost:11434/api/chat) con `gemma3:4b`, sin costo marginal por
+llamada, a costa de velocidad: sin GPU en la máquina de desarrollo, el
+ritmo medido fue de ~10-17 s/artículo en CPU (ver 2.6).
+
+2.6. Cronología de ejecución (multi-sesión, por duración en CPU)
+------------------------------------------------------------------------
+La clasificación corrió en varias sesiones a lo largo de varios días
+porque, sin GPU, el ritmo de ~10-17 s/artículo hace que clasificar miles
+de noticias tome horas continuas:
+  2026-06-18 ~19:52  inicio de la corrida original.
+  2026-06-19 ~00:30  pausa con CREDITC1 en 5,550/7,933 (70%).
+  2026-06-21          se retoma; se completan CREDITC1 (7,933), BUENAVC1
+                       (978), ALICORC1 (1,585) y SAGAC1 (380).
+  2026-06-22 ~10:17   se retoma para el último activo, CORAREC1 (690).
+  2026-06-22 ~12:50   CORAREC1 completo — R5 cerrado, 5/5 activos.
+Esto fue posible sin perder trabajo entre sesiones gracias al caché por
+noticia (ver 4, `_save_cache`/`_load_cache`): cada corte simplemente deja
+de avanzar, y al relanzar el mismo comando se salta todo lo ya
+clasificado y se continúa exactamente donde quedó.
+
+
+========================================================================
+3. CONTRATO CONFIRMADO
+========================================================================
+3.1. Media Cloud API (fuente de noticias)
+------------------------------------------------------------------------
+`SearchApi.story_list(query, start_date, end_date, collection_ids,
+pagination_token)`, paginado con `_PAGE_DELAY=1.0s` entre páginas y
+reintento exponencial (`_RETRY_MAX=5`, `_RETRY_DELAY=10.0s`) ante errores
+transitorios. Cada fila devuelta trae: `id`, `indexed_date`, `language`,
+`media_name`, `media_url`, `publish_date`, `title`, `url`. **No incluye
+el cuerpo del artículo** — no hay campo `text` con contenido; esto es una
+limitación estructural de `story_list`, no una decisión del pipeline, y
+obliga a clasificar sentimiento solo a partir del título (ver 4 y 8).
+
+3.2. Ollama (clasificador LLM local)
+------------------------------------------------------------------------
+POST a `http://localhost:11434/api/chat`, modelo `gemma3:4b`, prompt de
+sistema fijo que exige una respuesta JSON estricta:
+  {"sentiment": "<positivo|negativo|neutral>", "confidence": <0-1>}
+El parseo (`_parse_llm_json`, src/sentiment/llm_sentiment.py:63-81) es
+tolerante a code fences markdown (```json ... ```) y, si el JSON no se
+puede extraer, cae a `{"sentiment": "neutral", "confidence": 0.0}` — un
+fallback que en la práctica casi no se activó (la confianza mínima
+observada en todo el corpus fue 0.6, no 0.0; ver 5.2).
+
+
+========================================================================
+4. IMPLEMENTACIÓN: ARCHIVOS Y FUNCIONES CLAVE
+========================================================================
+  src/sentiment/mediacloud_client.py
+    find_peru_collection() / list_peru_sources()  — descubrimiento de
+      colección y medios (DirectoryApi).
+    fetch_stories()        — descarga paginada + filtro de fuentes +
+      escritura de data/raw/news_{TICKER}.parquet.
+    _build_query() / _filter_by_source()  — ver 2.3 y 2.4.
+
+  src/sentiment/llm_sentiment.py
+    classify_article()     — una llamada a Ollama, devuelve
+      {sentiment, confidence}.
+    classify_dataframe()    — clasifica un DataFrame completo con caché
+      por id de noticia (fallback a `url` si `id` falta); guarda el
+      caché a disco cada `save_every=50` artículos (`_save_cache`), lo
+      que acota la pérdida de trabajo ante un corte a, como máximo, 49
+      artículos sin guardar.
+    aggregate_daily()       — score diario por (ticker, date) con
+      `how="mean"` sobre {positivo: +1, neutral: 0, negativo: -1},
+      más `n_articles` (conteo) y `source="llm:v1"` (PROMPT_VERSION
+      versionado para trazabilidad si cambia el prompt o el modelo).
+
+  scripts/run_r5_news.py — orquestador con `--fetch-only`,
+    `--classify-only`, `--ticker TICKER`; ejecuta fetch_phase() y
+    classify_phase() sobre `cfg.assets` en el orden del universo
+    (CREDITC1, BUENAVC1, ALICORC1, SAGAC1, CORAREC1).
+
+  Artefactos en disco:
+    data/raw/news_{TICKER}.parquet              — noticias crudas.
+    data/interim/sentiment_cache/cache_{TICKER}.json — caché por
+      noticia: {id_o_url: {sentiment, confidence}}.
+    data/interim/sentiment_{TICKER}.parquet      — esquema canónico
+      SENTIMENT_SCHEMA = [ticker, date, sentiment_score, n_articles,
+      source] (src/universe.py:66).
+
+  Notebooks:
+    notebooks/exploracion_noticias_mediacloud.ipynb — exploración del
+      corpus crudo (antes de clasificar): cobertura temporal, columnas,
+      medios, chequeo de campos requeridos por classify_dataframe.
+    notebooks/exploracion_sentimiento_bvl.ipynb — resultados de la
+      clasificación (nuevo, jun-2026), ver catálogo en sección 7.
+
+
+========================================================================
+5. RESULTADOS Y HALLAZGOS RELEVANTES PARA LA TESIS
+========================================================================
+Todos los números de esta sección provienen de
+notebooks/exploracion_sentimiento_bvl.ipynb, ejecutado el 2026-06-22 con
+el corpus completo (11,566 noticias, 0 sin clasificar).
+
+5.1. Volumen y cobertura muy desiguales entre activos
+------------------------------------------------------------------------
+  Ticker    | Noticias | Días con sentim. | % cobertura mercado | Conf. media
+  ----------|----------|-------------------|----------------------|------------
+  CREDITC1  |    7,933 |             2,734 |                58.3% |      0.731
+  BUENAVC1  |      978 |               697 |                18.3% |      0.787
+  ALICORC1  |    1,585 |             1,085 |                25.9% |      0.761
+  SAGAC1    |      380 |               331 |                 7.7% |      0.724
+  CORAREC1  |      690 |               495 |                12.2% |      0.767
+  Promedio de cobertura sobre el calendario de mercado: 24.5%.
+CREDITC1 (banca, blue-chip) domina por un orden de magnitud sobre SAGAC1 y
+CORAREC1 — esto refleja la realidad de cobertura mediática peruana (la
+banca genera mucha más prensa que retail o manufactura), no un artefacto
+del pipeline. Implicación directa para R6: el feature de sentimiento
+tendrá huecos muy distintos en densidad según el activo, y SAGAC1/CORAREC1
+quedarán con una señal mucho más escasa (sección 6).
+
+5.2. Confianza del modelo: rango angosto y menor en "neutral"
+------------------------------------------------------------------------
+            count    media   std    min   max
+  negativo  4,050    0.785  0.057  0.60   0.95
+  neutral   4,072    0.668  0.065  0.60   0.80
+  positivo  3,444    0.778  0.054  0.60   0.95
+La confianza autoreportada por gemma3:4b nunca cae fuera de [0.60, 0.95]
+en las 11,566 noticias — un rango angosto que sugiere que el valor no es
+una probabilidad calibrada, sino más bien una heurística interna del
+modelo (no usar como peso estadístico sin más). Es sistemáticamente más
+baja para "neutral" (0.668) que para positivo/negativo (~0.78), lo cual
+es razonable: el modelo declara menos certeza cuando no encuentra una
+señal clara de impacto en el valor de la acción.
+
+5.3. Ruido temático: el filtro de empresa no garantiza relevancia
+------------------------------------------------------------------------
+La validación cualitativa (titulares de mayor confianza por etiqueta,
+notebook sección 8) muestra que una fracción de las noticias clasificadas
+NO son información específica de la empresa, sino menciones incidentales:
+  - Resúmenes diarios genéricos de cierre de la BVL que listan varios
+    valores ("Bolsa de Valores de Lima cerró la jornada en terreno
+    positivo con 1,96%, ... 15 indicadores al alza") aparecen replicados
+    el MISMO día como "noticia positiva" para ALICORC1, CORAREC1 y
+    CREDITC1 simultáneamente — no son noticia de ninguna empresa en
+    particular, son el resumen del índice.
+  - Para CORAREC1 esto es estructural: su query (`_build_query`, 2.3) es
+    solo la frase `"Aceros Arequipa"`, SIN ancla financiera, por lo que
+    cualquier mención (incluida la lista de movers de un resumen
+    genérico) entra al corpus. Ejemplo confirmado: "Bolsa de Valores de
+    Lima cerró la jornada en terreno negativo con -1,55%" fue clasificada
+    como noticia NEGATIVA de CORAREC1.
+  - Para CREDITC1, noticias de estafas/fraude que mencionan productos
+    financieros del BCP (ej. "ALERTA YAPEROS! ... estafa que usa correos
+    falsos", "roban 81 mil dólares a cambista") satisfacen el ancla
+    financiera por vocabulario (dinero, banco, estafa) sin ser noticia de
+    desempeño corporativo del BCP, y se clasifican como sentimiento
+    negativo de la empresa.
+Esto no es un error del LLM (clasifica correctamente el sentimiento del
+texto que recibe) sino un problema de relevancia/aboutness en la etapa de
+recuperación de noticias (consulta de Media Cloud), anterior a la
+clasificación. Es la explicación más plausible de por qué la correlación
+con el retorno de mercado es débil (5.6).
+
+5.4. Sesgo por medio de comunicación
+------------------------------------------------------------------------
+Solo 3 medios componen todo el corpus (allowlist, 2.4). El medio
+`larepublica.pe` se observa notablemente más negativo que los otros dos
+para dos activos puntuales: CREDITC1 (score medio -0.20 sobre 2,880
+noticias — muestra grande, sesgo robusto) y SAGAC1 (-0.22 sobre 122
+noticias — muestra pequeña, sesgo a tomar con cautela). En los demás
+cruces medio×activo los scores medios son cercanos a cero o levemente
+positivos. No se puede distinguir con estos datos si es sesgo editorial
+real o una particularidad de qué tipo de noticias de esas dos empresas
+cubre ese medio en particular.
+
+5.5. Sentimiento vs. retorno de mercado: señal débil pero consistente
+------------------------------------------------------------------------
+Cruce con data/interim/market_{TICKER}.parquet (R3) sobre `ret_1d`:
+  Ticker    | N días | Pearson score~ret(t) | Pearson score~ret(t+1) | Spearman ret(t+1)
+  ----------|--------|------------------------|--------------------------|--------------------
+  CREDITC1  |  2,046 |                  0.018 |                    0.032 |              0.009
+  BUENAVC1  |    640 |                  0.001 |                    0.040 |              0.010
+  ALICORC1  |    910 |                 -0.007 |                    0.081 |              0.084
+  SAGAC1    |    255 |                  0.009 |                    0.010 |              0.008
+  CORAREC1  |    427 |                  0.003 |                    0.020 |              0.014
+La correlación contemporánea (score del día con el retorno del MISMO día)
+es prácticamente nula en los 5 activos (todas |r| ≤ 0.018). La
+correlación con el retorno del día SIGUIENTE es positiva en los 5 casos
+(consistente en signo, aunque débil), con ALICORC1 destacando (r=0.081,
+ρ=0.084). Una correlación lineal débil no implica ausencia de valor: no
+descarta una relación no lineal que un agente DRL podría aprovechar mejor
+que un coeficiente de Pearson, pero sí pone un techo realista a la
+expectativa de esta señal por sí sola (compatible con el ruido temático
+de 5.3).
+
+5.6. Análisis de evento: retorno medio del día siguiente por signo del sentimiento
+------------------------------------------------------------------------
+Agrupando los días en negativo/neutral/positivo (umbral ±0.2 sobre el
+score diario) y promediando `ret_1d` del día siguiente:
+  Ticker    | negativo | neutral | positivo
+  ----------|----------|---------|----------
+  CREDITC1  |  -0.02%  |  -0.02% |  +0.16%
+  BUENAVC1  |  +0.01%  |  -0.31% |  +0.26%
+  ALICORC1  |  -0.10%  |  +0.06% |  +0.29%
+  CORAREC1  |  +0.13%  |  +0.13% |  +0.25%
+  SAGAC1    |  -0.01%  |  +0.33% |  +0.06%
+En 4 de los 5 activos (todos salvo SAGAC1, el de menor muestra: n=74-93
+por grupo) el retorno medio del día siguiente tras sentimiento POSITIVO es
+el más alto de los tres grupos — un patrón direccional consistente con la
+hipótesis de trabajo, aunque de magnitud pequeña (décimas de punto
+porcentual).
+
+5.7. Volumen de noticias como señal adicional (más allá del score)
+------------------------------------------------------------------------
+Correlación entre `n_articles` (noticias del día) y `volatility_20`
+(volatilidad anualizada rolling 20 días, R3):
+  CREDITC1: 0.181  |  ALICORC1: 0.183  |  CORAREC1: 0.138  |
+  BUENAVC1: 0.037  |  SAGAC1: 0.018
+Para CREDITC1 y ALICORC1 hay una correlación positiva moderada: los días
+con más cobertura de prensa tienden a coincidir con periodos de mayor
+volatilidad. Esto sugiere que `n_articles` (el conteo, no solo el score
+de sentimiento) puede ser, en sí mismo, una feature útil para R6 —
+independiente de si la noticia es positiva o negativa.
+
+
+========================================================================
+6. POLÍTICA DE IMPUTACIÓN DE DATOS (resumen para metodología de tesis)
+========================================================================
+NO se aplica ninguna imputación dentro de R5:
+  - Los días sin noticia simplemente no generan fila en
+    `sentiment_{TICKER}.parquet` — no hay relleno con 0 (que se
+    confundiría con "neutral observado") ni con el último valor conocido
+    (forward-fill).
+  - La decisión de cómo tratar esos huecos al construir el panel diario
+    unificado (forward-fill acotado, feature binaria de "hubo/no hubo
+    noticia", o dejar NaN para que el agente lo gestione) se delega
+    explícitamente a R6, no se resuelve aquí — dado que la cobertura es
+    muy desigual entre activos (5.1), la elección puede no ser la misma
+    para los 5.
+  - La agregación diaria (`aggregate_daily`, `how="mean"`) sí promedia
+    sin ponderar por confianza cuando hay varias noticias el mismo día;
+    no se implementó una alternativa ponderada por `confidence`.
+
+
+========================================================================
+7. VISUALIZACIONES DISPONIBLES (catálogo para reutilizar en la tesis)
+========================================================================
+notebooks/exploracion_sentimiento_bvl.ipynb está ejecutado con el corpus
+completo y vigente (5/5 activos, jun-2026). Cada entrada indica qué
+pregunta responde:
+
+  Sec. 2  Resumen general por activo — tabla con noticias clasificadas,
+          días con sentimiento, score medio/std, % por etiqueta y
+          confianza media. Tabla "descripción del dataset" para
+          metodología (ver 5.1).
+  Sec. 3  Distribución de etiquetas (barras apiladas horizontales) — % de
+          noticias positivo/neutral/negativo por activo.
+  Sec. 4  Confianza del modelo — histograma global + boxplot de
+          confianza por etiqueta. Evidencia visual de 5.2.
+  Sec. 5  Serie temporal del score diario (5 paneles, uno por activo) con
+          media móvil ~180 días para suavizar el ruido día a día.
+  Sec. 6  Cobertura temporal — barras de noticias por año y empresa, más
+          tabla de % de cobertura sobre el calendario de mercado.
+          Evidencia visual de 5.1.
+  Sec. 7  Sesgo por medio — top 5 medios por activo con conteo y score
+          medio. Evidencia de 5.4.
+  Sec. 8  Validación cualitativa — titulares de mayor confianza,
+          positivos y negativos, por activo. Evidencia directa de 5.3
+          (face validity check) — material citable para defender o
+          matizar la calidad de la clasificación ante el comité.
+  Sec. 9  Sentimiento vs. mercado — tabla de correlaciones Pearson/
+          Spearman (score~ret(t), score~ret(t+1)) + scatter plots con
+          línea de tendencia, uno por activo. Evidencia de 5.5.
+  Sec. 10 Análisis de evento — tabla y gráfico de barras del retorno
+          medio del día siguiente según signo del sentimiento. Evidencia
+          de 5.6 — el gráfico más directo para ilustrar la pregunta de
+          negocio en la presentación de tesis.
+  Sec. 11 Volumen de noticias vs. volatilidad — tabla de correlación
+          n_articles~volatility_20. Evidencia de 5.7.
+  Sec. 12 Síntesis — resumen numérico final (noticias totales, confianza
+          media, mejor correlación, cobertura promedio).
+
+Complementario: notebooks/exploracion_noticias_mediacloud.ipynb cubre el
+corpus crudo PRE-clasificación (cobertura temporal por fuente, columnas
+disponibles, medios más frecuentes, chequeo de campos requeridos) — útil
+si la discusión de la tesis necesita separar "qué trajo Media Cloud" de
+"qué hizo el LLM con eso".
+
+
+========================================================================
+8. LIMITACIONES Y TRABAJO PENDIENTE
+========================================================================
+  - Ruido temático (5.3): no hay un paso de verificación de relevancia
+    ("¿es esta noticia realmente sobre la empresa?") antes de clasificar
+    sentimiento. Es la limitación más importante de R5 y la explicación
+    más probable de por qué la correlación con el retorno es débil (5.5).
+    Mitigación futura posible: exigir ancla financiera también para
+    CORAREC1, o un paso de filtrado de relevancia con el propio LLM antes
+    de clasificar sentimiento.
+  - Solo título, no cuerpo del artículo (3.1): limitación de la fuente
+    (Media Cloud `story_list` no expone texto completo), no del pipeline.
+    No se exploró una fuente alternativa que sí lo dé.
+  - Confianza del LLM no calibrada (5.2): rango angosto [0.60, 0.95], no
+    debe tratarse como una probabilidad estadística.
+  - Cobertura muy desigual entre activos (5.1): de 7.7% (SAGAC1) a 58.3%
+    (CREDITC1) de los días de mercado. Sin resolver todavía cómo R6 debe
+    tratar esa disparidad (ver 6).
+  - Allowlist de solo 3 medios nacionales (2.4): no captura prensa
+    internacional, relevante en particular para BUENAVC1 (cotiza también
+    como BVN en NYSE).
+  - Sin validación cuantitativa contra una muestra etiquetada por
+    humanos: la única validación de calidad es cualitativa (sección 8
+    del notebook, muestra de 3+3 titulares por activo), no una métrica
+    de acuerdo inter-anotador ni un accuracy contra ground truth.
+  - Agregación diaria sin ponderar por confianza (6): una noticia con
+    confidence=0.60 pesa igual que una con 0.95 en el promedio diario.
+
+
+========================================================================
+FIN DEL DOCUMENTO
+========================================================================

@@ -38,8 +38,20 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _rsi(close: pd.Series, window: int = 14) -> pd.Series:
+    """RSI de Wilder. Cuando la ventana de `window` días no tuvo NINGUNA
+    pérdida, RS = ganancia/0 -> el límite de la fórmula es RSI=100 (no es
+    una suposición, es el valor de la fórmula estándar, igual que TA-Lib/
+    pandas-ta). Si además tampoco hubo ninguna ganancia (ventana
+    totalmente plana, 0/0 verdaderamente indefinido -- típico en tramos de
+    iliquidez, ver `is_no_trade` en build_dataset.py) se usa la convención
+    RSI=50 (sin señal de momentum) en vez de 100, porque ahí no hubo
+    movimiento real que justifique "fuerza alcista"."""
     delta = close.diff()
     gain = delta.clip(lower=0).rolling(window).mean()
     loss = (-delta.clip(upper=0)).rolling(window).mean()
     rs = gain / loss.replace(0, np.nan)
-    return 100 - (100 / (1 + rs))
+    rsi = 100 - (100 / (1 + rs))
+
+    no_loss = loss == 0   # False para NaN (warm-up): esos quedan intactos
+    rsi = rsi.where(~no_loss, np.where(gain > 0, 100.0, 50.0))
+    return rsi

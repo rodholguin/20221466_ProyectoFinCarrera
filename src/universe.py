@@ -22,6 +22,16 @@ class Asset:
     yahoo: str | None
     smv: str | None
     smv_rpj: str | None = None  # código RPJ del registro SMV (clave de filtro exacta)
+    bvl_company_code: str | None = None  # companyCode NUMÉRICO de la BVL (dataondemand
+                                         # /v1/issuers/{cc}/value → dividendos + acciones
+                                         # liberadas nativas BVL). Ver corporate_actions.
+    nominal_value: float | None = None   # valor nominal por acción (S/), de la BVL
+                                         # (listStock). Usado para derivar acciones en
+                                         # circulación = (Capital Emitido - tesorería) /
+                                         # nominal. Ver fundamentals_client + docs §3.10.2.
+    shares_outstanding_override: int | None = None  # conteo fijo de acciones en
+                                         # circulación cuando el SMV no permite derivarlo
+                                         # (BUENAVC1: capital en USD; ancla SEC 20-F).
     isin: str | None = None
     notes: str | None = None
     xcheck: str | None = None   # ticker de validación cruzada (p.ej. BAP para BCP)

@@ -11,6 +11,8 @@ falló, los hallazgos relevantes para metodología/resultados, y un catálogo
 de las visualizaciones disponibles en los notebooks), ver:
   docs/hallazgos_mercado_R3.txt        -- mercado (R3)
   docs/hallazgos_fundamentales_R4.txt  -- fundamentales (R4)
+  docs/hallazgos_sentimiento_R5.txt    -- sentimiento (R5)
+  docs/hallazgos_integracion_R6.txt    -- integración / dataset unificado (R6)
 ========================================================================
 
 
@@ -191,6 +193,38 @@ indicadores técnicos, horizonte 2012-2025):
 
 2.7. Acciones corporativas: close_raw, close_split_adj, close_total_return
 ------------------------------------------------------------------------
+>>> ACTUALIZACIÓN jul-2026 (SUPERSEDE la fuente descrita más abajo en 2.7) <<<
+La fuente de acciones corporativas migró de yfinance a la BVL NATIVA para los
+5 activos (endpoint dataondemand /v1/issuers/{companyCode}/value). Detalle
+completo, validación y decisiones en docs/hallazgos_dividendos_acciones_bvl.txt
+(sección 0). Cambios relevantes para este apartado:
+  - Los 5 activos quedan ajustados. Estado nuevo de flags:
+        CREDITC1  is_split=True  is_div=True   (13 AL + 21 DE)
+        BUENAVC1  is_split=False is_div=True   (23 DE en US$→PEN; sin AL)
+        ALICORC1  is_split=False is_div=True   (17 DE)
+        SAGAC1    is_split=True  is_div=True   (1 AL + 25 DE)
+        CORAREC1  is_split=True  is_div=True   (3 AL + 40 DE, 15 en US$→PEN)
+    BUENAVC1, SAGAC1 y CORAREC1 (antes SIN ajuste) ahora sí lo tienen.
+  - Dividendos en US$ (BUENAVC1 completo; CORAREC1 parcial) → PEN con el tipo
+    de cambio del BCRP (serie diaria PD04640PD, "venta - bancario"), módulo
+    src/market/fx.py, cacheado en data/interim/fx_usdpen_bcrp.parquet.
+  - Dos bugs de dividendos CORREGIDOS al migrar: (a) CREDITC1 estaba
+    SUBESTIMADO porque yfinance ya entregaba los dividendos split-ajustados y
+    el pipeline los volvía a ajustar (doble); (b) ALICORC1 estaba SOBREESTIMADO
+    porque los dividendos de yfinance venían inflados por reverse-splits de
+    2025-2026 fuera de horizonte. La BVL entrega el dividendo nominal crudo y se
+    ajusta una sola vez.
+  - Alineación de splits (align_splits_to_price): la BVL fecha las AL por
+    dateCut, que puede adelantarse unos días a la caída real del precio; se
+    alinea cada split al día efectivo del ajuste (si no, CORAREC1 mostraba un
+    +40% ficticio el 2012-06-12). Tras alinear, el desfase ex-date de 1-2 días
+    descrito en "Limitaciones conocidas" abajo YA NO deja residuo en CREDITC1
+    (sin saltos >20%).
+  - Rol de yfinance: SOLO enriquecimiento OHLC de CREDITC1/ALICORC1 (ya no es
+    fuente de splits/dividendos). Irrelevante para el agente (no usa OHLCV;
+    ver docs/justificacion_cierre_vs_ohlcv.txt).
+El texto que sigue conserva la descripción original (yfinance) por trazabilidad.
+------------------------------------------------------------------------
 Módulo: src/market/corporate_actions.py. Integrado en fetch_market()
 (market_client.py), que agrega tres columnas de precio a cada
 market_{TICKER}.parquet:
@@ -224,6 +258,26 @@ Fuentes de acciones corporativas por ticker (cobertura heterogénea):
     ambos (CREDITC1 tiene 15 splits y 23 dividendos en el horizonte;
     ALICORC1 tiene 0 splits en el horizonte -- su único split en yfinance es
     2026-03-23, posterior al fin del horizonte -- y 19 dividendos).
+
+  BUG ENCONTRADO Y CORREGIDO (jun-2026): aunque ALICORC1 "tiene 0 splits en
+    el horizonte" para close_split_adj/close_total_return (build_adjusted_prices
+    sí recortaba correctamente por `end`), market_client.fetch_market() pasaba
+    actions["splits"] SIN ese mismo recorte a _merge_bvl_yahoo() para reescalar
+    el open/high/low de Yahoo. El único split de ALICORC1 (2026-03-23, fuera de
+    horizonte) se filtraba como factor constante 0.9222 a TODO el OHLC histórico
+    2012-2025 -> open/high/low quedaban subestimados un 7.78% en TODOS los días,
+    sin excepción (detectado porque |open-close|/close daba una mediana
+    constante de 0.0778 en los 13 años, incompatible con dinámica de mercado
+    real). Fix: nueva función filter_actions_by_cutoff() en corporate_actions.py,
+    aplicada tanto en build_adjusted_prices() como en fetch_market() antes del
+    merge, para que el mismo recorte por `end` cubra los dos usos de
+    actions["splits"]. Tras el fix, |open-close|/close de ALICORC1 baja a
+    mediana 0.09% (p90 1.06%) -- coherente con dinámica de mercado real. Datos
+    regenerados (data/raw/market_ALICORC1_*.parquet, data/interim/market_ALICORC1.parquet).
+    CREDITC1 no se vio afectado (sus 15 splits caen dentro del horizonte, nunca
+    expusieron la inconsistencia); sus métricas quedaron idénticas tras
+    regenerar.
+
   BUENAVC1 — BVN (Yahoo) es el ADR NYSE en USD; sus splits/dividendos NO
     corresponden a la acción en PEN que cotiza en la BVL. Sin una fuente
     automatizada de hechos de importancia BVL/SMV en PEN para confirmar
@@ -380,16 +434,29 @@ El campo known_date es crítico para la integridad metodológica de cualquier
 modelo de decisión financiera. Representa el momento más temprano en que un
 inversor real podría haber accedido a la información del EEFF trimestral.
 
-Cálculo: known_date = fecha_fin_trimestre + 45 días
+Cálculo: known_date = fecha_fin_trimestre + lag_por_trimestre
+         lag = 45 días para Q1-Q3, 60 días para Q4.
 
-Ejemplo: para Q3 2023 (período que cierra el 30-09-2023), known_date = 14-11-2023.
+Ejemplo: Q3 2023 (cierra 30-09-2023) -> known_date = 14-11-2023;
+         Q4 2023 (cierra 31-12-2023) -> known_date = 29-02-2024 (+60 días).
 
-El lag de 45 días es una aproximación conservadora al plazo regulatorio de
-presentación de EEFF a la SMV. En la integración del dataset final (R6),
-los fundamentales se incorporan al panel diario usando un merge_asof con
-dirección "backward" sobre known_date, lo que garantiza que en ningún día
-de trading se utilice información que no habría estado disponible en ese
-momento (prevención de look-ahead bias).
+VERIFICACIÓN Y CORRECCIÓN (jul-2026): el lag se verificó contra los plazos
+regulatorios reales de la SMV para EEFF intermedios individuales (RSMV
+016-2015 y concordantes): Q1 <= 30-abr, Q2 <= 31-jul, Q3 <= 31-oct (deadline
+~30-31 días) y Q4 <= 15-feb para emisores locales. El +45d original era
+CONSERVADOR para Q1-Q3 (known_date siempre posterior al deadline -> sin
+look-ahead), pero para Q4 daba 14-feb, un día ANTES del deadline local, y
+-más grave- para emisores también listados en el extranjero (BUENAVC1 en
+NYSE) el deadline del 4to trimestre individual es de 60 días calendario
+(~1-mar), por lo que el +45d introducía ~15 días de look-ahead en el Q4 de
+BVN. Se corrigió a 60 días para Q4 (cubre ambos casos y garantiza
+known_date >= fecha pública para los 5 activos). Q1-Q3 quedan en 45 días
+(ya conservadores). Ver docs/riesgos_transversales_datos.txt (Tier 1, 3a).
+
+En la integración del dataset final (R6), los fundamentales se incorporan al
+panel diario usando un merge_asof con dirección "backward" sobre known_date,
+lo que garantiza que en ningún día de trading se utilice información que no
+habría estado disponible en ese momento (prevención de look-ahead bias).
 
 3.6. Prefijos de cuentas y mapeo de estados financieros
 ------------------------------------------------------------------------
@@ -502,6 +569,11 @@ implementada para evitar divisiones por cero).
 
 3.10.1. Ratios NO implementados: P/E y DY (evaluación de viabilidad, jun-2026)
 ------------------------------------------------------------------------
+NOTA (jul-2026): esta sección quedó SUPERADA. Su conclusión ("no implementable")
+se revirtió: ver 3.10.2, que corrige punto por punto (la fuente de acciones sí
+existe y fue validada, y la fórmula de P/E de abajo también se enmienda). Se
+conserva 3.10.1 como registro del análisis original.
+
 P/E (Price-to-Earnings) requiere número de acciones en circulación (para
 EPS = UtilidadNeta_TTM / acciones, y luego P/E = close_split_adj / EPS).
 Se evaluaron las fuentes disponibles y ninguna alcanza fiabilidad para el
@@ -583,6 +655,176 @@ DY (Dividend Yield) requiere dividendos por acción. A diferencia de cuando
   cobertura Yahoo) sigue sin haber una fuente de dividendos en PEN, igual
   que con P/E: es una limitación de fuente, no de esfuerzo.
 
+3.10.2. ACTUALIZACIÓN (jul-2026): sí existe fuente de acciones -> P/E y DY
+        pasan a viables. Revierte la decisión de 3.10.1.
+------------------------------------------------------------------------
+La sección 3.10.1 concluyó "no implementable por falta de fuente de acciones
+en circulación". Esa conclusión se REVISÓ y se REVIERTE tras un re-sondeo de
+la BVL y una validación cruzada. Se conserva 3.10.1 como registro del análisis
+original (y del razonamiento de por qué parecía inviable); esta subsección lo
+corrige punto por punto con lo hallado y validado.
+
+(a) La BVL SÍ expone acciones en circulación, en el endpoint que YA usamos.
+    /v1/issuers/{companyCode}/value (el mismo de dividendos/acciones liberadas,
+    ver 2.7) trae un bloque `listStock` -por cada clase inscrita- con:
+       quantity     = número de acciones en circulación
+       nominalValue = valor nominal por acción
+       capital      = capitalización bursátil (= close x quantity; NO el capital
+                      social. Confirmado exacto en CREDITC1: 6.691 x
+                      12,973,174,634 = 86,803,511,476)
+    Es un snapshot actual (actualización semanal), no una serie histórica.
+    Esto responde la objeción central de 3.10.1: el valor nominal por acción NO
+    estaba "solo en estatutos/prospectos" -- la BVL lo publica. Snapshot
+    2026-07-06 (acción común, nominal): CREDITC1 12,973,174,634 (1); BUENAVC1
+    274,889,924 (10); ALICORC1 569,573,006 (1); SAGAC1 156,709,425 (1);
+    CORAREC1 890,858,308 (1). Sonda: scripts/probe_bvl_capital.py.
+
+(b) El Capital Emitido del SMV NO mezcla comunes con acciones de inversión.
+    Otra objeción de 3.10.1 era que Capital Emitido "mezcla comunes, acciones de
+    inversión y acciones en cartera". Es incorrecto: el SMV las SEPARA en cuentas
+    distintas -- 1D0701 (Capital Emitido = acciones comunes) y 1D0703 (Acciones
+    de Inversión). Verificado: ALICORC1 1D0701=569,573 (=BVL común) y 1D0703=7,388
+    (=BVL ALICORI1 7,388,470); CORAREC1 1D0701=890,858 (=BVL común) y 1D0703=
+    182,408 (=BVL CORAREI1 182,407,512). Es decir, 1D0701 ÷ nominal da
+    directamente las acciones comunes, sin desagregación adicional. Para el banco
+    (CREDITC1) el equivalente es 1F3301 "Capital social" (taxonomía SBS).
+
+(c) La serie histórica correcta es SMV Capital Emitido ÷ nominal. Con el nominal
+    de (a) y las cuentas de (b), la serie trimestral de acciones 2005-2025 sale
+    directamente de datos YA descargados (data/raw/smv_cache), sin fuentes nuevas.
+    Captura splits Y aumentos/reducciones de capital.
+    SUPUESTO por verificar en implementación: se usa el valor nominal ACTUAL (de
+    la BVL) para toda la serie. Esto es correcto solo si el nominal por acción no
+    cambió en el horizonte; un cambio de valor nominal (p.ej. un split de par
+    S/10->S/1 que no capitaliza reservas) dejaría el Capital Emitido igual pero
+    multiplicaría las acciones, y dividir por el nominal actual daría un conteo
+    erróneo antes de ese cambio. El calce EXACTO en el extremo reciente (d) solo
+    valida el nominal actual, no toda la historia. Chequeo sugerido: que
+    acciones=CapitalEmitido/nominal solo salte en fechas de AL conocidas
+    (corporate_actions.py); un salto sin AL correspondiente delataría un cambio
+    de nominal a investigar.
+
+(d) Validación cruzada del ancla actual (scripts/validate_shares_anchor.py):
+    BVL quantity = SMV Capital Emitido÷nominal = yfinance COINCIDEN AL DÍGITO en
+    el trimestre reciente para 4/5:
+       CREDITC1  BVL 12,973,174,634 = SMV 12,973,175,000 = yf 12,973,174,634
+       ALICORC1  BVL   569,573,006  = SMV   569,573,000   (yf 576,961,476 = común
+                                            + inversión, confirma la separación)
+       SAGAC1    BVL   156,709,425  = SMV   156,709,000
+       CORAREC1  BVL   890,858,308  = SMV   890,858,000
+    Tres fuentes independientes concordando valida el ancla. BUENAVC1 no
+    concuerda por (f).
+
+(e) El "camino acotado" de 3.10.1 (reconstruir dividiendo por el factor de
+    splits) queda INVALIDADO por la validación. Ese método asume que todo cambio
+    de acciones proviene de acciones liberadas (AL); la validación mostró errores
+    de 33-318% frente a la serie SMV, porque estas empresas tuvieron cambios de
+    capital que NO son splits: CREDITC1 creció 3.10bn->12.97bn (+318%, 13 niveles
+    de capital, capitalizaciones sucesivas); ALICORC1 redujo 847M->569M (-33%,
+    recompra 2022 + cancelación de capital 2024-2025); SAGAC1 250M->156.7M (-37%).
+    Un aumento/reducción de capital cambia el conteo pero NO mueve el precio por
+    acción, así que -a diferencia de los AL- no está (ni debe estar) en el factor
+    de splits. IMPORTANTE: esto NO afecta el ajuste de PRECIO (close_split_adj,
+    ver 2.7), que es correcto precisamente porque solo incluye los AL que sí
+    mueven el precio (validados contra la caída real vía align_splits_to_price).
+    La distinción es: factor de splits = correcto para el precio, insuficiente
+    para el conteo de acciones.
+
+(f) BUENAVC1 resuelto con rigor vía SEC (no vía SMV). El SMV reporta el capital
+    de Buenaventura en USD desde 2006Q4 (moneda funcional dólar, ver 5.3 del
+    documento de hallazgos R4), sin un nominal limpio contra el cual dividir
+    (nominal S/.10 da 266% de error). Su conteo se fijó con los Form 20-F ante la
+    SEC (EDGAR CIK 1013131): acciones comunes EMITIDAS 274,889,924, en TESORERÍA
+    21,174,734, en CIRCULACIÓN 253,715,190 -- idénticas en los 20-F de 2013,
+    2014, 2015, 2020, 2021 y 2022, y el quantity BVL 2026 sigue siendo
+    274,889,924. Es decir, el conteo de BVN fue PLANO en todo 2012-2025 (dato
+    auditado, no supuesto); el vaivén del capital SMV en USD (813->750 mil) es
+    traducción de moneda, no emisión. Caveat aparte: BVN reporta utilidad en USD
+    y cotiza en PEN, por lo que su P/E requiere homogeneizar moneda.
+
+(g) Base elegida = acciones EN CIRCULACIÓN (netas de tesorería), por ser la
+    correcta para market cap y EPS. Fórmula general (no bancos):
+       en_circulación = (Capital Emitido 1D0701 - |Acciones en Cartera 1D0711|)
+                        / nominal
+    donde 1D0701 es el capital emitido BRUTO y 1D0711 la tesorería (contra-
+    patrimonio). Cobertura por activo:
+       CREDITC1, SAGAC1, CORAREC1: tesorería 0 en todo el horizonte -> en
+                                   circulación = emitidas (SMV directo; en el
+                                   banco las cuentas son 1F3301/1F3314, ambas
+                                   sin tesorería).
+       ALICORC1: tesorería 0 hasta 2021; luego programas de recompra que
+                 llegaron al 10% del emitido (2022-2023: 84,719,000 acciones;
+                 30-jun-2024: 76,246,294 = 10% exacto), amortizadas por etapas
+                 (reducciones de capital 2024-2025). En circulación reconstruida:
+                 847,192,000 (2005-2021) -> 762,473,000 (2022-2023) -> 617,618,000
+                 (2024Q4) -> 556,081,000 (2025). CLAVE: Alicorp registra la
+                 tesorería a VALOR NOMINAL S/1 en 1D0711, así que el monto en
+                 soles = el conteo de acciones -> el conteo SÍ sale del SMV
+                 directo (NO se necesita fuente externa para el pipeline).
+                 Validado contra las notas a los EEFF auditadas: SMV 84,719,000
+                 vs nota 84,719,173 (2022-2023) y SMV 76,246,000 vs nota
+                 76,246,294 (jun-2024), coincidencia al 0.0004%; el neto
+                 762,473,000 aparece literal en la nota de patrimonio.
+                 (Corrige una estimación previa que hablaba de "~1.4%": la
+                 holgura llegó al 10%, no 1.4%, por lo que netear tesorería es
+                 material para ALICORC1, no despreciable.)
+       BUENAVC1: el SMV individual NO refleja su tesorería en 1D0711 (=0; la
+                 mantiene a nivel de grupo / moneda USD), así que aquí el conteo
+                 viene de la SEC: 21,174,734 -> 274.89M - 21.17M = 253.72M.
+
+DECISIÓN ACTUALIZADA: P/E y DY pasan de "no implementables" a IMPLEMENTABLES,
+sin pagar proveedores externos (EODHD, etc.):
+  - P/E: riguroso para CREDITC1/ALICORC1/SAGAC1/CORAREC1 (serie SMV en
+    circulación); BUENAVC1 disponible con el ancla SEC constante y el caveat de
+    moneda. Fórmula CORRECTA (enmienda la de 3.10.1, que escribía "P/E =
+    close_split_adj / EPS"): P/E se calcula como capitalización sobre utilidad,
+    contemporáneo y en la MISMA base de acciones de cada fecha t:
+       P/E(t) = close_raw(t) x acciones_en_circulación(t) / UtilidadNeta_TTM(t)
+    Es decir market cap / utilidad TTM. NO usar close_split_adj con la serie
+    HISTÓRICA de acciones: close_split_adj está en la base de acciones "actual"
+    ajustada SOLO por splits (AL), mientras que la serie histórica de acciones
+    cambia también por aumentos/reducciones de capital -- mezclarlos desalinea
+    las bases y sesga el P/E por el factor de split (P/E es invariante a splits;
+    la formulación market-cap con close_raw lo respeta automáticamente y evita el
+    problema). UtilidadNeta_TTM = suma móvil de 4 trimestres derivados de la serie
+    YTD del Estado de Resultados (cuenta 2D07ST no bancos; 2F1901 banco SBS,
+    detectada emparejando INFO_UtilidadNeta con GP_Q_<x>). Ver (h).
+  - DY: disponible para los 5. A diferencia de lo que dice el párrafo DY de
+    3.10.1 (escrito cuando los dividendos venían de yfinance solo para 2
+    activos), R3 fue actualizado (ver 2.7 y memoria del proyecto) para tomar los
+    dividendos por acción en PEN de la BVL para los 5 (DE en /value; US$->PEN con
+    TC BCRP). DY = dividendo TTM por acción / close_raw.
+
+(h) La utilidad TTM se toma de la serie YTD (Monto3), NO del trimestre aislado
+    (Monto1 / INFO_UtilidadNeta). Hallazgo de calidad de datos: el Monto1 tiene
+    inconsistencias por reexpresión -p.ej. ALICORC1 2023Q3 reporta Monto1=76,669
+    pero la diferencia de YTD (115,445−88,503) da 26,942, y la suma de los 4
+    Monto1 (238,097) ≠ YTD anual (188,369)-. El YTD es acumulativo y
+    auto-consistente; los trimestres aislados se derivan por diferencia dentro del
+    año y se suman en ventana móvil de 4. Para BUENAVC1 (utilidad en USD) cada
+    trimestre se convierte a PEN con el TC BCRP de su fecha antes de sumar el TTM;
+    un rótulo "USD" esporádico y erróneo de un reportante-PEN (ALICORC1 2025Q4,
+    §5.4) se ignora por regla de moneda modal por activo.
+
+Hallazgo metodológico citable: la fuente autoritativa y gratuita del propio
+mercado (BVL) + el regulador (SMV) cubren el dato que se creía ausente, y el
+método intuitivo (reconstruir por splits) resultó cuantitativamente erróneo
+por no distinguir splits de aumentos/reducciones de capital.
+
+ESTADO (jul-2026): IMPLEMENTADO y verificado end-to-end. Código:
+  - fundamentals_client.compute_shares_earnings(fund, asset) -> shares_outstanding,
+    net_income_ttm (PEN), eps_ttm por (ticker, periodo); compute_ratios(fund,
+    asset=...) las anexa. Config: nominal_value por activo y
+    shares_outstanding_override=253,715,190 para BUENAVC1.
+  - build_dataset.build_unified(..., dividends=...) calcula pe = close_raw/eps_ttm
+    (NaN si utilidad TTM<=0) y dy = dividendos_TTM_por_acción/close_raw en el panel
+    diario; run_r6_integration arma la serie de dividendos vía corporate_actions.
+  - Panel data/processed/dataset_unificado.parquet: columnas pe, dy (+ auxiliares
+    shares_outstanding, net_income_ttm, eps_ttm) en las vistas mercado_fundamentales
+    y completa. Cobertura P/E: ~93-96% (los 4 no-mineros), 55% BUENAVC1 (NaN en
+    años de pérdida). Notebook exploracion_fundamentales_bvl.ipynb §5b (acciones en
+    circulación + P/E/DY), ejecutado.
+
 3.11. Almacenamiento de fundamentales
 ------------------------------------------------------------------------
 Archivos raw por activo (formato largo, todas las cuentas SMV):
@@ -596,25 +838,149 @@ Los archivos de caché de respuestas crudas del WSDL:
 4. INTEGRACIÓN EN EL DATASET UNIFICADO (R6)
 ========================================================================
 
-El módulo src/integration/build_dataset.py construye el panel final que
-combina las tres fuentes de señales sobre el calendario de días hábiles de
-la BVL:
+Para la narrativa completa de las decisiones de esta sección (qué se
+decidió, por qué, y los hallazgos relevantes para la tesis), ver
+docs/hallazgos_integracion_R6.txt. Aquí se documenta el contrato técnico:
+esquema, funciones y archivos.
 
-  Mercado + indicadores técnicos  (frecuencia diaria)
-  Sentimiento de noticias          (frecuencia diaria)
-  Fundamentales trimestrales       (propagados con forward-fill desde known_date)
+El módulo src/integration/build_dataset.py construye el panel único
+(ticker, date) que combina las tres fuentes ya cerradas (R3, R4, R5)
+sobre el calendario de días hábiles de la BVL. Se genera con
+scripts/run_r6_integration.py y se guarda en
+data/processed/dataset_unificado.parquet (17,565 filas = 5 activos x
+3,513 días bursátiles, 2012-01-02 a 2025-12-31, 36 columnas).
 
-La clave del panel es (ticker, date). Para los días sin noticias, el
-sentimiento se imputa como 0.0 (neutral). Los fundamentales se propagan
-con pd.merge_asof (dirección "backward") desde la known_date de cada
-trimestre, garantizando que no se usa información futura.
+4.1. Calendario bursátil
+------------------------------------------------------------------------
+build_trading_calendar(market) construye el índice de fechas como la
+UNIÓN de fechas con cotización de cualquiera de los 5 activos (no el
+calendario de un solo activo) -- coincide con el calendario BVL-wide
+(3,513 días) porque ALICORC1 y CORAREC1 cotizan los 3,513 días del
+horizonte sin excepción. Se construye en R6, no en el entorno DRL (OE1):
+el panel decide qué días existen como fila; el entorno solo debe consumir
+ese índice ya resuelto.
 
-El dataset resultante soporta cuatro "vistas" de señales para los
-experimentos DRL:
-  1. Solo mercado (OHLCV + indicadores técnicos)
-  2. Mercado + sentimiento
-  3. Mercado + fundamentales
-  4. Completa (mercado + sentimiento + fundamentales)
+4.2. Sentimiento: alineación al calendario + esquema de 4 columnas crudas
+------------------------------------------------------------------------
+Fuente: sentiment_{TICKER}.parquet (R5, esquema SENTIMENT_SCHEMA). Antes
+de incorporarse al panel, cada fecha se alinea al calendario bursátil con
+_align_sentiment_to_calendar(): las noticias publicadas en día NO
+bursátil se reasignan (roll-forward) al siguiente día hábil, y se
+reagregan (media ponderada por n_articles) si ese día ya tenía noticia
+propia. Entre 7.6% y 58.3% de los días de noticia de cada activo ya caían
+en día bursátil; el roll-forward recupera entre 0.9 y 2.3 puntos
+porcentuales adicionales de cobertura (detalle por activo en
+hallazgos_integracion_R6.txt 5.2).
+
+El panel NO guarda un score ya decaído: por decisión explícita (el
+decaimiento exponencial se deja como parámetro aprendible del agente DRL,
+no un hiperparámetro fijado a mano), se guardan 4 columnas crudas:
+
+  sentiment_score_last -- último score observado (forward-fill), 0.0
+                          antes de la primera noticia histórica real de
+                          ese activo.
+  days_since_news       -- días hábiles desde esa noticia (entero >= 0;
+                          0 el día de la noticia; ancla sintética en la
+                          primera fila del panel de cada activo, nunca
+                          NaN).
+  has_news              -- 1 si hubo >=1 noticia ese día (tras el
+                          roll-forward), 0 si no.
+  n_articles             -- conteo de noticias de ese día; 0 en huecos.
+
+La transformación log1p(days_since_news), motivada por la cola pesada de
+la distribución (máximos de 277 a 403 días hábiles según el activo), se
+aplica en OE1 al construir la observación del agente -- NO se guarda en
+el parquet.
+
+4.3. Fundamentales: propagación con merge_asof (sin look-ahead)
+------------------------------------------------------------------------
+Fuente: fund_{TICKER}_smv.parquet (R4, formato largo) procesado por
+fundamentals_client.compute_ratios() a formato ancho (ticker, period,
+known_date, currency, roe, roa, net_margin, debt_equity, debt_ratio).
+pd.merge_asof(direction="backward") sobre known_date asigna a cada día de
+mercado el último trimestre que YA era público en esa fecha. El primer
+known_date de los 5 activos es 2005-05-15, anterior al inicio del
+horizonte de mercado (2012-01-02) -- 0 NaN en los 5 ratios en las 17,565
+filas del panel.
+
+4.4. Días sin cotización de un activo (is_no_trade)
+------------------------------------------------------------------------
+Al reindexar cada activo sobre el calendario común (4.1) quedan filas sin
+cotización propia para los activos de baja liquidez: SAGAC1 192 días (9
+episodios, máximo 41 sesiones consecutivas, 2012-09 a 2015-04), BUENAVC1
+14 días (1 episodio, nov-dic 2014), CREDITC1 2 días; ALICORC1/CORAREC1
+sin huecos. _fill_no_trade_days() arrastra el último close_total_return/
+close_raw conocido y RECALCULA los indicadores técnicos
+(technical_indicators.add_indicators) sobre la serie ya completa -- no
+arrastra a ciegas los valores de los indicadores. NO se completa open/
+high/low/volumen -- esa ruta ya se descartó explícitamente en
+docs/justificacion_cierre_vs_ohlcv.txt (el agente solo usa
+close_total_return, ningún indicador implementado usa OHLCV). La columna
+is_no_trade (0/1) marca estas filas para que el entorno (OE1) pueda
+modelar el costo de iliquidez en vez de tratarlas como una sesión real.
+
+4.5. Corrección de rsi_14 (src/market/technical_indicators.py)
+------------------------------------------------------------------------
+Al validar 4.4 se encontró que rsi_14 ya tenía 27.5% de NaN en los
+parquets originales de R3 (independiente de is_no_trade), por un manejo
+incorrecto del caso "ventana de 14 días sin ninguna pérdida" en _rsi()
+(loss.replace(0, np.nan) en vez de calcular el límite de la fórmula).
+Corregido con dos reglas:
+  pérdida=0, ganancia>0  -> RSI=100 (límite exacto de Wilder, sin
+                            ambigüedad; igual que TA-Lib/pandas-ta).
+  pérdida=0, ganancia=0  -> RSI=50 (ventana totalmente plana, 0/0
+                            indefinido; convención "sin señal de
+                            momentum", coherente con is_no_trade).
+NaN de rsi_14 tras la corrección: 0.4% (70 de 17,565 filas), el mínimo
+irreducible de las primeras 14 sesiones de cada activo (ventana
+incompleta). No es imputación: los datos de precio nunca faltaron, se
+corrigió un caso límite de la fórmula (desagregación cuantitativa en
+hallazgos_integracion_R6.txt 2.8 y 5.4).
+
+4.6. Esquema final del panel y vistas de señales (R8)
+------------------------------------------------------------------------
+36 columnas, clave (ticker, date):
+  Mercado (R3):       open, high, low, close, volume, source, close_raw,
+                      close_split_adj, close_total_return,
+                      is_split_adjusted, is_div_adjusted, is_no_trade
+  Indicadores:        ret_1d, ret_1d_raw, sma_20, sma_50, ema_12, ema_26,
+                      macd, macd_signal, rsi_14, volatility_20
+  Sentimiento (R5):   sentiment_score_last, days_since_news, has_news,
+                      n_articles
+  Fundamentales (R4): period, known_date, currency, roe, roa, net_margin,
+                      debt_equity, debt_ratio
+
+feature_views() (src/integration/build_dataset.py) selecciona columnas de
+este mismo panel en 4 vistas para R8 -- NO son datasets separados:
+  1. solo_mercado          -- técnicos + is_no_trade
+  2. mercado_sentimiento   -- (1) + sentiment_score_last, days_since_news,
+                              has_news, n_articles
+  3. mercado_fundamentales -- (1) + roe, roa, net_margin, debt_equity,
+                              debt_ratio
+  4. completa              -- (1) + (2) + (3)
+
+4.7. Política de imputación de datos en R6
+------------------------------------------------------------------------
+Conviven tres tratamientos distintos, no equivalentes entre sí (detalle
+en hallazgos_integracion_R6.txt sección 6):
+  - Sentimiento: NO se imputa el score en días sin noticia (has_news=0,
+    n_articles=0 son observados, no inventados); sentiment_score_last
+    hereda el último valor real conocido.
+  - is_no_trade: SÍ es imputación en sentido estricto (se asume un precio
+    constante para una sesión que no existió), marcada explícitamente con
+    is_no_trade=1 y limitada a la serie de precio (no a OHLCV completo).
+  - rsi_14 y fundamentales: NO son imputación -- ningún dato de entrada
+    faltó; se corrigió un caso límite de fórmula (rsi_14) o se propagó un
+    valor real ya observado (merge_asof de fundamentales).
+
+4.8. Almacenamiento del panel unificado
+------------------------------------------------------------------------
+  data/processed/dataset_unificado.parquet  (17,565 filas x 36 columnas)
+
+Generado por scripts/run_r6_integration.py, que orquesta:
+  market_{TICKER}.parquet (interim, R3) + sentiment_{TICKER}.parquet
+  (interim, R5) + fund_{TICKER}_smv.parquet (raw, R4, vía compute_ratios)
+  -> build_unified() -> save().
 
 
 ========================================================================

@@ -1,0 +1,277 @@
+REVISIÓN TRANSVERSAL DE PUNTOS FRÁGILES / RIESGOS DE DATOS
+Mercado (R3), Fundamentales (R4), Sentimiento (R5), Integración (R6)
+Tesis: Aprendizaje por refuerzo profundo aplicado a la BVL
+Autor: Rodrigo Holguin — Asesor: Dr. E. Villanueva
+Generado: jul-2026 (para continuar la próxima sesión)
+========================================================================
+
+Propósito: registro de riesgos y puntos frágiles a (a) mitigar donde sea
+barato, (b) declarar en el capítulo de limitaciones, o (c) tener en cuenta al
+diseñar el entorno/agente (OE1). Cada punto marca su ESTADO: [mitigado],
+[abierto] o [declarar]. Priorizado por severidad para la validez de la tesis.
+
+NOTA de aclaración (BVN): el ancla SEC constante de BUENAVC1 NO fue eliminada.
+Lo que se invalidó fue el método de "reconstrucción por factor de splits" (ver
+docs/pipeline §3.10.2 (e)). Son cosas distintas: para BVN el SMV no permite
+derivar acciones (capital en USD sin nominal limpio), y los Form 20-F de la SEC
+muestran que su conteo fue plano y auditado (253,715,190 en circulación,
+idéntico 2013-2022, confirmado por el snapshot BVL 2026). La constante ES la
+serie real, no un atajo. BVN además tiene 0 acciones liberadas, así que la
+reconstrucción por splits ni siquiera aplica.
+
+
+========================================================================
+TIER 1 — RIESGOS TRANSVERSALES (nivel "validez de la tesis")
+========================================================================
+
+1. ILIQUIDEZ Y EJECUTABILIDAD  [abierto — crítico para OE1]
+   La BVL es delgada: is_no_trade, precios estancados, free-float diminuto
+   (CREDITC1 ~33k acc/día). Riesgo: el agente aprende a "operar" a precios de
+   cierre no ejecutables (no había contraparte), y sin `volume` no se puede
+   estimar impacto/slippage. Un backtest de DRL sobre precios stale puede
+   mostrar retornos ficticios.
+   → Mitigado parcial: bandera is_no_trade. Abierto: el modelado de costo de
+   transacción / impacto / slippage en OE1 es imprescindible; sin él el
+   resultado no es defendible como estrategia real.
+
+2. SELECCIÓN / SESGO DE SUPERVIVENCIA  [declarar — de diseño]
+   5 empresas grandes elegidas a mano, una por sector, TODAS sobrevivientes
+   2012-2025. Sin delistadas ni quebradas. El desempeño sobre 5 blue-chips
+   vivos NO generaliza a "la BVL". Además hay look-ahead de selección (se
+   eligieron empresas que hoy tienen data completa).
+   → Acotar en scope/limitaciones: "prueba de concepto sobre 5 activos
+   líquidos representativos, no generalización a la BVL".
+
+3. INTEGRIDAD POINT-IN-TIME (look-ahead sutil)  [abierto/declarar]
+   Hay buenos controles (merge_asof sobre known_date, roll-forward de
+   sentimiento, corte de splits por `end`). Puntos frágiles:
+   (a) [RESUELTO E INTEGRADO jul-2026] known_date usa la FECHA REAL de
+       presentación del EEFF cuando existe, con FALLBACK a un lag fijo por
+       trimestre. Detalle completo abajo. Implementado en fundamentals_client
+       (_load_filing_dates, _known_date, fetch_smv(use_filing_dates=True));
+       parquets fund_*_smv y dataset_unificado regenerados; notebooks
+       re-ejecutados.
+
+       (a.1) FUENTE PRIMARIA — fecha real (BVL Hechos de Importancia).
+       Endpoint POST https://dataondemand.bvl.com.pe/v1/corporate-actions
+       (payload {rpjCode, page, size, search, startDate, endDate}), filtrando el
+       hecho "Información Financiera Intermedia Individual al <fin-trim>" y usando
+       su campo registerDate. Se toma la PRIMERA divulgación por trimestre y se
+       aplica la regla de cierre: si el hecho se registró >= 15:00 (Lima),
+       known_date = registerDate + 1 día (no operable en el cierre del propio
+       día). Cobertura real ~2018-2025 (27-30/84 periodos por activo, con su
+       rpjCode SMV: CREDITC1 B80005, BUENAVC1 B20003, ALICORC1 B30006, SAGAC1
+       014313, CORAREC1 CI0003). Validado en 5 emisores x 6 trimestres: el lag
+       fijo NUNCA adelanta al mercado (holgura mínima = 0 d) pero demoraba los
+       fundamentales hasta ~5 semanas (CREDITC1/CORAREC1 presentan +18..+26d).
+       Efecto en panel: CREDITC1/CORAREC1 Q4-2023 ahora entran ~5 semanas antes
+       (24-25 ene vs 1 mar); BVN Q4 sin cambio (presenta en el deadline).
+
+       (a.2) FALLBACK — lag fijo {Q1:40, Q2:40, Q3:40, Q4:60}, para los periodos
+       sin fecha real (sobre todo 2012-2017). Elección justificada con la
+       distribución REAL de lags 2018-2025 (proxy del comportamiento pre-2018)
+       y con los deadlines legales (RSMV 016-2015 art. 5 y 11, leídos textual):
+       Q1<=30-abr(~30d), Q2<=31-jul(~31d), Q3<=31-oct(~31d), Q4<=15-feb local /
+       60d calendario si lista en el extranjero (BVN/NYSE).
+         Barrido de look-ahead (real > lag) sobre 109 presentaciones Q1-Q3 reales:
+           lag 30d -> 36/109 (33%) look-ahead   [DEMASIADO ajustado]
+           lag 35d ->  4/109 ( 4%)  (los 4 son 2020-COVID)
+           lag 40d ->  4/109 ( 4%)  (los 4 son 2020-COVID; peor exceso +8d)
+           lag 45d ->  1/109 ( 1%)  (BVN 2020Q1, +3d)
+         Excluyendo 2020-COVID: máximo NORMAL = 35d (ALICORC1 2019Q3); con >=35d
+         hay 0/95 look-ahead. Se eligió 40d (no 35): cubre el máximo normal con
+         ~5d de colchón (35 no tiene colchón y no hay ground-truth pre-2018),
+         recorta ~5 días de delay del warm-up vs 45, y los únicos violadores del
+         dataset son prórrogas de emergencia DOCUMENTADAS (ver a.3). Q4=60d: es
+         el máximo real observado (BVN Q4 cae exacto en +60d); un +45d filtraría
+         ~14d en BVN. Se DESCARTÓ un esquema por-año (35 normal + 2017 ampliado)
+         por complejidad alta frente a beneficio marginal en el tramo menos
+         crítico (pre-2018 = warm-up; la evaluación OOS usa años recientes con
+         fecha real).
+
+       (a.3) PRÓRROGAS DE EMERGENCIA (por qué el fallback se mantiene conservador
+       y los outliers no son incumplimientos):
+         - COVID-2020: Res. Superintendente 033-2020-SMV/02 movió Q1-2020
+           intermedia individual de 30-abr a 31-jul (~+3 meses); 046-2020-SMV/02
+           movió Q2-2020 a 30-set. Explica los lags 43-48d de 2020.
+         - El Niño Costero-2017: Res. 014-2017-SMV/01 ("Medidas de carácter
+           excepcional... por razón del Estado de Emergencia decretado en
+           determinadas zonas"), confirmada como concordancia oficial en la RSMV
+           016-2015. Afecta plausiblemente Q4-2016/Q1-2017 en zonas declaradas.
+           No se logró recuperar el nº exacto de días de la resolución (texto no
+           accesible vía búsqueda; queda en el SIL SMV/El Peruano). Impacto en
+           las 5 empresas (mayormente limeñas) estimado bajo; el fallback de 40d
+           lo asume como limitación declarada.
+       LIMITACIÓN DECLARADA: en años con prórroga de emergencia dentro del tramo
+       de fallback (2012-2017), el lag de 40d podría ser algo optimista (entrada
+       ~pocos días antes de la fecha pública real). Es raro, acotado al warm-up y
+       no afecta la evaluación OOS. Ver scripts/probe_bvl_hechos.py.
+   (b) [REEVALUADO jul-2026] Point-in-time vs restated: RIESGO MENOR de lo
+       documentado antes para los fundamentales SMV. Se midió empíricamente
+       (comparando, por emisor/cuenta/año, la columna propia del filing del año
+       vs. la columna COMPARATIVA del filing siguiente = la reexpresión):
+         * ~82% de las cifras que alimentan ratios NO cambian (<0.1%);
+           cambios >5% solo ~2% de los casos.
+         * Flujos (Ingresos, Utilidad Neta -> ROE/ROA/margen/EPS) casi no se
+           reexpresan; las reexpresiones grandes son de BALANCE y se concentran
+           en 2012-2018 (transición IFRS). Años recientes limpios.
+         * A nivel de RATIO: apalancamiento (D/E, D/A) robusto (num/denom se
+           mueven juntos); rentabilidad (ROE/ROA/margen) puede swingear en casos
+           raros (4-5/52) cuando la reexpresión golpea la utilidad neta. Caso
+           extremo: BUENAVC1 2013, utilidad +37,004 -> -107,257 (cambia de
+           signo; ROE +1.4% -> -3.0%).
+       CLAVE: el servicio SMV PRESERVA cada filing tal como se presentó (una
+       descarga 2026 del ejercicio 2013 devuelve el ORIGINAL, no la corrección
+       que solo vive en el comparativo del filing 2014) y el pipeline lee la
+       columna propia de cada período (Monto1/Monto3), NO las comparativas. Por
+       tanto el panel ya guarda el valor POINT-IN-TIME que vio el mercado; la
+       reexpresión NO entra como look-ahead. Verificado: parquet
+       fund_BUENAVC1 period=2013-12-31 INFO_PatrimonioTotal = 2,613,666
+       (original), no 3,547,114 (reexpresado). Residual real: acciones/
+       dividendos/splits SÍ vienen del snapshot ACTUAL de la BVL (ese sí es
+       "restated", pero de bajo impacto). Ver scripts/probe_bvl_hechos.py y el
+       análisis de reexpresión sobre data/raw/smv_cache.
+
+       MODELO TEMPORAL ELEGIDO (decisión jul-2026): panel de fundamentales
+       "first-reported, INMUTABLE (mono-vintage)". Cada trimestre entra una sola
+       vez con su valor tal-como-se-reportó-primero, en su known_date, y NUNCA
+       se revisa; las correcciones posteriores no se ingieren (el pipeline no
+       lee comparativas y el SMV preserva los originales, incluso entre
+       reconstrucciones). Justificación: es la opción causalmente segura (impide
+       inyectar en t una corrección que solo fue pública después) y la más
+       simple; el costo es una imperfección de COMPLETITUD (no de causalidad):
+       tras publicarse una reexpresión, el feature histórico de ese trimestre no
+       la refleja. Impacto práctico ~nulo: cuando la corrección se hace pública
+       (~1 año después) ese trimestre ya salió de la ventana de observación y
+       del TTM móvil (que usa los 4 trimestres más recientes, todos originales);
+       solo queda que el PRECIO reaccione a una corrección que los features no
+       codifican (limitación general de todo panel as-reported, rara y menor).
+       Caveat: una ERRATA que sobrescriba el propio filing del año (no solo el
+       comparativo del siguiente) sí se tomaría en una reconstrucción futura;
+       es raro. Justificación de conservar solo la última versión de
+       acciones/dividendos/splits (BVL snapshot): no hay archivo por vintage de
+       corporate actions y su impacto en el ajuste de precio es de segundo orden.
+       TRABAJO FUTURO: panel BITEMPORAL (point-in-time por vintage) que muestre
+       el original antes de la fecha de reexpresión y el valor corregido después
+       -- leyendo las columnas comparativas y asignándoles como known_date la
+       fecha del filing que las publica. Descartado aquí por complejidad alta
+       frente a ~1 caso material (BVN 2013) en 5 activos.
+
+4. SEÑALES DÉBILES + DATASET CHICO → SOBREAJUSTE  [gestionar]
+   Sentimiento: correlación casi nula contemporánea, débil al día siguiente
+   (r≤0.08), con ruido temático (R5 §5.3). P/E ruidoso en iliquidez. Dataset
+   chico (~3,513 días × 5 activos; per-activo menor). Un DRL puede memorizar
+   ruido.
+   → Validación out-of-sample estricta / walk-forward; honestidad sobre el
+   techo de la señal de sentimiento (R5 §5.5 ya lo acota).
+
+
+========================================================================
+MERCADO (R3)
+========================================================================
+  - Solo `close` (open=high=low=close, volume=NaN): sin señales de volumen
+    (OBV, liquidez); volatilidad solo close-to-close (subestima intradía);
+    MACD/RSI/SMA todos close. [documentado/abierto]
+  - CREDITC1 precio no representativo (free float ~33k/día): retornos,
+    volatilidad y P/E de BCP contaminados; su market cap implícita supera la
+    de Credicorp (imposible). Interpretar BCP con cautela. [documentado]
+  - Ajuste por splits depende de la clasificación "AL" de la BVL: un split de
+    valor nominal no marcado como AL se perdería. Guarda:
+    detect_split_candidates avisa saltos >40% sin split. [mitigado parcial]
+  - close_total_return reinvierte dividendos al close, sin impuestos/timing:
+    sobrestima el retorno total ligeramente. [declarar]
+  - Enriquecimiento Yahoo reescalado por factor de split (solo algunos
+    tickers): posible inconsistencia OHLC puntual; no afecta el close
+    autoritativo. [menor]
+
+
+========================================================================
+FUNDAMENTALES (R4)
+========================================================================
+  - known_date: [RESUELTO E INTEGRADO jul-2026] usa la FECHA REAL de
+    presentación (registerDate del hecho "Intermedia Individual" en BVL
+    /v1/corporate-actions) cuando existe (~2018-2025), con FALLBACK a lag fijo
+    {Q1-Q3:40, Q4:60} para 2012-2017. El 40 se calibró con el barrido empírico
+    de lags reales (máx normal 35d; 30d filtraría 33% de casos, 40d solo en
+    prórrogas de emergencia documentadas: COVID Res.033-2020, El Niño
+    Res.014-2017). Q4=60 = máx real (BVN en su deadline NYSE). Ver Tier 1 3(a)
+    para la tabla completa; scripts/probe_bvl_hechos.py. [resuelto]
+  - Point-in-time vs reexpresado: [REEVALUADO jul-2026] riesgo MENOR de lo
+    temido. El panel guarda el valor ORIGINAL que vio el mercado (el servicio
+    SMV preserva cada filing; el pipeline lee columnas propias, no comparativas)
+    => NO hay look-ahead por reexpresión. Medición empírica: ~82% de las cifras
+    no cambian; los flujos (utilidad/ingresos) casi no; swings de ROE/ROA/margen
+    solo en casos raros (BVN 2013 utilidad cambia de signo). Ver Tier 1 3(b).
+    [reevaluado/bajo impacto]
+  - Individual (Tipo=I), no consolidado: BCP individual ≠ Credicorp;
+    taxonomía SBS distinta → D/E del banco no comparable con no financieras.
+    [documentado]
+  - Acciones: nominal constante = actual. Un cambio histórico de valor nominal
+    distorsionaría el conteo. Chequeo sugerido: que acciones=CapEmitido/nominal
+    solo salte en fechas de AL conocidas. [documentado §3.10.2(c)]
+  - BVN: utilidad USD / precio PEN. Conversión TTM al TC de fin de trimestre
+    (aproximación); ancla de acciones SEC constante (SMV en USD, sin nominal
+    limpio). Ver aclaración al inicio de este doc. [documentado]
+  - P/E NaN en pérdidas (BVN ~45% del tiempo): ausencia semántica; OE1 debe
+    enmascarar, no imputar. [documentado]
+  - Forward-fill trimestral (hasta ~4.5 meses stale): no hay bandera de
+    antigüedad del fundamental (análoga a days_since_news). Considerar una
+    columna quarters_since_fundamental / days_since_known. [abierto — mejora]
+
+
+========================================================================
+SENTIMIENTO (R5)
+========================================================================
+  - Ruido temático / aboutness (la limitación #1 de R5): resúmenes de índice
+    mal etiquetados por empresa; CORAREC1 SIN ancla financiera en su query.
+    Probable causa de la correlación débil. Mitigable: exigir ancla financiera
+    también para CORAREC1, o un paso de filtrado de relevancia con el LLM.
+    [abierto — mitigable barato]
+  - Solo título, no cuerpo (limitación de MediaCloud story_list). [abierto]
+  - Confianza del LLM no calibrada [0.60,0.95]: no usar como peso estadístico.
+    [documentado]
+  - Cobertura muy desigual (7.7% SAGA → 58% BCP): señal escasa/ruidosa en
+    activos chicos; days_since_news enorme. [documentado — OE1 decide]
+  - Solo 3 medios nacionales, sin prensa internacional: BVN pierde cobertura
+    relevante (cotiza como BVN en NYSE). [documentado]
+  - Sin ground truth humano: solo validación cualitativa, no accuracy medido.
+    Considerar etiquetar una muestra. [abierto]
+  - gemma3:4b (modelo chico) + agregación diaria sin ponderar por confianza:
+    techo de calidad de clasificación. PROMPT_VERSION da trazabilidad.
+    [documentado]
+
+
+========================================================================
+REPRODUCIBILIDAD / PROCEDENCIA (transversal)
+========================================================================
+  - Fuentes vivas no versionadas: endpoints BVL no documentados (pueden
+    cambiar/romperse); precios/acciones/dividendos son snapshot "as-of-now"
+    (la BVL actualiza semanalmente) → re-correr en otra fecha da otros
+    números. Recomendado: CONGELAR los parquet crudos con fecha de extracción.
+  - Token de MediaCloud expuesto en un probe script (ya en memoria del
+    proyecto): riesgo de seguridad; la descarga no es re-ejecutable por
+    terceros sin él.
+  - Ollama local: fijar versión del modelo; si cambia, el sentimiento cambia
+    (mitigado por caché + PROMPT_VERSION).
+
+
+========================================================================
+QUÉ HACER (priorización para la próxima sesión)
+========================================================================
+  1. [HECHO jul-2026] Verificado el lag de known_date contra los plazos
+     regulatorios de la SMV y corregido Q4 a 60 días (look-ahead eliminado,
+     crítico en BVN). Ver Tier 1 punto 3(a). Próximo look-ahead a atacar: el
+     de datos reexpresados vs point-in-time (3b), más difícil.
+  2. Modelado de costos/iliquidez en OE1 — sin esto los resultados de trading
+     no son creíbles; primero de la etapa del agente.
+  3. DECLARAR en limitaciones: selección/supervivencia, reexpresión (no
+     point-in-time), techo de la señal de sentimiento.
+  4. Barato y de alto valor: ancla financiera para CORAREC1 (arregla el peor
+     ruido temático) + congelar los crudos con fecha de extracción.
+  5. Considerar feature de antigüedad de fundamentales (análoga a
+     days_since_news).
+
+
+========================================================================
+FIN DEL DOCUMENTO
+========================================================================

@@ -1,32 +1,176 @@
 """R6 — Integración temporal y dataset unificado.
 
 Une mercado+técnicos (diario) ⨝ sentimiento (diario) ⨝ fundamentales
-(trimestral, con forward-fill desde la fecha en que se conocieron) sobre el
+(trimestral, propagados desde la fecha en que se conocieron) sobre el
 calendario de días hábiles de la BVL.
 
 Las 4 "vistas" de señales que pide R8 (solo mercado; +sentimiento;
 +fundamentales; completa) NO son datasets separados: son selecciones de
 columnas sobre este panel único.
+
+Decisiones de diseño (sesión 2026-06-23, ver memoria del proyecto):
+  * El calendario bursátil se construye AQUÍ (unión de fechas con cotización
+    de cualquiera de los 5 activos), no en el entorno DRL (OE1). El entorno
+    solo consume el índice de fechas ya resuelto.
+  * Sentimiento: SIN decaimiento precalculado (lo aprende el agente). Se
+    guardan 4 columnas crudas: `sentiment_score_last`, `days_since_news`,
+    `has_news`, `n_articles`.
+  * Noticias publicadas en días NO bursátiles (fin de semana, feriado BVL)
+    se "roll-forward" al siguiente día hábil antes de agregarlas (evita
+    look-ahead: una noticia del sábado no pudo afectar el cierre del
+    viernes). Si ese día hábil ya tenía noticias propias, se reagregan con
+    media ponderada por número de artículos (consistente con
+    `daily_aggregation: mean` de R5).
+  * `days_since_news` usa un ancla sintética en la primera fila del panel de
+    cada activo (equivalente a asumir un evento neutral en día 0), así no
+    hay NaN antes de la primera noticia histórica real.
+  * Fundamentales: `pd.merge_asof(..., direction="backward")` sobre
+    `known_date` — propagación sin look-ahead, ya validada (sin huecos de
+    NaN en el horizonte de mercado 2012-2025 porque el primer `known_date`
+    de los 5 activos es 2005-05-15).
 """
 from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
+
+from src.market.technical_indicators import add_indicators
+
+_PRICE_COLS = ["close", "close_raw", "close_split_adj", "close_total_return"]
+_INDICATOR_COLS = ["ret_1d", "ret_1d_raw", "sma_20", "sma_50", "ema_12", "ema_26",
+                    "macd", "macd_signal", "rsi_14", "volatility_20"]
+
+
+def _fill_no_trade_days(panel: pd.DataFrame) -> pd.DataFrame:
+    """Arrastra el precio en días sin cotización real de un activo.
+
+    BUENAVC1/SAGAC1/CORAREC1 (y en menor medida CREDITC1/ALICORC1) no
+    operan todos los días bursátiles -> al reindexar sobre el calendario
+    común (`build_trading_calendar`) esas filas llegan sin cotización. Se
+    arrastra el último `close_total_return`/`close_raw` conocido ("stale
+    price", sin operación real) y se RECALCULAN los indicadores técnicos
+    sobre la serie ya completa con `technical_indicators.add_indicators`
+    (todos derivan solo de close_total_return/close_raw, ver
+    docs/justificacion_cierre_vs_ohlcv.txt) en vez de arrastrar a ciegas
+    los valores de los indicadores -- así ret_1d=0 y volatility_20 decae
+    correctamente durante el tramo sin operación, y el salto real se
+    refleja íntegro el día en que se retoma la negociación.
+
+    `is_no_trade` marca estas filas para que el entorno (OE1) pueda
+    modelar el costo de iliquidez en vez de tratarlas como una sesión real
+    (ver nota sobre CREDITC1 en config.yaml). No se completa open/high/
+    low/volumen: esa decisión ya se descartó explícitamente (el agente
+    solo usa close_total_return, ver justificacion_cierre_vs_ohlcv.txt).
+    """
+    panel = panel.sort_values("date").copy()
+    panel["is_no_trade"] = panel["close_total_return"].isna().astype(int)
+    panel[_PRICE_COLS] = panel[_PRICE_COLS].ffill()
+    for flag in ("is_split_adjusted", "is_div_adjusted"):
+        if flag in panel.columns:
+            panel[flag] = panel[flag].ffill()
+    panel = panel.drop(columns=[c for c in _INDICATOR_COLS if c in panel.columns])
+    return add_indicators(panel)
+
+
+def build_trading_calendar(market: pd.DataFrame) -> pd.DatetimeIndex:
+    """Calendario bursátil = unión de fechas con cotización de CUALQUIER
+    activo del universo (BVL-wide), no el calendario de un solo activo.
+
+    Cada activo individual puede tener menos filas (iliquidez, suspensión),
+    eso se refleja como NaN en sus columnas de mercado al reindexar sobre
+    este calendario común, no como un calendario más corto.
+    """
+    dates = pd.to_datetime(market["date"]).unique()
+    return pd.DatetimeIndex(sorted(dates))
+
+
+def _roll_forward_dates(dates: pd.Series, calendar: pd.DatetimeIndex) -> np.ndarray:
+    """Mapea cada fecha al primer día del calendario >= esa fecha.
+
+    Fechas que ya son día hábil quedan sin cambio. Fechas fuera del rango del
+    calendario se recortan al extremo más cercano (no debería ocurrir con
+    datos dentro del horizonte del proyecto).
+    """
+    pos = calendar.searchsorted(dates.to_numpy(), side="left")
+    pos = np.clip(pos, 0, len(calendar) - 1)
+    return calendar.to_numpy()[pos]
+
+
+def _align_sentiment_to_calendar(sentiment_ticker: pd.DataFrame,
+                                  calendar: pd.DatetimeIndex) -> pd.DataFrame:
+    """Lleva el sentimiento diario de un activo al calendario bursátil.
+
+    Reasigna noticias de días no bursátiles al siguiente día hábil y
+    reagrega (media ponderada por n_articles) si ese día ya tenía noticias
+    propias. `sentiment_ticker` debe venir ya filtrado a un solo ticker.
+    """
+    s = sentiment_ticker.copy()
+    s["date"] = pd.to_datetime(s["date"])
+    s["date"] = _roll_forward_dates(s["date"], calendar)
+
+    weighted = s["sentiment_score"] * s["n_articles"]
+    agg = (s.assign(_weighted=weighted)
+            .groupby("date", as_index=False)
+            .agg(_weighted_sum=("_weighted", "sum"),
+                 n_articles=("n_articles", "sum")))
+    agg["sentiment_score"] = agg["_weighted_sum"] / agg["n_articles"]
+    return agg.drop(columns="_weighted_sum")
+
+
+def _days_since_news(has_news: np.ndarray) -> np.ndarray:
+    """Días hábiles desde la última noticia (0 el día de la noticia).
+
+    Ancla sintética: si la primera fila no tiene noticia, se trata como si
+    hubiera un evento neutral en el día 0 (consistente con
+    `sentiment_score_last = 0` antes de la primera noticia real) — evita
+    NaN sin inventar un segundo valor sentinela arbitrario.
+    """
+    idx = np.arange(len(has_news), dtype=float)
+    last_news_idx = np.where(has_news == 1, idx, np.nan)
+    if np.isnan(last_news_idx[0]):
+        last_news_idx[0] = 0.0
+    last_news_idx = pd.Series(last_news_idx).ffill().to_numpy()
+    return (idx - last_news_idx).astype(int)
+
+
+def _dividend_ttm(dates, ex_dates, amounts, window_days: int = 365) -> np.ndarray:
+    """Suma de dividendos por acción con fecha-ex en (t - window_days, t] para
+    cada t en `dates`. O(n log n) vía sumas acumuladas + búsqueda binaria."""
+    dates = pd.DatetimeIndex(dates)
+    ex_dates = pd.DatetimeIndex(ex_dates)
+    if len(ex_dates) == 0:
+        return np.zeros(len(dates))
+    order = np.argsort(ex_dates.values)
+    ex = ex_dates.values[order]
+    amt = np.asarray(amounts, dtype=float)[order]
+    cum = np.concatenate([[0.0], np.cumsum(amt)])
+    upper = np.searchsorted(ex, dates.values, side="right")
+    lower = np.searchsorted(ex, (dates - pd.Timedelta(days=window_days)).values,
+                            side="right")
+    return cum[upper] - cum[lower]
 
 
 def build_unified(market: pd.DataFrame, sentiment: pd.DataFrame,
                   fundamentals_ratios: pd.DataFrame,
-                  trading_calendar: pd.DatetimeIndex) -> pd.DataFrame:
+                  dividends: pd.DataFrame | None = None,
+                  trading_calendar: pd.DatetimeIndex | None = None) -> pd.DataFrame:
     """Construye el panel (ticker, date) x features.
 
     Parameters
     ----------
-    market : con OHLCV + indicadores técnicos (diario)
-    sentiment : score diario por activo (0/neutral donde no hay noticias)
-    fundamentals_ratios : P/E, ROE, DY por (ticker, known_date) trimestral
-    trading_calendar : índice de días hábiles de la BVL (feriados PE incluidos)
+    market : con OHLCV + indicadores técnicos (diario), 1+ tickers
+    sentiment : sentiment_score/n_articles diario por activo (esquema R5,
+                SIN alinear al calendario bursátil todavía)
+    fundamentals_ratios : ratios por (ticker, known_date) trimestral, salida
+                de `fundamentals_client.compute_ratios`
+    trading_calendar : opcional, para pruebas. Por defecto se deriva de
+                `market` con `build_trading_calendar`.
     """
+    if trading_calendar is None:
+        trading_calendar = build_trading_calendar(market)
+
     panels = []
     for ticker, mkt in market.groupby("ticker"):
         idx = pd.MultiIndex.from_product(
@@ -36,20 +180,24 @@ def build_unified(market: pd.DataFrame, sentiment: pd.DataFrame,
         mkt = mkt.copy()
         mkt["date"] = pd.to_datetime(mkt["date"])
         panel = base.merge(mkt, on=["ticker", "date"], how="left")
+        panel = _fill_no_trade_days(panel)
 
-        # Sentimiento: 0 (neutral) los días sin noticias
-        sen = sentiment[sentiment["ticker"] == ticker].copy()
+        # Sentimiento: alinear al calendario (roll-forward + reagregación),
+        # luego forward-fill crudo del último score conocido.
+        sen = sentiment[sentiment["ticker"] == ticker]
         if not sen.empty:
-            sen["date"] = pd.to_datetime(sen["date"])
-            panel = panel.merge(
-                sen[["date", "sentiment_score", "n_articles"]],
-                on="date", how="left")
+            aligned = _align_sentiment_to_calendar(sen, trading_calendar)
+            panel = panel.merge(aligned, on="date", how="left")
         if "sentiment_score" not in panel.columns:
-            panel["sentiment_score"] = 0.0
+            panel["sentiment_score"] = np.nan
         if "n_articles" not in panel.columns:
-            panel["n_articles"] = 0
-        panel["sentiment_score"] = panel["sentiment_score"].fillna(0.0)
-        panel["n_articles"] = panel["n_articles"].fillna(0)
+            panel["n_articles"] = np.nan
+
+        panel["has_news"] = panel["n_articles"].notna().astype(int)
+        panel["n_articles"] = panel["n_articles"].fillna(0).astype(int)
+        panel["sentiment_score_last"] = panel["sentiment_score"].ffill().fillna(0.0)
+        panel["days_since_news"] = _days_since_news(panel["has_news"].to_numpy())
+        panel = panel.drop(columns=["sentiment_score"])
 
         # Fundamentales: forward-fill desde known_date (evita look-ahead)
         fnd = fundamentals_ratios[fundamentals_ratios["ticker"] == ticker].copy()
@@ -60,6 +208,23 @@ def build_unified(market: pd.DataFrame, sentiment: pd.DataFrame,
                 panel.sort_values("date"), fnd.sort_values("known_date"),
                 left_on="date", right_on="known_date", by="ticker",
                 direction="backward")
+
+        # P/E diario = capitalización / utilidad TTM = close_raw / eps_ttm.
+        # Se usa close_raw (precio efectivamente negociado) y NO close_split_adj:
+        # ambos, eps_ttm y close_raw, están en la base de acciones del momento, así
+        # el P/E es contemporáneo y robusto a splits (ver docs §3.10.2). Sin P/E
+        # cuando la utilidad TTM es <=0 (pérdidas: P/E no informativo).
+        if "eps_ttm" in panel.columns:
+            eps = panel["eps_ttm"].to_numpy()
+            panel["pe"] = np.where(eps > 0, panel["close_raw"].to_numpy() / eps, np.nan)
+
+        # Dividend yield = dividendos por acción TTM (PEN) / close_raw.
+        if dividends is not None:
+            dv = dividends[dividends["ticker"] == ticker]
+            if not dv.empty:
+                div_ttm = _dividend_ttm(panel["date"], dv["date"], dv["dividend"])
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    panel["dy"] = div_ttm / panel["close_raw"].to_numpy()
 
         panels.append(panel)
 
@@ -72,11 +237,13 @@ def feature_views(unified: pd.DataFrame) -> dict[str, list[str]]:
     technical = [c for c in unified.columns
                  if c in {"open", "high", "low", "close", "volume", "ret_1d",
                           "sma_20", "sma_50", "ema_12", "ema_26", "macd",
-                          "macd_signal", "rsi_14", "volatility_20"}]
-    sentiment = ["sentiment_score", "n_articles"]
+                          "macd_signal", "rsi_14", "volatility_20", "is_no_trade"}]
+    sentiment = [c for c in
+                 ["sentiment_score_last", "days_since_news", "has_news", "n_articles"]
+                 if c in unified.columns]
     _fundamental_cols = {
         "roe", "roa", "net_margin", "debt_equity", "debt_ratio",  # derivados SMV
-        "pe", "dy",                                                # reservados (P/E, DY futuro)
+        "pe", "dy",                                                # P/E y DY (implementados)
     }
     fundamental = [c for c in unified.columns if c in _fundamental_cols]
     return {

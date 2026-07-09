@@ -27,7 +27,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.market.corporate_actions import build_adjusted_prices, fetch_actions, split_factor
+from src.market.corporate_actions import (
+    build_adjusted_prices, fetch_actions, filter_actions_by_cutoff, split_factor,
+)
 from src.universe import MARKET_SCHEMA, Asset
 
 # ── BVL (primaria) ────────────────────────────────────────────────────────────
@@ -145,6 +147,7 @@ def fetch_market(asset: Asset, start: str, end: str, raw_dir: Path) -> pd.DataFr
     # BVN (BUENAVC1 Yahoo) es ADR NYSE en USD != BUENAVC1 BVL en PEN.
     same_instrument = (asset.bvl != "BUENAVC1")
     actions = fetch_actions(asset)
+    actions = filter_actions_by_cutoff(actions, end, bvl["date"])
 
     if not yah.empty and same_instrument:
         merged = _merge_bvl_yahoo(bvl, yah, splits=actions["splits"])

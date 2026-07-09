@@ -25,6 +25,8 @@ universe:
     yahoo: "CREDITC1.LM"  # solo cubre ~2011+ ; para 2005-2010 usar la BVL
     smv: "BANCO DE CREDITO DEL PERU"
     smv_rpj: "B80005"     # código único SMV (confirmado con obtener_InfoFinanciera)
+    bvl_company_code: "12000"  # dividendos + acciones liberadas BVL (dataondemand /value)
+    nominal_value: 1.0         # S/ por acción (BVL listStock). Cuentas capital: 1F3301/1F3314 (banco SBS)
     isin: "PEP120001008"
     xcheck: "BAP"          # Credicorp Ltd (NYSE, USD): validación cruzada, NO reemplazo
     notes: >
@@ -42,6 +44,11 @@ universe:
     yahoo: "BVN"          # NYSE (ADR), USD
     smv: "COMPAÑIA DE MINAS BUENAVENTURA S.A.A."
     smv_rpj: "B20003"     # reporta en USD (Moneda=Dólares)
+    bvl_company_code: "61200"  # 69 dividendos en US$ (se convierten a PEN con TC BCRP)
+    nominal_value: 10.0        # S/ por acción (BVL). El SMV reporta capital en USD ->
+    shares_outstanding_override: 253715190  # acciones en circulación (emitidas 274,889,924
+                               # - tesorería 21,174,734), constante 2012-2025 según SEC 20-F
+                               # (EDGAR CIK 1013131). Ver docs/pipeline §3.10.2 (f).
     isin: null
 
   - sector: alimentos
@@ -50,6 +57,8 @@ universe:
     yahoo: "ALICORC1.LM"  # TODO: verificar
     smv: "ALICORP S.A.A."
     smv_rpj: "B30006"
+    bvl_company_code: "21400"  # 34 dividendos en S/.
+    nominal_value: 1.0         # S/ por acción. Tesorería 1D0711 material (hasta 10% en 2022-2023)
     isin: null
 
   - sector: retail
@@ -58,6 +67,8 @@ universe:
     yahoo: "SAGAC1.LM"    # TODO: verificar
     smv: "SAGA FALABELLA S.A."
     smv_rpj: "014313"     # OJO: existe también RPJ B80144 (Banco Falabella) y 020045 (Falabella Peru)
+    bvl_company_code: "75700"  # 25 dividendos S/. + 1 acción liberada
+    nominal_value: 1.0         # S/ por acción. Tesorería 0 en el horizonte -> circulación = emitidas
     isin: "PEP757001008"
 
   - sector: manufactura
@@ -66,6 +77,8 @@ universe:
     yahoo: "CORAREC1.LM"  # TODO: verificar
     smv: "CORPORACION ACEROS AREQUIPA S.A."
     smv_rpj: "CI0003"
+    bvl_company_code: "20601"  # 80 dividendos (56 S/. + 30 US$) + 6 acciones liberadas
+    nominal_value: 1.0         # S/ por acción. Tesorería 0 en el horizonte -> circulación = emitidas
     isin: null
 
 # ---------------------------------------------------------------------

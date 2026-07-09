@@ -1,0 +1,100 @@
+DECISIONES PENDIENTES — OE1 (ENTORNO Y AGENTE DRL)
+Tesis: Aprendizaje por refuerzo profundo aplicado a la Bolsa de Valores de Lima (BVL)
+Autor: Rodrigo Holguin — Asesor: Dr. E. Villanueva
+Fecha: julio 2026
+========================================================================
+
+CONTEXTO
+------------------------------------------------------------------------
+OE1 es el entorno de RL (estilo Gymnasium: reset/step) y el agente que lo
+resuelve. Consume data/processed/dataset_unificado.parquet (salida de OE2/R6)
+como materia prima. Frontera ya establecida (ver hallazgos_integracion_R6.txt):
+R6 entrega datos limpios/crudos, causales y alineados; OE1 les DA FORMA
+(normalización, ventana, vector de observación) pero NO re-reconcilia datos.
+Las 4 "vistas" (feature_views: solo_mercado / +sentimiento / +fundamentales /
+completa) son el ablation study de R8.
+
+Este documento SOLO registra las decisiones abiertas y sus opciones. No fija
+ninguna todavía. Marcar la elección y su justificación a medida que se resuelvan.
+
+========================================================================
+DECISIONES ABIERTAS (en orden sugerido de resolución)
+========================================================================
+
+[ ] D1. ALCANCE DEL AGENTE — la decisión raíz (define casi todo lo demás)
+    Opción A: Agente de PORTAFOLIO. Asigna pesos sobre los 5 activos + caja
+              (∑=1). Coherente con "1 empresa por sector para evaluar
+              diversificación". Es el ángulo natural de la tesis.
+    Opción B: Agente MONO-ACTIVO (uno por activo, o un solo activo). Más simple,
+              más data-eficiente por modelo, pero pierde el eje de diversificación.
+    Impacto: condiciona espacio de acción (D2), algoritmo (D3) y reward (D4).
+
+[ ] D2. ESPACIO DE ACCIÓN — depende de D1
+    - Continuo: vector de pesos (portafolio) o fracción invertida (mono-activo).
+    - Discreto: {vender, mantener, comprar} por activo.
+    Trade-off: continuo modela asignación real pero es más difícil de entrenar;
+    discreto es más estable pero grosero.
+
+[ ] D3. ALGORITMO — depende de D2
+    - Acción continua: PPO, SAC, DDPG/TD3.
+    - Acción discreta: DQN (y variantes).
+    Considerar: PPO como baseline robusto; SAC si se busca eficiencia de muestra
+    (relevante por el poco dato). Política recurrente (LSTM/GRU) si se trata el
+    problema como POMDP en vez de apilar ventana (ver D5).
+
+[ ] D4. FUNCIÓN DE RECOMPENSA — núcleo del diseño
+    Componentes a combinar:
+    - Retorno log del portafolio (usar ret_1d sobre close_total_return, que YA
+      incluye dividendos — correcto).
+    - MENOS costo de transacción por rebalanceo (ver D7).
+    - MENOS penalidad de iliquidez en días is_no_trade (ver D8).
+    - Ajuste por riesgo: (a) retorno − λ·varianza; (b) Sharpe diferencial
+      (recompensa incremental de Sharpe, común en trading RL); (c) retorno puro.
+    Decidir la forma y los pesos/λ.
+
+[ ] D5. OBSERVACIÓN — ventana y recurrencia
+    - Ventana de lookback de N días (apilar) vs política recurrente (POMDP).
+    - Qué vista(s) de features entran (las 4 se comparan en R8, pero la
+      arquitectura base debe soportarlas todas por igual).
+
+[ ] D6. NORMALIZACIÓN CAUSAL — riesgo de look-ahead
+    Las features tienen escalas dispares (precio vs rsi 0-100 vs days_since_news
+    0-400). Normalización OBLIGATORIA y CAUSAL: estadísticas ajustadas SOLO en
+    train (rolling/expanding), nunca z-score sobre toda la muestra. Confirmar
+    también el log1p(days_since_news) ya decidido conceptualmente en R6.
+
+[ ] D7. COSTOS DE TRANSACCIÓN Y SLIPPAGE — parámetro del entorno, no dato
+    Modelo y valores realistas para la BVL (comisiones + impacto de mercado, alto
+    en nombres ralos). Si se ponen a cero, el agente sobre-opera de forma irreal.
+
+[ ] D8. MANEJO DE is_no_trade
+    En días sin operación de un activo (precio stale) el agente no puede operar
+    de verdad: ¿enmascarar la acción sobre ese activo o penalizar el intento?
+
+[ ] D9. TASA LIBRE DE RIESGO / BENCHMARK
+    Si el reward usa Sharpe o exceso de retorno, hace falta una rf. NO está en el
+    panel; se puede traer del BCRP (como el TC en src/market/fx.py). Definir
+    fuente/serie y si la caja rinde rf.
+
+[ ] D10. PROTOCOLO DE EVALUACIÓN — fijar ANTES de entrenar (evita autoengaño)
+    - Split TEMPORAL walk-forward (train→val→test, sin barajar).
+    - Baselines obligatorios: buy&hold, 1/N equiponderado, momentum,
+      media-varianza (Markowitz). El agente "vale" solo si los supera
+      out-of-sample.
+    - Múltiples semillas + medida de significancia (evitar concluir sobre una
+      corrida afortunada).
+    - Métricas: retorno acumulado, Sharpe/Sortino, max drawdown, turnover.
+
+========================================================================
+NOTAS DE RIESGO (para tener presente al decidir)
+------------------------------------------------------------------------
+- Datos pequeños (~3,500 días × 5 activos, 2012-2025): DRL sobreajusta con
+  facilidad. Favorecer arquitecturas simples, regularización, walk-forward.
+- Causalidad es lo más crítico: cualquier fuga (normalización, feature futura)
+  infla el backtest y lo invalida.
+- El objetivo mínimo defendible NO es "ganar plata": es superar de forma robusta
+  y out-of-sample a los baselines, con un ablation limpio de sentimiento y
+  fundamentales (R8).
+
+FIN DEL DOCUMENTO
+========================================================================

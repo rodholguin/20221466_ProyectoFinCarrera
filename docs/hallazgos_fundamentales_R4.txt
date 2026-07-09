@@ -183,10 +183,15 @@ corridas, cada una con más alcance que la anterior:
     actuales (84/83 periodos por activo, ver sección 5).
 
 known_date (fecha de conocimiento público) se calcula como cierre de
-trimestre + 45 días, un lag conservador frente al plazo regulatorio real
-de presentación de EEFF a la SMV. Es el campo que R6 usará para propagar
-fundamentales al panel diario sin incurrir en look-ahead bias (merge_asof
-backward).
+trimestre + un lag por trimestre: 45 días para Q1-Q3 y 60 días para Q4.
+Este lag se VERIFICÓ (jul-2026) contra los plazos regulatorios reales de la
+SMV para EEFF intermedios (Q1<=30-abr, Q2<=31-jul, Q3<=31-oct, Q4<=15-feb
+local / 60 días para emisores también listados en el extranjero como BVN):
+el +45d original era conservador para Q1-Q3 pero introducía look-ahead en
+Q4 (1 día para emisores locales, ~15 días para BUENAVC1/NYSE), por lo que
+Q4 se corrigió a 60 días. Es el campo que R6 usa para propagar fundamentales
+al panel diario sin look-ahead bias (merge_asof backward). Detalle en
+docs/pipeline_extraccion_datos.txt §3.5 y riesgos_transversales_datos.txt (3a).
 
 Caché en dos niveles para no re-descargar las ~261 empresas por cada
 (operación × trimestre) al procesar los 5 activos del universo: caché en
@@ -293,6 +298,10 @@ fuente de acciones en circulación que no se encontró confiable -- ver 5.8.
 
 5.8. P/E y Dividend Yield: evaluados exhaustivamente, no implementados
 ------------------------------------------------------------------------
+NOTA (jul-2026): sección SUPERADA -- su conclusión se revierte en 5.9 (la fuente
+de acciones sí existe y fue validada). Se conserva como registro del análisis
+original.
+
 Se evaluó en detalle (jun-2026) la viabilidad de derivar P/E vía valor
 nominal SMV o memorias anuales, con validación cruzada contra BAP (BCP) y
 BVN (Buenaventura). Conclusión: viabilidad baja para los 5 activos --
@@ -310,6 +319,91 @@ implementado. DY es distinto: ya casi disponible para CREDITC1/ALICORC1
 porque R3 ya descarga dividendos por acción en PEN; de implementarse,
 sería de esfuerzo bajo. Detalle completo del análisis en
 docs/pipeline_extraccion_datos.txt sección 3.10.1.
+
+5.9. ACTUALIZACIÓN (jul-2026): la fuente de acciones SÍ existe; P/E y DY
+     pasan a viables. Revierte 5.8.
+------------------------------------------------------------------------
+La conclusión de 5.8 ("viabilidad baja / no implementable por falta de fuente
+de acciones") se revisó a raíz de una recomendación externa -y de un re-sondeo
+propio- y se REVIERTE. Se conserva 5.8 como registro del análisis original; esta
+sección lo corrige, explica cómo se validó y por qué se decidió lo que se
+decidió. El detalle técnico completo está en pipeline_extraccion_datos.txt
+sección 3.10.2; aquí el énfasis narrativo, como en el resto de este documento.
+
+Origen: una revisión externa señaló que el "Listado de Capital en Circulación"
+de la BVL es el total de acciones representativas del capital social por emisor,
+gratuito y de la misma fuente autoritativa que ya se usa para precios, y sugirió
+confirmar si se sirve desde el mismo dataondemand.bvl.com.pe ANTES de considerar
+proveedores de pago (EODHD). Se confirmó, y resultó mejor de lo esperado.
+
+Qué se halló y cómo se validó (los 4 puntos que 5.8 daba por perdidos):
+  1. La BVL publica el número de acciones (`quantity`) y el valor nominal
+     (`nominalValue`) en el MISMO endpoint que ya consumimos para acciones
+     corporativas (/v1/issuers/{cc}/value, bloque `listStock`); no hizo falta
+     endpoint nuevo. Es un snapshot semanal, no serie histórica. Esto desmonta la
+     objeción de 5.8 de que el valor nominal "vive en estatutos, fuera del WSDL".
+  2. La serie HISTÓRICA correcta no necesita reconstruirse: es el Capital
+     Emitido trimestral del SMV (cuenta 1D0701; 1F3301 para el banco) dividido
+     por ese nominal. Y -contra lo que temía 5.8- el SMV NO mezcla acciones
+     comunes con las de inversión: las separa (1D0701 común, 1D0703 inversión),
+     verificado al dígito contra las clases de la BVL.
+  3. Validación cruzada: BVL `quantity` = SMV Capital Emitido÷nominal = yfinance
+     coinciden AL DÍGITO en el trimestre reciente para 4 de los 5 activos (p.ej.
+     CREDITC1: 12,973,174,634 en las tres fuentes). Tres fuentes independientes
+     concordando es la evidencia que 5.8 no tenía.
+  4. El "camino acotado" que 5.8 proponía como único viable -reconstruir las
+     acciones dividiendo por el factor de splits ya validado- se probó y resultó
+     CUANTITATIVAMENTE ERRÓNEO: erra 33-318% frente a la serie SMV, porque estas
+     empresas tuvieron aumentos/reducciones de capital que NO son acciones
+     liberadas (CREDITC1 creció de 3.10bn a 12.97bn acciones por capitalizaciones
+     sucesivas; ALICORC1 redujo de 847M a 569M por recompra 2022 + cancelación
+     2024-2025; SAGAC1 bajó de 250M a 156.7M). Hallazgo metodológico citable: el
+     método intuitivo falla por no distinguir un split (mueve el precio, cambia
+     el conteo) de un movimiento de capital (cambia el conteo, no mueve el
+     precio). NOTA: esto NO invalida el ajuste de precios por splits de R3
+     (close_split_adj), que es correcto justamente porque solo usa los eventos
+     que mueven el precio y están validados contra la caída real (ver 2.7 del
+     documento de mercado R3).
+
+BUENAVC1, el caso difícil, resuelto con rigor externo: como Buenaventura reporta
+en USD desde 2006Q4 (ver 5.3), su Capital Emitido no divide limpio contra un
+nominal en soles, así que el método SMV no aplica. Su conteo se fijó con los
+Form 20-F ante la SEC (EDGAR CIK 1013131): acciones comunes emitidas
+274,889,924, en tesorería 21,174,734, en circulación 253,715,190 -- IDÉNTICAS en
+los 20-F de 2013, 2014, 2015, 2020, 2021 y 2022. Es decir, el conteo de BVN fue
+plano en todo el horizonte (auditado, no supuesto), y el snapshot BVL 2026 lo
+confirma (274,889,924). El vaivén que se veía en el capital SMV en USD es
+traducción de moneda, no emisión de acciones.
+
+Base elegida = acciones EN CIRCULACIÓN (netas de tesorería), la correcta para
+market cap/EPS, con la fórmula en_circulación = (Capital Emitido 1D0701 -
+|Acciones en Cartera 1D0711|) / nominal. Se confirmó que la tesorería (1D0711)
+es CERO en el horizonte para CREDITC1, SAGAC1 y CORAREC1 (ahí en circulación =
+emitidas). ALICORC1 sí tuvo tesorería material -programas de recompra que
+llegaron al 10% del emitido en 2022-2023 (84,719,000 acciones), amortizadas por
+etapas 2024-2025-; su conteo de tesorería SÍ es recuperable del SMV porque
+Alicorp la registra a valor nominal S/1 (monto en soles = conteo), validado al
+0.0004% contra las notas a los EEFF auditadas (84,719,173 en 2022-2023;
+76,246,294 = 10% exacto al 30-jun-2024). En circulación reconstruida para
+ALICORC1: 847.19M (2005-2021) -> 762.47M (2022-2023) -> 617.62M (2024) ->
+556.08M (2025). BUENAVC1: 21,174,734 en circulación neta vía SEC (su SMV
+individual no refleja la tesorería). NOTA: una estimación intermedia de esta
+sesión habló de "~1.4%" para ALICORC1; era errónea -la holgura llegó al 10%-,
+por lo que netear tesorería es material para ese activo.
+
+Estado: validado (scripts/probe_bvl_capital.py y validate_shares_anchor.py) e
+IMPLEMENTADO end-to-end (jul-2026). P/E con rigor para los 4 no-mineros
+(cobertura ~93-96%) y BUENAVC1 con el ancla SEC + conversión de moneda
+(cobertura 55%: NaN en años de pérdida); DY para los 5 (dividendo por acción en
+PEN de la BVL, R3). Ubicación en el código: fundamentals_client.
+compute_shares_earnings + compute_ratios(asset=...) (acciones en circulación,
+utilidad TTM desde la serie YTD, EPS); build_dataset.build_unified calcula
+pe/dy diarios en el panel; run_r6_integration los orquesta. Salida: columnas
+pe, dy en data/processed/dataset_unificado.parquet (vistas mercado_fundamentales
+y completa) y sección 5b del notebook exploracion_fundamentales_bvl.ipynb.
+Nota de calidad de datos: la utilidad TTM se toma de la serie YTD, no del
+trimestre aislado (Monto1), que tiene inconsistencias por reexpresión (detalle
+en pipeline §3.10.2 (h)).
 
 
 ========================================================================
@@ -360,6 +454,12 @@ responde, útil para decidir qué figura acompaña qué afirmación del texto.
           (ROE, ROA, margen neto, debt ratio) con las 5 empresas
           superpuestas. Candidato principal para la sección de resultados
           que describa la señal fundamental que ve el agente.
+  Sec. 5b Acciones en circulación, EPS y valoración (P/E, DY) — 5 paneles con
+          la serie de acciones en circulación reconstruida (muestra las
+          recompras/reducciones de ALICORC1 y SAGAC1 y las capitalizaciones de
+          CREDITC1) + 2 paneles con P/E y DY diarios del panel R6. Es la figura
+          de la señal de VALORACIÓN nueva (P/E, DY) que ve el agente; añadida
+          jul-2026 (ver 5.9).
   Sec. 6  Comparativa entre empresas — último trimestre disponible, barras
           side-by-side de los 4 ratios.
   Sec. 7  Heatmap de ratios — las 5 empresas x 84 trimestres, uno por
@@ -371,8 +471,10 @@ responde, útil para decidir qué figura acompaña qué afirmación del texto.
 ========================================================================
 8. LIMITACIONES Y TRABAJO PENDIENTE
 ========================================================================
-  - P/E y DY no implementados (ver 5.8); DY es la extensión de esfuerzo
-    más bajo si se retoma este trabajo.
+  - P/E y DY no implementados AÚN, pero ya NO por falta de fuente: ver 5.9,
+    que revierte 5.8. La fuente de acciones se halló y validó (BVL listStock +
+    SMV Capital Emitido÷nominal, con BVN vía SEC); queda pendiente solo la
+    implementación en el pipeline, no una limitación de datos.
   - El cambio de moneda de BUENAVC1 (5.3) y el trimestre puntual de
     ALICORC1 (5.4) no tienen conversión de tipo de cambio; cualquier
     análisis que necesite montos absolutos comparables en una sola moneda

@@ -1,0 +1,453 @@
+HALLAZGOS Y METODOLOGÍA — DIVIDENDOS Y ACCIONES LIBERADAS DESDE LA BVL
+Descubrimiento de la fuente autoritativa de acciones corporativas en el mismo
+endpoint no documentado de la BVL (dataondemand.bvl.com.pe) ya usado para precios.
+Insumo para la redacción de la tesis (complemento de R3) y plan de implementación.
+Tesis: Aprendizaje por refuerzo profundo aplicado a la Bolsa de Valores de Lima (BVL)
+Autor: Rodrigo Holguin — Asesor: Dr. E. Villanueva
+Fecha de corte de este documento: julio 2026
+========================================================================
+
+Este documento complementa a:
+  - docs/hallazgos_mercado_R3.txt (descubrimiento del endpoint de precios)
+  - docs/pipeline_extraccion_datos.txt sección 2 (referencia técnica del pipeline)
+  - src/market/corporate_actions.py (capa actual de ajuste, basada en yfinance)
+
+IMPORTANTE (estado): ORIGINALMENTE este documento solo documentaba el sondeo.
+La implementación ya se ejecutó (jul-2026). Ver la sección 0 (ESTADO FINAL) al
+inicio y la sección 8 (checklist, ya marcado). El resto del documento conserva
+el sondeo original para trazabilidad.
+
+
+========================================================================
+0. ESTADO FINAL — IMPLEMENTADO Y VALIDADO (jul-2026)
+========================================================================
+La migración de acciones corporativas de yfinance a la BVL nativa está HECHA
+para los 5 activos y propagada a todo el pipeline (parquets de mercado,
+indicadores técnicos, dataset unificado R6 y notebook exploracion_datos_bvl).
+
+Cambios ejecutados:
+  - config.yaml: nuevo campo `bvl_company_code` por activo (12000/61200/21400/
+    75700/20601). Asset (src/universe.py) lo expone.
+  - src/market/fx.py (NUEVO): tipo de cambio USD/PEN del BCRP (serie diaria
+    PD04640PD, "venta - bancario"), cacheado en data/interim/fx_usdpen_bcrp.
+    parquet. Convierte a PEN los dividendos que la BVL declara en US$.
+  - src/market/corporate_actions.py: fetch_actions() ahora usa la BVL para los
+    5 activos vía fetch_bvl_benefits(cc, nemonico). Nueva align_splits_to_price()
+    (ver abajo). yfinance eliminado como fuente de acciones (se conserva SOLO
+    como enriquecimiento OHLC de CREDITC1/ALICORC1; ver sección 7, Rol 2).
+
+Validación:
+  - CREDITC1: las 13 acciones liberadas reproducen EXACTO los ratios validados
+    (1.14785, 1.24630, 1.20939, ...). ✔
+  - Se descubrió y CORRIGIÓ que yfinance entregaba los dividendos ya
+    split-ajustados: el pipeline viejo los volvía a dividir por el split
+    (doble ajuste) → CREDITC1 tenía el total-return SUBESTIMADO. Con la BVL
+    (dividendos crudos + un solo ajuste) queda correcto. Verificado:
+    BVL 0.23 (2012) / split 5.21 = 0.0441 = el valor que daba yfinance. ✔
+  - ALICORC1: los dividendos de yfinance venían inflados ×1.176 por reverse-
+    splits de 2025-2026 FUERA de horizonte (el mismo bug de OHLC de R3); como
+    ALICORC1 tenía is_split=False nunca se corregían → total-return
+    SOBREESTIMADO. Con la BVL (nominal real) queda correcto. ✔
+  - Diferencia old→new en el NIVEL de close_total_return: CREDITC1 mediana 3.4%,
+    ALICORC1 8.1%. NO es una regresión ni algo que preocupe, por tres razones:
+      (a) Es diferencia de NIVEL, no de la señal. El agente aprende de ret_1d
+          (retornos diarios) e indicadores, no del nivel absoluto; la corrección
+          de dividendos desplaza toda la serie de forma suave (factor acumulado).
+      (b) El ret_1d es IDÉNTICO en el 98.7% (CREDITC1) / 99.2% (ALICORC1) de los
+          días. Solo cambia en los ~30-44 días de dividendo/split.
+      (c) En esos días el nuevo es MÁS LIMPIO, no peor: la alineación de splits
+          eliminó los picos espurios de ±20-25% que el viejo tenía en cada split
+          (residuo del desfase ex-date). CREDITC1: días con |ret_1d|>15% bajan de
+          8 (viejo) a 2 (nuevo); p.ej. 2014-06-03 pasó de +25.07% (ficticio) a
+          -0.62%. La data vieja era la que metía ruido al agente.
+    Como esto ocurre en fase de datos (R3-R6, antes de entrenar en R8), no hay
+    experimentos aguas abajo que rehacer: el agente arranca con la data corregida.
+  - BUENAVC1/SAGAC1/CORAREC1 pasan de SIN ajuste a ajustados (flags
+    is_div_adjusted / is_split_adjusted = True). BUENAVC1: 23 dividendos US$→PEN.
+  - Sin NaN nuevos; el único salto >40% remanente es BUENAVC1 2020-09-21
+    (+46.9%), anomalía ya documentada en R3 (BUENAVC1 no tiene AL → no es un
+    split faltante).
+
+CORRECCIÓN a la sección 4 (cobertura): el endpoint /value devuelve UNA entrada
+listValue POR CADA CLASE de acción del emisor (p.ej. BUENAVC1 común + BUENAVI1
+inversión + BVN el ADR), y cada una REPITE la misma lista de beneficios. El
+sondeo original aplanaba todas → CONTÓ DOBLE/TRIPLE. Los conteos reales por
+instrumento (filtrando por el nemónico objetivo) son:
+    CREDITC1  13 AL + 21 DE   (=34, sin duplicación)
+    BUENAVC1  23 DE (US$)     (no 69; eran 3 clases × 23)
+    ALICORC1  17 DE           (no 34; 2 clases × 17)
+    SAGAC1     1 AL + 25 DE   (=26)
+    CORAREC1   3 AL + 40 DE (15 US$)  (no 6 AL + 80 DE; 2 clases × 43)
+fetch_bvl_benefits() ahora filtra por nemónico para evitar el doble conteo.
+
+ALINEACIÓN DE SPLITS (align_splits_to_price): la BVL fecha las acciones
+liberadas por dateCut (corte), que puede adelantarse 1-3 días hábiles al día en
+que el precio efectivamente cae (ex-date). Aplicar el factor CRSP en dateCut
+cuando el precio aún no cayó inyecta un salto artificial (caso real: CORAREC1
+dateCut 2012-06-12 con la caída de -28.8% recién el 2012-06-14 → aparecía un
++40% ficticio). Se alinea cada split al día real de la caída buscando, en una
+ventana alrededor de dateCut, el retorno overnight más cercano a la caída
+esperada (1/ratio − 1). Tras alinear, CREDITC1 queda SIN residuos >20% (mejora
+sobre R3, que documentaba residuos de hasta 28%).
+
+
+========================================================================
+1. MOTIVACIÓN
+========================================================================
+En el cierre de R3 (ver project_r3_corporate_actions y docs/hallazgos_mercado_R3)
+la capa de ajuste por acciones corporativas quedó con cobertura heterogénea y
+dependiente de una fuente EXTERNA (yfinance):
+
+  - CREDITC1, ALICORC1 : splits/dividendos desde yfinance (.LM).
+  - BUENAVC1           : SIN ajuste. BVN (Yahoo) es el ADR de NYSE en USD; sus
+                         splits/dividendos no corresponden a la acción en PEN.
+  - SAGAC1, CORAREC1   : SIN ajuste. Sin cobertura Yahoo; solo detección de
+                         saltos >40% para revisión manual, sin confirmación.
+
+Esto contradecía parcialmente el principio rector del proyecto ("la data de
+mercado debe ser un flujo sano y original de BVL/SMV antes que de fuentes
+externas"): las acciones corporativas —que afectan directamente el precio y,
+por tanto, la señal del agente— venían de Yahoo o simplemente no se aplicaban.
+
+Un dato externo motivó la revisión: existe un conector de terceros (un MCP
+publicado en Apify, "soyjb/bvl-peru-mcp") que envuelve el MISMO endpoint no
+documentado de la BVL (dataondemand.bvl.com.pe) y anuncia herramientas para
+"historial de dividendos" y "hechos de importancia". Esto sugería que la propia
+BVL exponía dividendos y acciones corporativas —algo que la tesis no había
+explorado porque el foco de R3 fue precios y el de R4 (fundamentales) topó con
+un endpoint distinto (financial-statements) que resultó inoperativo. La
+hipótesis: el endpoint de dividendos podría estar operativo aunque el de
+estados financieros no lo estuviera. Se decidió verificarlo antes de considerar
+pagar por un tercero.
+
+
+========================================================================
+2. CRONOLOGÍA DEL SONDEO (ingeniería inversa)
+========================================================================
+Se replicó la metodología de R3: descargar el bundle Angular público del sitio
+bvl.com.pe y extraer de él el mapa de endpoints, luego probarlos por método y
+parámetros contra dataondemand.bvl.com.pe. El sondeo quedó consolidado en un
+único script reproducible: scripts/probe_bvl_benefits.py (documenta y ejecuta el
+flujo completo). La secuencia lógica fue:
+
+2.1. Mapa de endpoints en el bundle (main.424ef7073179ffb58d4b.js)
+------------------------------------------------------------------------
+El bundle define explícitamente el mapa de servicios REST, con la base
+API_URL_2 = "https://dataondemand.bvl.com.pe":
+
+    S.company          = w + "/v1/issuers"
+    S.quotationHistory = w + "/v1/issuers/stock"
+    S.importantFact    = w + "/v1/corporate-actions"     ("Hechos de importancia")
+    S.finantial        = w + "/v1/financial-statements/"
+    S.share            = w + "/v1/stock-quote/share"
+    S.shareValues      = w + "/v1/stock-quote/share-values"   (el que ya usamos)
+    S.shareValuesName  = w + "/v1/stock-quote/share-value"
+    ...
+
+Además, el bundle tiene una sección de i18n "benefits" con exactamente el
+vocabulario de dividendos de la BVL: lastBenefits ("Últimos beneficios"),
+rights ("Derechos"), agreement ("Acuerdo"), cut ("Corte"), registry
+("Registro"), delivery ("Entrega"). Esto confirmaba que el sitio muestra un
+historial de beneficios (dividendos/acciones liberadas) por emisor.
+
+2.2. El endpoint /v1/corporate-actions ("Hechos de importancia") — NO resuelto
+------------------------------------------------------------------------
+Es un POST. Un GET a secas devuelve 405 (método no permitido). Con POST y
+distintos cuerpos siempre devolvió 500 con el mensaje
+"Regex string must not be null!" — es decir, el backend SÍ deserializa el
+cuerpo y construye una consulta, pero falta el nombre exacto de un campo que
+usa como filtro regex. Se probaron decenas de nombres (companyCode, rpjCode,
+nemonico, sector, description, type, etc.) sin dar con la combinación. NO se
+logró invocar. (Ver sección 6: por qué esto NO bloquea el objetivo.)
+
+2.3. Identificadores de la BVL: el punto que costó dar
+------------------------------------------------------------------------
+La búsqueda web del actor de Apify reveló el dato decisivo: la BVL usa TRES
+sistemas de identificación distintos para un mismo emisor, y cada endpoint
+exige uno específico:
+
+    nemónico (CREDITC1)  →  companyCode NUMÉRICO (12000)  →  rpjCode (B80005)
+
+  - nemónico   : el ticker bursátil. Lo usa share-values (precios).
+  - companyCode: código numérico interno del emisor. Lo usan /v1/issuers/* .
+  - rpjCode    : código del Registro Público de la SMV. Lo usan
+                 financial-statements y (aparentemente) corporate-actions.
+
+Los sondeos previos fallaban porque se enviaba el nemónico donde el endpoint
+esperaba el companyCode numérico.
+
+2.4. El endpoint que SÍ funciona: /v1/issuers/{companyCode}/value
+------------------------------------------------------------------------
+    GET /v1/issuers/{companyCode}         → detalle completo del emisor
+    GET /v1/issuers/{companyCode}/value   → listValue[].listBenefit[]
+
+El sub-recurso /value devuelve, por cada valor inscrito (listValue), su
+historial completo de beneficios (listBenefit): dividendos en efectivo Y
+acciones liberadas, nativo de la BVL. Funciona para los 5 activos.
+
+2.5. Resolución de los companyCode numéricos
+------------------------------------------------------------------------
+El endpoint de búsqueda (/v1/issuers/search) resultó poco útil: ignora el filtro
+de texto y devuelve siempre los primeros 25 emisores en orden alfabético. La
+resolución robusta fue: traer la lista completa con GET /v1/issuers (341
+emisores), filtrar por companyName, y CONFIRMAR con el detalle del emisor
+(el nemónico objetivo debe aparecer en su listValue). Resultado confirmado:
+
+    CREDITC1  → companyCode 12000  (rpjCode B80005)
+    BUENAVC1  → companyCode 61200  (rpjCode B20003)
+    ALICORC1  → companyCode 21400  (rpjCode B30006)
+    SAGAC1    → companyCode 75700  (rpjCode 014313)
+    CORAREC1  → companyCode 20601  (rpjCode CI0003)
+
+Los rpjCode observados coinciden exactamente con los ya registrados en
+config.yaml (validación cruzada del mapeo). Nota: existen homónimos que había
+que descartar por nombre — BANCO FALABELLA (cc 14150, rpj B80144) y ACTIVO
+INMOBILIARIO PERUANO / antes FALABELLA PERÚ (cc 74100) NO son SAGA FALABELLA;
+CAJA MUNICIPAL DE AREQUIPA y CONSORCIO INDUSTRIAL DE AREQUIPA NO son ACEROS
+AREQUIPA. La confirmación por nemónico en listValue evita estos falsos
+positivos.
+
+
+========================================================================
+3. ESTRUCTURA DE LOS DATOS (listBenefit)
+========================================================================
+Cada entrada de listBenefit tiene la forma (ejemplo real de CREDITC1):
+
+    {
+      "nemonico":      "CREDITC1",
+      "benefitType":   "DE",            // DE = Dividendo en Efectivo
+      "benefitValue":  "0.267",         // monto por acción (en `coin`)
+      "isin":          "PEP120001008",
+      "coin":          "S/.",           // S/. = PEN | US$ = USD
+      "dateAgreement": "2010-03-26",    // fecha de acuerdo (JGA)
+      "dateCut":       "2010-04-13",    // fecha de corte  (≈ ex-date)
+      "dateRegistry":  "2010-04-16",    // fecha de registro
+      "dateDelivery":  "2010-05-07",    // fecha de entrega/pago
+      "dateEntry":     "2010-03-29T...",
+      "secMovBe": null, "secMovDi": "21307", "notes*": null
+    }
+
+Tipos de beneficio observados (benefitType):
+    DE = Dividendo en Efectivo   → benefitValue = monto por acción en `coin`.
+    AL = Acciones Liberadas      → benefitValue = % de acciones nuevas.
+                                   Ratio de "split" = 1 + benefitValue/100.
+                                   (Ej: 14.785 → 1.14785)
+
+Semántica de fechas para el ajuste: la fecha relevante para el ajuste hacia
+atrás (convención CRSP) es dateCut (corte), que es el equivalente funcional de
+la ex-date usada hoy con yfinance. dateDelivery es cuándo se paga/entrega.
+
+
+========================================================================
+4. COBERTURA POR ACTIVO (extraído el 2026-07-06)
+========================================================================
+Todos los activos tienen historial desde ~2010 en adelante, lo que cubre por
+completo el horizonte EFECTIVO de mercado del dataset (2012-2025).
+
+  Nemónico  cc      #benef  Detalle                       Moneda        Rango (dateCut)
+  --------  -----   ------  ----------------------------  ------------  ----------------
+  CREDITC1  12000     34    21 DE  + 13 AL                S/.           2010-04 .. 2026-04
+  BUENAVC1  61200     69    69 DE                         US$           2010-04 .. 2026-04
+  ALICORC1  21400     34    34 DE                         S/.           2010-04 .. 2026-04
+  SAGAC1    75700     26    25 DE  +  1 AL                S/.           2010-06 .. 2025-12
+  CORAREC1  20601     86    80 DE  +  6 AL                S/.(56)+US$(30) 2010-11 .. 2026-04
+
+Observaciones:
+  - BUENAVC1 lista sus dividendos en US$ (el instrumento local paga en dólares).
+    Esto es coherente con que BVN sea el ADR: la acción BVL también reporta el
+    beneficio en USD. Antes NO teníamos NINGUNA fuente de ajuste para BUENAVC1;
+    ahora hay historial autoritativo (aunque en USD, a decidir su tratamiento).
+  - CORAREC1 mezcla dividendos en S/. y en US$ a lo largo del tiempo → requiere
+    política explícita de moneda en el cálculo de close_total_return.
+  - SAGAC1 y CORAREC1 tienen acciones liberadas (AL): son precisamente los
+    saltos overnight que hoy solo se "detectan" (>40%) sin confirmar. Ahora se
+    pueden confirmar y ajustar con la fuente de la BVL.
+
+
+========================================================================
+5. VALIDACIÓN: LAS ACCIONES LIBERADAS BVL == LOS "SPLITS" DE YFINANCE
+========================================================================
+Esta es la evidencia central que legitima la fuente. Para CREDITC1 (único
+activo con validación previa en R3, factor de split 2013-2023 ≈ 4.18), las 13
+acciones liberadas (AL) de la BVL reproducen EXACTAMENTE, evento por evento,
+los "splits" que hoy provee yfinance:
+
+  Fecha (BVL dateCut)  BVL benefitValue → (1+v/100)   yfinance .splits ratio
+  -------------------  ---------------------------    ----------------------
+  2010-06-30           14.785 → 1.14785               1.14785   (2010-07-01)
+  2012-05-31           24.63  → 1.2463                1.2463    (2012-06-01)
+  2013-06-28           20.939 → 1.20939               1.209391  (2013-07-01)
+  2014-06-02           25.852 → 1.25852               1.258522  (2014-06-03)
+  2015-05-29           23.954 → 1.23954               1.239542  (2015-06-01)
+  2016-06-01           20.709 → 1.20709               1.207087  (2016-06-02)
+  2017-06-07           12.269 → 1.12269               1.122693  (2017-06-08)
+  2018-06-21           10.551 → 1.10551               1.105506  (2018-06-22)
+  2019-06-13           16.499 → 1.16499               1.164989  (2019-06-17)
+  2020-09-10            8.319 → 1.08319               1.083191  (2020-09-11)
+  2021-11-08            2.259 → 1.02259               1.022588  (2021-11-09)
+  2022-08-09            7.590 → 1.07590               1.075899  (2022-08-10)
+  2023-08-08            6.544 → 1.06544               1.065439  (2023-08-09)
+
+Conclusión: yfinance NO es una fuente independiente; es un ESPEJO de esta misma
+fuente de la BVL (con un desfase de 1-2 días en la fecha, ya documentado en R3).
+La diferencia en el factor acumulado (5.98 desde BVL vs 10.36 desde yfinance) se
+explica ÍNTEGRAMENTE por dos splits pre-2010 (2008-12-01 ratio 1.172 y
+2009-08-03 ratio 1.477) que yfinance incluye y que quedan FUERA del horizonte de
+mercado 2012-2025; dentro del horizonte, ambas fuentes son idénticas.
+
+Corolario adicional: los dividendos en efectivo de CREDITC1 vienen marcados en
+"S/." en la BVL, lo que CONFIRMA el supuesto que hoy hace corporate_actions.py
+("la columna currency se asume PEN" al leer tk.dividends de yfinance).
+
+
+========================================================================
+6. EL ENDPOINT DE "HECHOS DE IMPORTANCIA" (no resuelto) NO BLOQUEA NADA
+========================================================================
+El endpoint /v1/corporate-actions ("Hechos de importancia") no se logró invocar
+(sección 2.2). Es importante separar dos cosas que la UI de la BVL muestra en
+pestañas distintas:
+
+  (a) Beneficios (dividendos + acciones liberadas)  → /v1/issuers/{cc}/value.
+      Son los eventos que AFECTAN EL PRECIO y, por tanto, los que necesita la
+      capa de ajuste (close_split_adj, close_total_return). ESTÁN 100%
+      disponibles y validados.
+
+  (b) Hechos de importancia (avisos regulatorios: convocatorias, cambios de
+      directorio, comunicados) → /v1/corporate-actions, con PDFs en
+      documents.bvl.com.pe. Es material NO estructurado y NO afecta directamente
+      el precio de forma mecánica. NO es necesario para el ajuste. Sería, a lo
+      sumo, un insumo alternativo/complementario para el módulo de SENTIMIENTO
+      (R5), no para mercado (R3).
+
+Por tanto, el objetivo del sondeo —conseguir dividendos y acciones corporativas
+estructuradas para el ajuste de precios— está CUMPLIDO. Resolver (b) queda como
+tarea opcional futura y probablemente requiera capturar el XHR real del sitio
+con la extensión de Chrome (no estaba conectada en esta sesión).
+
+
+========================================================================
+7. ¿SE PUEDE DESESTIMAR YFINANCE POR COMPLETO?
+========================================================================
+Respuesta corta: PARA ACCIONES CORPORATIVAS, SÍ, de forma definitiva y con
+ventaja. PARA EL ENRIQUECIMIENTO OHLC+VOLUMEN, todavía NO con lo confirmado hoy.
+Hay que distinguir los DOS roles que yfinance cumple en el pipeline actual:
+
+ROL 1 — Splits y dividendos (corporate_actions.fetch_actions)
+------------------------------------------------------------------------
+Reemplazable al 100% por /v1/issuers/{cc}/value, y ADEMÁS es superior:
+  + Fuente autoritativa BVL (coherente con "BVL/SMV manda sobre Yahoo").
+  + Cobertura de LOS 5 activos, no solo 2 (gana BUENAVC1, SAGAC1, CORAREC1).
+  + Validado idéntico a yfinance donde ambos existen (sección 5).
+  + Moneda explícita por evento (resuelve el supuesto "se asume PEN").
+Único matiz: definir el tratamiento de dividendos en USD (BUENAVC1 completo;
+CORAREC1 parcial) al construir close_total_return en PEN.
+
+ROL 2 — Enriquecimiento OHLC + volumen (market_client.fetch_yahoo /_merge)
+------------------------------------------------------------------------
+El endpoint de precios de la BVL (share-values) devuelve SOLO [fecha, cierre]
+(open=high=low=close, volume=NaN). Hoy, para CREDITC1 y ALICORC1 (mismo
+instrumento en PEN), Yahoo rellena open/high/low y volumen en las fechas donde
+la BVL ya tiene registro. Los otros 3 activos YA corren "close-only" hoy.
+
+Se sondearon los endpoints candidatos de la BVL para OHLC histórico y NINGUNO
+resolvió el rol 2 con lo probado:
+  - /v1/stock-quote/daily   → solo ticks intradía de la sesión ACTUAL (no hist.).
+  - /v1/stock-quote/share-value (singular) → 400 con todos los params probados.
+  - /v1/issuers/stock ("quotationHistory") → 400; existe pero requiere un
+    parámetro no descubierto (su consumidor no está en main.js, sino en un
+    "custom element" lazy que no se pudo inspeccionar en esta sesión).
+  - /v1/traded-amount/daily → devuelve solo el snapshot MÁS RECIENTE (ignora
+    el rango de fechas); no sirve como volumen histórico.
+  - No existen /v1/stock-quote/{candles,ohlc,history} (404).
+
+Implicancia de decisión (queda a criterio, ver sección 8):
+  Opción A — Dropear yfinance por completo AHORA:
+     todos los 5 activos quedan homogéneos "close-only" (open=high=low=close,
+     volume=NaN) + acciones corporativas BVL. Se pierde high/low intradía y
+     volumen para CREDITC1/ALICORC1. Dado que CREDITC1 es de muy baja liquidez
+     (~33k acc/día) y el agente opera sobre cierre diario, el valor informativo
+     de ese OHLC/volumen es marginal, y se gana homogeneidad y pureza de fuente.
+  Opción B — Dropear yfinance SOLO del rol 1 (acciones corporativas) y
+     conservarlo SOLO como enriquecimiento OHLC/volumen de CREDITC1/ALICORC1
+     hasta crackear /v1/issuers/stock. Mantiene la información intradía pero
+     conserva una dependencia externa acotada.
+  Opción C — Cerrar también el rol 2 con la BVL: crackear /v1/issuers/stock
+     (probablemente capturando el XHR real vía extensión de Chrome) y entonces
+     eliminar yfinance del todo con OHLC+volumen BVL nativo.
+
+Recomendación del análisis: Opción A o C según cuánto se valore el OHLC/volumen.
+Para una tesis que prioriza "fuente sana y original BVL", la Opción A es
+defendible y simplifica; la Opción C es la ideal si se logra el rol 2.
+
+
+========================================================================
+8. PLAN DE IMPLEMENTACIÓN (EJECUTADO jul-2026 — ver sección 0)
+========================================================================
+Todos los puntos [x] EJECUTADOS. Decisiones tomadas: 8.3 → dividendos US$
+convertidos a PEN con TC del BCRP (serie PD04640PD); 8.4 → Opción B (yfinance se
+conserva SOLO como enriquecimiento OHLC de CREDITC1/ALICORC1; el OHLC nativo BVL
+—Opción C— queda pendiente como mejora futura, pero es irrelevante porque el
+agente no usa OHLCV, ver docs/justificacion_cierre_vs_ohlcv.txt).
+
+[x] 8.1. config.yaml — añadir a cada activo del universo su companyCode BVL:
+        CREDITC1=12000, BUENAVC1=61200, ALICORC1=21400, SAGAC1=75700,
+        CORAREC1=20601. (Campo nuevo, p.ej. `bvl_company_code`, en Asset.)
+
+[ ] 8.2. src/market/corporate_actions.py — nueva fuente BVL de acciones:
+        - Función fetch_bvl_benefits(company_code) → GET /v1/issuers/{cc}/value,
+          aplanar listValue[].listBenefit[]. (Ya prototipada en
+          scripts/probe_bvl_benefits.py: fetch_benefits().)
+        - Mapear a las series que ya consume build_adjusted_prices():
+            splits    ← eventos AL, ratio = 1 + benefitValue/100, index=dateCut.
+            dividends ← eventos DE, monto = benefitValue, index=dateCut,
+                        con su `coin` asociado.
+        - Reemplazar _YAHOO_ACTIONS_TICKERS: fetch_actions() debe usar BVL para
+          LOS 5 activos (no solo CREDITC1/ALICORC1).
+        - filter_actions_by_cutoff() y toda la convención CRSP hacia atrás se
+          reutilizan sin cambios (las series de entrada son las mismas).
+
+[ ] 8.3. Política de moneda para close_total_return (decisión de tesis):
+        - BUENAVC1: dividendos en US$. Opciones: (i) convertir a PEN con TC de
+          la fecha de corte; (ii) construir el total-return en la moneda del
+          dividendo; (iii) documentar y dejar solo split-adj si no hay AL.
+        - CORAREC1: mezcla S/. y US$ → aplicar la misma política por evento.
+        - Registrar la decisión en pipeline_extraccion_datos.txt sección 2.7.
+
+[ ] 8.4. Rol 2 (OHLC/volumen) — elegir Opción A / B / C (sección 7):
+        - Si A: eliminar fetch_yahoo() y _merge_bvl_yahoo(); todos close-only.
+        - Si B: conservar fetch_yahoo() SOLO para OHLC/volumen (quitarle el
+          uso de .splits/.dividends, que pasan a BVL).
+        - Si C: crackear /v1/issuers/stock (capturar XHR con extensión Chrome)
+          antes de eliminar yfinance.
+
+[ ] 8.5. Revalidar tras el cambio:
+        - Reconstruir data/interim/market_{TICKER}.parquet para los 5.
+        - Confirmar que CREDITC1/ALICORC1 dan close_total_return equivalente al
+          actual (misma fuente de fondo → no debe haber regresión).
+        - Verificar que BUENAVC1/SAGAC1/CORAREC1 ahora SÍ tienen
+          is_split_adjusted / is_div_adjusted = True donde corresponde.
+        - Re-ejecutar los indicadores técnicos (se calculan sobre
+          close_total_return) y R6 (integración) aguas abajo.
+
+[ ] 8.6. Actualizar documentación:
+        - docs/hallazgos_mercado_R3.txt (nota de que la fuente de acciones
+          corporativas migró de yfinance a BVL nativa).
+        - docs/pipeline_extraccion_datos.txt sección 2.7.
+        - Memoria del proyecto: project_r3_corporate_actions y
+          project_bvl_dataondemand (esta última ya actualizada con el hallazgo).
+
+
+========================================================================
+9. REPRODUCIBILIDAD
+========================================================================
+Script consolidado: scripts/probe_bvl_benefits.py
+  - COMPANY_CODE      : mapa nemónico → companyCode confirmado.
+  - fetch_benefits(cc): descarga y aplana listBenefit de un emisor.
+  - resolve_company_code(nemo): resuelve el companyCode desde /v1/issuers.
+  - __main__          : imprime el resumen de cobertura de los 5 (sección 4).
+Ejecutar (Windows):
+  $py = "C:\Users\LENOVO\AppData\Local\Python\bin\python.exe"
+  $env:PYTHONPATH = "C:\tesis"; $env:PYTHONIOENCODING = "utf-8"
+  & $py -X utf8 scripts\probe_bvl_benefits.py
+
+Fin del documento.
