@@ -75,10 +75,16 @@ _FILING_LAG_DAYS = {1: 40, 2: 40, 3: 40, 4: 60}
 
 # --- known_date por FECHA REAL de presentación (BVL Hechos de Importancia) ---
 # Fuente preferida cuando existe: el registerDate del hecho "Información Financiera
-# Intermedia Individual" en POST /v1/corporate-actions de la BVL. Cobertura real
-# ~2018-2025; antes de eso se usa el lag fijo de arriba (fallback, causalmente
-# seguro). Validado en los 5 emisores: el lag fijo nunca adelanta al mercado pero
-# demora hasta ~5 semanas. Ver scripts/probe_bvl_hechos.py y riesgos §3(a).
+# Intermedia <Individual|Consolidada>" en POST /v1/corporate-actions de la BVL.
+# Cobertura real ~2018-2025; antes de eso se usa el lag fijo de arriba (fallback,
+# causalmente seguro). Validado en los 5 emisores: el lag fijo nunca adelanta al
+# mercado pero demora hasta ~5 semanas. Ver scripts/probe_bvl_hechos.py y riesgos §3(a).
+# CLAVE: el hecho debe corresponder al MISMO tipo de EEFF que se consume (`tipo`).
+# La consolidada NO siempre se presenta el mismo día que la individual: medido
+# jul-2026, en INRETC1 (el único activo con smv_tipo="C") la consolidada llega
+# 9-19 días DESPUÉS (mediana 14) en 30/30 trimestres, mientras que en ALICORC1 y
+# CREDITC1 el gap es 0/30 y 0/26 días. Fechar cifras consolidadas con el hecho
+# "Individual" inyectaría ~2 semanas de look-ahead por trimestre.
 _BVL_DOD = "https://dataondemand.bvl.com.pe"
 _BVL_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120",
@@ -97,8 +103,10 @@ _MONTH_ABBR = {"ene": 1, "feb": 2, "mar": 3, "abr": 4, "may": 5, "jun": 6,
                "jul": 7, "ago": 8, "set": 9, "sep": 9, "oct": 10, "nov": 11,
                "dic": 12}
 _QEND_MONTH = {3: 1, 6: 2, 9: 3, 12: 4}
-_EEFF_OBS_RE = re.compile(
-    r"intermedia individual al\s+(\d{1,2})-([a-zA-Z]{3})-(\d{4})")
+_EEFF_OBS_RE = {   # tipo de EEFF consumido -> patrón del hecho que lo divulga
+    "I": re.compile(r"intermedia individual al\s+(\d{1,2})-([a-zA-Z]{3})-(\d{4})"),
+    "C": re.compile(r"intermedia consolidada al\s+(\d{1,2})-([a-zA-Z]{3})-(\d{4})"),
+}
 
 # Operaciones SMV y cómo mapear sus campos Monto al formato largo
 _SMV_OPS: dict[str, tuple[str, dict[str, str]]] = {
@@ -209,16 +217,20 @@ def _bvl_fetch_hechos(
 
 
 def _load_filing_dates(
-    asset: Asset, start: str, end: str, cache_dir: Path | None
+    asset: Asset, start: str, end: str, cache_dir: Path | None, tipo: str = "I"
 ) -> dict[tuple[int, int], date]:
     """Mapa (año, trimestre) -> known_date real, a partir del registerDate del
-    hecho 'Información Financiera Intermedia Individual' (Tipo=I, lo que consume
-    el pipeline). Aplica la regla de cierre (+1 día si se registró >= 15:00),
-    toma la PRIMERA divulgación por trimestre y descarta fechas absurdas.
+    hecho 'Información Financiera Intermedia <Individual|Consolidada>' que
+    corresponde al `tipo` de EEFF que el pipeline realmente consume (ver nota de
+    los patrones _EEFF_OBS_RE: en INRETC1 la consolidada se divulga ~2 semanas
+    después de la individual, así que cruzar los tipos sería look-ahead).
+    Aplica la regla de cierre (+1 día si se registró >= 15:00), toma la PRIMERA
+    divulgación por trimestre y descarta fechas absurdas.
     Devuelve {} si no hay rpj o si el fetch falla -> el pipeline usa lag fijo."""
     rpj = getattr(asset, "smv_rpj", None)
     if not rpj:
         return {}
+    pattern = _EEFF_OBS_RE.get(tipo, _EEFF_OBS_RE["I"])
     try:
         facts = _bvl_fetch_hechos(rpj, start, end, cache_dir)
     except Exception as exc:
@@ -227,7 +239,7 @@ def _load_filing_dates(
 
     out: dict[tuple[int, int], date] = {}
     for f in facts:
-        m = _EEFF_OBS_RE.search((f.get("observation") or "").lower())
+        m = pattern.search((f.get("observation") or "").lower())
         if not m:
             continue
         mon = _MONTH_ABBR.get(m.group(2).lower())
@@ -386,7 +398,7 @@ def fetch_smv(
     start: str,
     end: str,
     cache_dir: Path | None = None,
-    tipo: str = "I",
+    tipo: str | None = None,
     use_filing_dates: bool = True,
 ) -> pd.DataFrame:
     """Descarga EEFF trimestrales de la SMV para un activo.
@@ -397,7 +409,13 @@ def fetch_smv(
         start:     fecha inicio ISO (p.ej. "2005-01-01")
         end:       fecha fin ISO (p.ej. "2025-12-31")
         cache_dir: directorio para caché en disco de respuestas crudas
-        tipo:      "I" (Individual) o "C" (Consolidada)
+        tipo:      "I" (Individual) o "C" (Consolidada). Si es None se toma de
+                   `asset.smv_tipo` (config.yaml) y, en su defecto, "I". El
+                   único activo del universo que EXIGE "C" es INRETC1: InRetail
+                   es un holding y su EEFF individual reporta pérdida (el
+                   negocio está en las subsidiarias), lo que dejaría el P/E en
+                   NaN. La caché de disco está indexada por tipo
+                   (op_year_Q_tipo.json), así que "I" y "C" coexisten.
         use_filing_dates: si True, known_date usa la fecha REAL de presentación
                    (BVL Hechos de Importancia) cuando existe, con fallback al
                    lag fijo. Si False, siempre lag fijo.
@@ -419,16 +437,20 @@ def fetch_smv(
         print(f"[SMV] {asset.bvl}: no se pudo cargar el WSDL ({exc})")
         return pd.DataFrame(columns=FUNDAMENTALS_SCHEMA)
 
+    tipo = tipo or asset.smv_tipo or "I"
     periods = _quarter_periods(start, end)
-    print(f"[SMV] {asset.bvl}: {len(periods)} periodos ({start} -> {end})")
+    print(f"[SMV] {asset.bvl}: {len(periods)} periodos ({start} -> {end}), "
+          f"tipo={tipo} ({'Consolidado' if tipo == 'C' else 'Individual'})")
 
     # Fechas REALES de presentación (BVL) para known_date; {} => solo lag fijo.
     filing_dates: dict[tuple[int, int], date] = {}
     if use_filing_dates:
-        filing_dates = _load_filing_dates(asset, start, end, cache_dir)
+        # El hecho de importancia consultado debe ser del MISMO tipo (I/C) que los
+        # EEFF que se descargan; ver _load_filing_dates.
+        filing_dates = _load_filing_dates(asset, start, end, cache_dir, tipo=tipo)
         n_real = sum(1 for p in periods if p in filing_dates)
-        print(f"[SMV] {asset.bvl}: known_date real (BVL) en {n_real}/{len(periods)} "
-              f"periodos; resto usa lag fijo (40/60d).")
+        print(f"[SMV] {asset.bvl}: known_date real (BVL, hecho tipo {tipo}) en "
+              f"{n_real}/{len(periods)} periodos; resto usa lag fijo (40/60d).")
 
     all_rows: list[dict] = []
 
@@ -492,6 +514,15 @@ _CAPITAL_ACCTS = ("BG_1D0701", "BG_1F3301")
 _TREASURY_ACCTS = ("BG_1D0711", "BG_1F3314")
 _QMONTH = {"03": 1, "06": 2, "09": 3, "12": 4}
 
+# Conteo oficial de acciones LISTADAS (Informe Bursátil Mensual de la BVL). Es la
+# fecha correcta de reconocimiento: mientras las acciones nuevas no estén listadas
+# no están en el mercado. Ver docs/ejecutabilidad_y_costos_OE1.txt §4.5(b) y §8.
+# La ruta debe coincidir con bvl_infmen._CACHE (lo genera scripts/gen_bvl_mensual.py);
+# no se importa arriba porque src.market.__init__ arrastra market_client entero.
+_BVL_MENSUAL_CACHE = Path("data/interim/bvl_mensual.parquet")
+_BVL_MENSUAL_DF: pd.DataFrame | None = None
+_BVL_MENSUAL_TRIED = False
+
 
 def _detect_net_income_ytd_account(df: pd.DataFrame) -> str | None:
     """Devuelve la cuenta YTD de Utilidad Neta del Estado de Resultados.
@@ -538,16 +569,108 @@ def _ytd_to_quarterly(ytd: pd.Series) -> pd.Series:
     return pd.Series(out).sort_index()
 
 
+def _shares_from_schedule(schedule: tuple[tuple[str, int], ...],
+                          periods: list[str], ticker: str = "") -> pd.Series:
+    """Conteo de acciones por periodo a partir de un calendario por TRAMOS.
+
+    `schedule` = ((fecha_desde ISO, conteo), ...): cada entrada rige desde ese
+    periodo (inclusive) hasta el inicio del tramo siguiente — una función
+    escalonada, no una interpolación (un follow-on o una escisión cambia el
+    conteo de golpe en una fecha, no gradualmente).
+
+    Periodos ANTERIORES al primer tramo toman el conteo más antiguo declarado
+    (misma convención que un override constante) y se avisa por consola.
+    """
+    sched = sorted((str(desde), float(conteo)) for desde, conteo in schedule)
+    inicios = pd.DatetimeIndex([pd.Timestamp(d) for d, _ in sched])
+    conteos = [c for _, c in sched]
+
+    pos = inicios.searchsorted(pd.DatetimeIndex(periods), side="right") - 1
+    previos = int((pos < 0).sum())
+    if previos:
+        print(f"[shares] {ticker}: {previos} periodo(s) anteriores al primer tramo "
+              f"({sched[0][0]}) -> se usa el conteo más antiguo ({conteos[0]:,.0f}).")
+    valores = [conteos[max(p, 0)] for p in pos]
+    return pd.Series(valores, index=periods, dtype=float)
+
+
+def _bvl_mensual() -> pd.DataFrame | None:
+    """Panel mensual oficial de la BVL (caché en disco), o None si no está.
+
+    Se lee SOLO del parquet ya generado (scripts/gen_bvl_mensual.py): construirlo
+    aquí dispararía la descarga de ~174 PDF en medio del pipeline de R4.
+    """
+    global _BVL_MENSUAL_DF, _BVL_MENSUAL_TRIED
+    if _BVL_MENSUAL_TRIED:
+        return _BVL_MENSUAL_DF
+    _BVL_MENSUAL_TRIED = True
+    if not _BVL_MENSUAL_CACHE.exists():
+        print(f"[shares] {_BVL_MENSUAL_CACHE} no existe -> se usa el capital del "
+              f"balance SMV (sin capa oficial de la BVL). "
+              f"Generarlo con scripts/gen_bvl_mensual.py.")
+        _BVL_MENSUAL_DF = None
+    else:
+        from src.market import bvl_infmen
+        _BVL_MENSUAL_DF = bvl_infmen.load_mensual(cache=_BVL_MENSUAL_CACHE)
+    return _BVL_MENSUAL_DF
+
+
+def _shares_listed_bvl(periods: list[str], ticker: str) -> pd.Series:
+    """Acciones EMITIDAS Y LISTADAS según la BVL, alineadas al mes de cierre de
+    cada periodo trimestral. NaN donde no hay dato oficial (antes de 2012-01,
+    después del último informe, o activo ausente del panel).
+
+    El conteo es una función ESCALONADA, así que el hueco de 2016-03 (tabla
+    rasterizada, ver §4.4 del doc de ejecutabilidad) se rellena con ffill sobre el
+    calendario mensual completo: es exacto, no una interpolación.
+    """
+    df = _bvl_mensual()
+    if df is None:
+        return pd.Series(float("nan"), index=periods, dtype=float)
+
+    serie = (df[df["nemonico"] == ticker]
+             .dropna(subset=["acciones_circulacion"])
+             .drop_duplicates("periodo", keep="last")
+             .set_index("periodo")["acciones_circulacion"]
+             .sort_index())
+    if serie.empty:
+        print(f"[shares] {ticker}: sin filas en el informe bursátil mensual "
+              f"-> se usa el capital del balance SMV.")
+        return pd.Series(float("nan"), index=periods, dtype=float)
+
+    # ffill SOLO dentro del rango cubierto por la fuente: fuera de él no hay
+    # información y debe caer al cálculo del balance, no arrastrar el último valor.
+    rango = pd.period_range(serie.index.min(), serie.index.max(), freq="M")
+    serie = serie.reindex(rango).ffill()
+
+    meses = pd.PeriodIndex([pd.Period(p, freq="M") for p in periods])
+    return pd.Series(serie.reindex(meses).to_numpy(), index=periods, dtype=float)
+
+
 def compute_shares_earnings(fundamentals: pd.DataFrame, asset) -> pd.DataFrame:
     """Deriva, por periodo, las acciones en circulación, la utilidad neta TTM
     (en PEN) y el EPS TTM de un activo, a partir de los EEFF del SMV.
 
-    Acciones en circulación = (Capital Emitido − |Acciones en Cartera|) / nominal,
-    en la base del propio periodo. Si el activo trae `shares_outstanding_override`
-    (BUENAVC1, capital SMV en USD sin nominal limpio), se usa ese conteo constante.
+    Acciones en circulación, por orden de precedencia:
+      1. `shares_outstanding_schedule` — calendario por TRAMOS, cuando el conteo
+         cambió y no se puede derivar del capital/nominal (INRETC1: sin valor
+         nominal por ser holding panameño, y un follow-on exacto en 2022-Q2).
+      2. `shares_outstanding_override` — conteo constante: capital SMV en USD sin
+         nominal limpio (BUENAVC1, ancla SEC) o acción de inversión cuyo capital no
+         divide por nominal (MINSURI1, override = total económico).
+      3. CONTEO HÍBRIDO — el caso general (resto del universo):
+             acciones = emitidas y LISTADAS (BVL, informe bursátil mensual)
+                        − |Acciones en Cartera| (tesorería SMV) / nominal
+         Cada fuente aporta lo que hace bien: la BVL da la FECHA de reconocimiento
+         correcta (el capital del balance se adelanta hasta 3 trimestres al listado
+         — CREDITC1 capitaliza utilidades cada año, sesgo de +2% a +26% en 15 de 54
+         trimestres) y el SMV da el AJUSTE correcto (la BVL cuenta acciones
+         emitidas sin descontar la tesorería — ALICORC1 2022). Sin dato oficial
+         (periodos previos a 2012) se cae a (Capital Emitido − tesorería)/nominal.
+         Ver docs/ejecutabilidad_y_costos_OE1.txt §4.5 y §8.
     Utilidad TTM = suma móvil de 4 trimestres aislados derivados de la serie YTD;
-    si la utilidad se reporta en USD (BUENAVC1) se convierte a PEN con el TC BCRP
-    a fin de trimestre (src/market/fx). EPS_TTM = UtilidadNeta_TTM / acciones.
+    si la utilidad se reporta en USD (BUENAVC1, MINSURI1) se convierte a PEN con el
+    TC BCRP a fin de trimestre (src/market/fx). EPS_TTM = UtilidadNeta_TTM / acciones.
     """
     df = fundamentals[fundamentals["ticker"] == asset.bvl]
     periods = sorted(df["period"].unique())
@@ -557,14 +680,30 @@ def compute_shares_earnings(fundamentals: pd.DataFrame, asset) -> pd.DataFrame:
     known = df.drop_duplicates("period").set_index("period")["known_date"]
 
     # --- acciones en circulación ---
-    if asset.shares_outstanding_override:
+    # Precedencia: calendario por tramos > override constante > capital/nominal.
+    if getattr(asset, "shares_outstanding_schedule", None):
+        shares = _shares_from_schedule(
+            asset.shares_outstanding_schedule, periods, asset.bvl)
+    elif asset.shares_outstanding_override:
         shares = pd.Series(float(asset.shares_outstanding_override), index=periods)
     else:
         cap = (df[df["account"].isin(_CAPITAL_ACCTS)]
                .set_index("period")["value"].reindex(periods))
         tes = (df[df["account"].isin(_TREASURY_ACCTS)]
                .set_index("period")["value"].abs().reindex(periods).fillna(0.0))
-        shares = (cap - tes) * 1000.0 / float(asset.nominal_value)
+        nominal = float(asset.nominal_value)
+        # CONTEO HÍBRIDO: emitidas y LISTADAS (BVL, fecha correcta de
+        # reconocimiento) − en cartera (tesorería SMV, ajuste correcto). El
+        # capital del balance se adelanta hasta 3 trimestres al listado y la BVL
+        # no descuenta la tesorería, así que cada fuente aporta lo suyo.
+        emitidas = _shares_listed_bvl(periods, asset.bvl)
+        tes_acc = tes * 1000.0 / nominal
+        del_balance = (cap - tes) * 1000.0 / nominal
+        shares = (emitidas - tes_acc).combine_first(del_balance)
+        n_fallback = int(emitidas.isna().sum())
+        if n_fallback:
+            print(f"[shares] {asset.bvl}: {n_fallback}/{len(periods)} periodo(s) "
+                  f"sin conteo oficial de la BVL -> capital del balance SMV.")
 
     # --- utilidad neta TTM (de la serie YTD, robusta a reexpresiones) ---
     ni_acct = _detect_net_income_ytd_account(df)
@@ -675,7 +814,8 @@ def compute_ratios(
     # Acciones en circulación + EPS TTM (insumos de P/E), si se conoce el activo.
     # El P/E final se calcula en el panel diario (build_dataset) porque necesita
     # el precio de cada fecha: P/E(t) = close_raw(t) / eps_ttm.
-    if asset is not None and (asset.nominal_value or asset.shares_outstanding_override):
+    if asset is not None and (asset.nominal_value or asset.shares_outstanding_override
+                              or getattr(asset, "shares_outstanding_schedule", None)):
         se = compute_shares_earnings(fundamentals, asset)
         if not se.empty:
             wide = wide.merge(se, on=["ticker", "period", "known_date"], how="left")
@@ -693,15 +833,20 @@ def fetch_fundamentals(
     start: str,
     end: str,
     raw_dir: Path,
+    tipo: str | None = None,
 ) -> pd.DataFrame:
-    """Orquesta SMV (primaria) con BVL dataondemand (secundaria, inoperativa)."""
+    """Orquesta SMV (primaria) con BVL dataondemand (secundaria, inoperativa).
+
+    `tipo`: "I"/"C" para forzar Individual/Consolidado; por defecto (None) se usa
+    el de config.yaml por activo (`asset.smv_tipo`, "C" en INRETC1) -- ver fetch_smv.
+    """
     raw_dir.mkdir(parents=True, exist_ok=True)
     fund = cfg_sources["fundamentals"]
 
     # Directorio de caché de respuestas SMV crudas (compartido entre activos)
     smv_cache = raw_dir / "smv_cache"
 
-    smv = fetch_smv(asset, fund["smv_wsdl"], start, end, cache_dir=smv_cache)
+    smv = fetch_smv(asset, fund["smv_wsdl"], start, end, cache_dir=smv_cache, tipo=tipo)
     if not smv.empty:
         out = raw_dir / f"fund_{asset.bvl}_smv.parquet"
         smv.to_parquet(out, index=False)

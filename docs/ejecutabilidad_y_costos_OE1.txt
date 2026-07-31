@@ -1,0 +1,542 @@
+EJECUTABILIDAD, LIQUIDEZ Y COSTOS — BASE DE EVIDENCIA PARA OE1
+Tesis: Aprendizaje por refuerzo profundo aplicado a la Bolsa de Valores de Lima
+Autor: Rodrigo Holguin — Asesor: Dr. E. Villanueva
+Fecha: julio 2026
+========================================================================
+
+QUÉ ES ESTE DOCUMENTO
+------------------------------------------------------------------------
+`decisiones_pendientes_OE1.txt` registra las decisiones de diseño del entorno
+(D1-D10) pero las deja abiertas. Tres de ellas —D7 costos de transacción y
+slippage, D8 manejo de is_no_trade, y el tope de capacidad— no se podían cerrar
+porque faltaba el DATO: la BVL no publica volumen en su endpoint diario y no
+teníamos con qué medir ni ejecutabilidad ni profundidad de mercado.
+
+Este documento reúne la evidencia levantada en julio de 2026 para cerrar ese
+hueco: qué fuentes se probaron, cuál se descartó y por qué, cuál quedó, y qué
+implica cada hallazgo para el diseño del entorno. Es el insumo empírico de D7 y
+D8; las decisiones se siguen tomando en `decisiones_pendientes_OE1.txt`.
+
+Complementa: riesgos_transversales_datos.txt (riesgo #1, iliquidez),
+justificacion_cierre_vs_ohlcv.txt (por qué el agente usa solo el cierre).
+
+
+========================================================================
+1. EL PROBLEMA DE PARTIDA
+========================================================================
+El pipeline de mercado (R3) toma el cierre diario del endpoint share-values de
+la BVL. Ese endpoint entrega SOLO el cierre: en `market_client.fetch_bvl` se
+fija `open = high = low = close` y `volume = NaN`. Sin volumen no se puede:
+
+  (a) acotar la capacidad del portafolio (qué tamaño de posición es realista),
+  (b) medir ejecutabilidad real (en qué días se podía transar de verdad),
+  (c) calibrar el impacto de mercado.
+
+Como sustituto veníamos usando el flag `is_stale` (cierre igual al día previo)
+como proxy de "no se negoció". Es un proxy POR DEFECTO, nunca validado.
+
+
+========================================================================
+2. YAHOO FINANCE: EVALUADO Y DESCARTADO COMO CANTIDAD AUTORITATIVA
+========================================================================
+Yahoo era la única fuente de volumen a mano. Los 5 activos nuevos del universo
+tienen ticker (.LM = Bolsa de Valores de Lima) con cobertura completa 2012-2025:
+FERREYC1.LM, CPACASC1.LM, MINSURI1.LM, INRETC1.LM, LUSURC1.LM.
+
+2.1 Lo que SÍ quedó validado
+  - Moneda correcta: la razón close Yahoo / close crudo BVL = 1.0000 en los 7
+    activos (482 días comunes 2024-25). INRETC1.LM viene en US$, igual que la
+    capa cruda de la BVL, así que la conversión de `market_client._to_pen`
+    (que se aplica a bvl Y a yah antes del merge) es correcta y `volume` no se
+    toca, como corresponde a un conteo de acciones.
+  - El volumen NO está fabricado. Pruebas estructurales:
+      * Ley de Benford sobre el primer dígito: MAD 0.0045-0.0068 (umbral de
+        conformidad cercana 0.006; aceptable 0.012).
+      * Solo 1-13% de los volúmenes son múltiplos de 100.
+      * Repeticiones consecutivas idénticas 1.4-2.0%, con racha máxima de 1-3
+        días: no hay relleno tipo forward-fill.
+
+2.2 Lo que lo INVALIDA
+  (i) No reconcilia con el dato oficial. La BVL publica el volumen del ÚLTIMO
+      día en GET /v1/issuers/{cc}/value -> listLastValue.quantityNegotiated.
+      El 2026-07-27, con el cierre coincidiendo EXACTO en los 7 activos:
+        Minsur     oficial   453,425  Yahoo    71,976   razón 0.16x
+        InRetail   oficial    28,347  Yahoo     4,832   razón 0.17x
+        Pacasmayo  oficial   198,073  Yahoo    36,355   razón 0.18x
+        Ferreycorp oficial   817,898  Yahoo 1,343,977   razón 1.64x
+        Luz delSur oficial       386  Yahoo     1,978   razón 5.12x
+      Descartadas las dos explicaciones benignas: NO es desfase de fecha
+      (ninguna fecha vecina reproduce el número) ni cambio de unidad (la razón
+      no es constante, va de 0.16 a 5.12).
+  (ii) Ceros contradictorios. En 5.1%-15.4% de los días en que el precio de la
+      BVL CAMBIÓ, Yahoo reporta volumen 0 — físicamente imposible si el dato
+      fuera completo. No es ruido de redondeo: el |retorno| mediano de esos días
+      (0.77%-1.37%) es igual al del conjunto (0.81%-1.43%). Están repartidos en
+      todos los años; en LUSURC1 EMPEORAN al final (44 días en 2024, 42 en 2025).
+  (iii) Relación volumen-volatilidad casi ausente: Spearman(|ret|, volumen)
+      = 0.00-0.13 y mediana Q4/Q1 = 1.00 en Minsur, BCP e InRetail (excluyendo
+      retornos exactamente 0). En un mercado real esa relación es marcada.
+  (iv) Filas fantasma: ~93-103 filas por ticker en fechas que la BVL no cotizó
+      (p.ej. 28-29 de julio, Fiestas Patrias, con el cierre arrastrado), de las
+      cuales 6-19 traen volumen > 0. Inocuas para el panel porque
+      `build_trading_calendar` usa la BVL como calendario, pero confirman que el
+      feed no es limpio.
+
+2.3 Consecuencias
+  - NO usar el volumen de Yahoo como cantidad negociada autoritativa.
+  - NO redefinir is_no_trade / is_stale sobre ese volumen: el punto (ii) prueba
+    que un 0 de Yahoo no significa "no se negoció". (Esta era una idea que
+    parecía razonable y la evidencia la descartó.)
+  - No se cargan los tickers Yahoo de los 5 activos nuevos en config.yaml: el
+    OHLC no lo usa el agente (solo close_total_return) y el volumen introduciría
+    una columna que invita a confiar en ella.
+  Scripts: probe_yahoo_nuevos.py, probe_yahoo_moneda.py,
+  probe_yahoo_confiabilidad.py, probe_yahoo_vol_offset.py,
+  probe_yahoo_vol_diagnostico.py.
+
+
+========================================================================
+3. LAS PUNTAS (BID/ASK) SÍ SON OBSERVABLES — CORRIGE UN SUPUESTO DEL PLAN
+========================================================================
+El plan de tratamiento del riesgo #1 asumía que el spread NO era observable
+("el endpoint de la BVL da solo cierre, sin puntas") y que había que declararlo
+como supuesto. Es FALSO: el mismo listLastValue trae `buy` y `sell`.
+
+Spread relativo (sell-buy)/mid observado el 2026-07-27:
+    ALICORC1  0.08%      INRETC1   0.13%      MINSURI1  0.14%
+    CPACASC1  0.63%      FERREYC1  0.70%      CREDITC1  1.65%
+    LUSURC1   2.20%
+
+  => Costo de ida y vuelta solo por spread: 8 a 220 puntos básicos.
+
+IMPLICACIÓN DIRECTA PARA D7: la grilla de break-even planeada (0/25/50/100 pbs)
+SE QUEDA CORTA. Debe extenderse al menos a 250 pbs para cubrir el peor activo
+del universo. Cruzar el spread de Luz del Sur una vez ya cuesta ~110 pbs.
+
+LIMITACIÓN: es un snapshot de un momento, no una serie. Un colector diario de
+listLastValue construiría la serie hacia adelante (volumen + puntas), pero no
+reconstruye 2012-2025. `amount / quantityNegotiated` da además el VWAP implícito
+del día, útil para contrastar el cierre con el precio efectivamente negociado.
+
+
+========================================================================
+4. FUENTE OFICIAL ADOPTADA: INFORME BURSÁTIL MENSUAL DE LA BVL
+========================================================================
+4.1 Acceso y cobertura
+  URL predecible: https://documents.bvl.com.pe/pubdif/infmen/M{YYYY}_{MM}.pdf
+  174 PDF descargados (186 MB) en data/raw/bvl_infmen/, 2012-01 a 2026-06.
+  Módulo: src/market/bvl_infmen.py   Script: scripts/gen_bvl_mensual.py
+  Salida: data/interim/bvl_mensual.parquet
+
+4.2 Qué publica, por EMISOR y por MES (20 columnas)
+  acciones_circulacion | valor_nominal | capitalizacion | valor_contable |
+  ISIN | nemónico | CANTIDAD NEGOCIADA | MONTO EFECTIVO S/ | MONTO EFECTIVO US$ |
+  % del total | N° DE OPERACIONES | FRECUENCIA (%) | apertura | cierre | máxima |
+  mínima | promedio | C.M.T. | rotación | rendimiento mensual
+
+  Las tres que cierran el hueco de OE1:
+    - `monto_pen`  : monto efectivamente negociado en el mes (S/), oficial.
+    - `frecuencia` : % de sesiones del mes CON NEGOCIACIÓN. Es la medida
+                     correcta de ejecutabilidad.
+    - `rotacion`   : % del flotante que rotó en el mes.
+
+4.3 Parseo — tres defectos encontrados y corregidos
+  El formato de columnas es IDÉNTICO entre 2013 y 2025, pero la extracción tiene
+  trampas que se detectaron al validar (no se dieron los datos por buenos):
+
+  (a) FILTRO POR ENCABEZADO. La primera versión exigía "RENTA VARIABLE" en el
+      texto de la página, pero en los informes de 2021 ese título aparece SOLO en
+      la primera página de la tabla; las de continuación quedaban fuera y
+      sobrevivía únicamente BCP (sección bancos, primera página). Costaba 5 meses
+      × 6 activos. Corregido: la fila se identifica por su FORMA (bloque numérico
+      + ISIN + nemónico + 14 campos), no por el título de la página.
+
+  (b) FUENTE SIN MAPA UNICODE. En 2016 y 2019 pdfplumber devuelve los glifos
+      crudos como "(cid:NN)". El desplazamiento es constante, cid = ASCII − 29,
+      verificado: "(cid:28)(cid:21)(cid:24)(cid:15)(cid:27)(cid:21)(cid:21)" ->
+      "925,822". Con la decodificación, 2019-03 se recupera completo.
+
+  (c) CONTAMINACIÓN SILENCIOSA POR EL ACUMULADO. El informe incluye además una
+      tabla ACUMULADA trimestral/semestral con las MISMAS columnas. Sin
+      discriminador, en los meses donde la tabla mensual falla se colaría un
+      trimestre haciéndose pasar por un mes — un error que no habría dado ninguna
+      señal. Discriminador limpio: las filas del acumulado traen la FECHA del
+      máximo/mínimo ("1.47 31/03"); la mensual no. Se rechaza toda fila con un
+      token dd/mm.
+
+  Verificación tras los arreglos: 2021-01, 2024-09 y 2019-03 pasan de 0 filas a
+  7/7 activos; 2013-06 y 2025-06 devuelven valores idénticos a los previos (sin
+  regresión).
+
+4.4 Huecos declarados
+  - 2016-03: la tabla mensual está rasterizada (sin capa de texto) y da 0 filas.
+    Es el comportamiento CORRECTO: el filtro (c) impidió sustituirla por el
+    acumulado del trimestre. 1 mes de 174 (0.6%). Recuperable con OCR si hiciera
+    falta; irrelevante para métricas mensuales de capacidad y liquidez.
+  - Granularidad MENSUAL. Alcanza para capacidad y para medir ejecutabilidad,
+    pero NO es una serie diaria de volumen — esa no existe en ninguna fuente
+    disponible salvo el último día vía listLastValue.
+
+4.5 Validación del conteo de acciones (script: scripts/valida_acciones_bvl.py)
+  El P/E del panel es close_raw / eps_ttm con eps_ttm = utilidad_TTM / acciones, y
+  hasta ahora el conteo NO tenía ningún contraste externo. Ahora sí.
+
+  Coincidencia exacta con el snapshot de config.yaml en 2025-06 (Ferreycorp
+  946,063,288; Pacasmayo 423,868,449; Minsur 961,000,840; InRetail 108,746,887;
+  Luz del Sur 486,951,371). El conteo dista de ser constante: BCP registra 13
+  cambios (2,558M -> 12,973M por capitalización anual de utilidades), Ferreycorp 8,
+  Pacasmayo 3 (incluye -20.24% en 2017-02), Alicorp 4; solo Minsur y Luz del Sur
+  son planos.
+
+  CONTRASTE CONTRA EL PIPELINE (donde ya hay fundamentales en disco):
+      CREDITC1  |dif| mediana 0.00%, máx 25.85% (2014-03), 72% de periodos <1%
+      ALICORC1  |dif| mediana 0.00%, máx 10.00% (2022-12), 76% de periodos <1%
+      INRETC1   |dif| mediana 2.19%,                        28% de periodos <1%
+
+  CONCLUSIÓN IMPORTANTE — NO son errores del pipeline, son DEFINICIONES DISTINTAS.
+  Se investigaron las dos discrepancias grandes en vez de dar por buena la fuente
+  oficial:
+
+  (a) TESORERÍA (caso Alicorp). Verificado en los EEFF: capital emitido
+      847,192 constante con acciones en cartera 0 -> -27,069 (2022-09) ->
+      -84,719 (2022-12), y recién en 2024-03 el capital baja a 762,473 con
+      tesorería de vuelta en 0. Es decir: Alicorp recompró en 2022 y ANULÓ
+      formalmente en 2024. El pipeline resta la tesorería de inmediato (762,473,
+      que es exactamente su cifra); la BVL sigue contando las acciones EMITIDAS
+      hasta la reducción de capital.
+      => Para EPS, NETO DE TESORERÍA ES LO CORRECTO: las acciones en cartera no
+      participan de la utilidad. AQUÍ EL PIPELINE ES MEJOR QUE EL DATO OFICIAL.
+      (Corolario: la `capitalizacion` que publica la BVL sobrestima cuando hay
+      tesorería, porque multiplica por el conteo emitido.)
+
+  (b) FECHA DE RECONOCIMIENTO (caso BCP). El pipeline toma el capital del balance
+      al 2014-03-31, que ya recoge la capitalización aprobada; la BVL lista las
+      acciones nuevas en 2014-06. El pipeline se adelanta hasta un trimestre.
+      => Aquí manda la BVL: mientras no estén listadas no están en el mercado.
+      Efecto: en el trimestre del salto el EPS queda subestimado y el P/E
+      sobrestimado (~26% en el peor caso), y se REPITE cada año porque BCP
+      capitaliza utilidades anualmente. Es un sesgo acotado y recurrente que
+      conviene declarar; corregirlo exigiría alinear el conteo a la fecha de
+      listado de la BVL en vez de a la del balance.
+
+  RECOMENDACIÓN: usar la serie oficial como CAPA DE VALIDACIÓN y para InRetail,
+  NO como reemplazo general del cálculo del pipeline — en los casos de tesorería
+  el reemplazo introduciría un error en vez de quitarlo.
+
+  INRETAIL — CORREGIDO EN config.yaml. Su conteo no se puede derivar de
+  capital÷nominal (holding panameño sin valor nominal), así que el schedule era la
+  única vía y su primer tramo era una RECONSTRUCCIÓN (100,556,000). La serie
+  oficial da:  2012-09  79,807,319 (pre-IPO) | 2012-10  102,807,319 (IPO) |
+  2022-04  108,746,887 (follow-on).
+  Dos correcciones: (i) el tramo pre-2022 pasa a 102,807,319 — la reconstrucción
+  erraba -2.19%, ALGO POR ENCIMA del "<=2%" que se había declarado; (ii) el
+  escalón se fecha en abril 2022 y no en 2022-06-30 (mismo efecto sobre periodos
+  trimestrales, pero es el dato exacto). La limitación queda ELIMINADA.
+
+
+========================================================================
+5. LO QUE ESTO CAMBIA PARA EL DISEÑO DE OE1
+========================================================================
+5.1 D8 (is_no_trade): el proxy actual SUBESTIMA la ejecutabilidad
+  `1 − is_stale` mide días con precio DISTINTO. `frecuencia` mide días con
+  NEGOCIACIÓN. La segunda es mayor que la primera porque se puede operar sin
+  mover el precio. Consecuencia de diseño: prohibir transar en todos los días
+  `is_stale` es MÁS CONSERVADOR de lo necesario y le quita al agente días
+  genuinamente operables.
+  Recomendación: mantener `is_no_trade` (cero cotización) como restricción dura,
+  y tratar `is_stale` como señal de baja liquidez —vía costo, no vía prohibición—
+  calibrada con la `frecuencia` oficial del mes correspondiente.
+  [Cuadro comparativo por activo: sección 6.]
+
+5.2 D7 (costos): el spread deja de ser un supuesto libre
+  Rango observado 8-220 pbs de ida y vuelta. La grilla de break-even debe
+  extenderse a ~250 pbs. El spread es específico por activo y difiere en un orden
+  de magnitud entre ellos (Alicorp 0.08% vs Luz del Sur 2.20%), así que un costo
+  ÚNICO para todo el universo es una simplificación que hay que declarar o evitar.
+
+5.3 Capacidad: deja de ser supuesto y pasa a ser dato
+  Con `monto_pen` y `frecuencia` se obtiene el monto negociado por día operado, y
+  de ahí el tope de posición a un % de participación de mercado dado.
+  [Cuadro de capacidad: sección 6.]
+
+5.4 El aguijón, ahora cuantificado
+  El riesgo no es que la iliquidez no se pueda modelar: es que el tratamiento
+  honesto PUEDE BORRAR LA VENTAJA. Con spreads de 8-220 pbs y los montos diarios
+  de la sección 6, si el edge solo aparece a costo ~0 el hallazgo pasa a ser "no
+  hay ventaja económicamente explotable en la BVL con estas señales" — legítimo y
+  reportable, pero cambia la narrativa de la tesis. Conviene decirlo ANTES de
+  escribir conclusiones, no después.
+
+
+========================================================================
+6. CUADROS DE LIQUIDEZ Y CAPACIDAD
+========================================================================
+Fuente: data/interim/bvl_mensual.parquet (173 meses, 2012-01..2026-06).
+Script: scripts/analiza_capacidad_oe1.py. Todas las cifras son MEDIANAS sobre los
+meses del horizonte. Calendario: mediana de 21 sesiones/mes.
+
+6.1 EJECUTABILIDAD: frecuencia oficial vs el proxy que usamos hoy
+  activo      frec. oficial   proxy 1−is_stale    brecha   rotación/mes
+  ALICORC1        100.0%           75.9%         +24.1 pp     0.660%
+  FERREYC1        100.0%           73.5%         +26.5 pp     1.450%
+  CPACASC1         95.5%           72.1%         +23.4 pp     0.650%
+  INRETC1          95.2%           63.1%         +32.1 pp     0.475%
+  MINSURI1         95.0%           64.9%         +30.1 pp     0.700%
+  LUSURC1          90.5%           56.5%         +34.0 pp     0.130%
+  CREDITC1         90.5%           58.6%         +31.9 pp     0.010%
+
+  HALLAZGO: el proxy subestima la ejecutabilidad entre 23 y 34 puntos
+  porcentuales. El universo es MUCHO más operable de lo que creíamos: el piso
+  real es 90.5% de las sesiones, no 56.5%. Prohibir transar en todo día `is_stale`
+  le quitaría al agente cerca de un tercio de sus días operables.
+
+6.2 ¿INVALIDA ESTO LA SELECCIÓN DE UNIVERSO? NO — verificado
+  El universo se eligió con el proxy sesgado, así que había que comprobar si el
+  sesgo cambiaba el orden. Frecuencia OFICIAL de los descartados y candidatos:
+      VOLCABC1 100.0% | FERREYC1 100.0% | CASAGRC1 100.0% | ALICORC1 100.0%
+      CPACASC1  95.5% | INRETC1   95.2% | UNACEMC1  95.0% | MINSURI1  95.0%
+      LUSURC1   90.9% | CREDITC1  90.5% | AENZAC1   58.5%
+      CORAREC1  35.0% (descartado) | BUENAVC1 25.0% (descartado) | SAGAC1 9.1% (descartado)
+  El ORDEN se preserva y la brecha con los descartados es aún más nítida en
+  dinero: SAGAC1 negoció S/52,212 al mes contra S/2.5-44 MM de los elegidos. La
+  decisión de universo SE SOSTIENE; lo que estaba mal era el NIVEL de la métrica,
+  no el ranking.
+
+  MATIZ IMPORTANTE: frecuencia y PROFUNDIDAD son dimensiones distintas. CASAGRC1
+  tiene 100% de frecuencia pero solo S/1.96 MM al mes. Para capacidad manda el
+  monto, no la frecuencia.
+
+6.3 CAPACIDAD: monto negociado y trade diario máximo
+  activo      S/ negoc./mes   días op.   S/ por día operado   p25 (meses malos)
+  INRETC1        43,720,265     20.0          2,175,409           1,307,788
+  ALICORC1       43,744,345     21.0          2,141,411           1,371,502
+  FERREYC1       29,976,611     21.0          1,405,830             989,096
+  CPACASC1       16,432,147     20.0            823,902             495,700
+  MINSURI1       12,920,341     20.0            657,179             301,394
+  LUSURC1         5,656,088     19.0            311,757              65,842
+  CREDITC1        2,602,310     19.0            131,322              94,007
+
+  Trade diario máximo = participación × S/ por día:
+  activo          1%          5%         10%
+  INRETC1     21,754     108,770     217,541
+  ALICORC1    21,414     107,071     214,141
+  FERREYC1    14,058      70,291     140,583
+  CPACASC1     8,239      41,195      82,390
+  MINSURI1     6,572      32,859      65,718
+  LUSURC1      3,118      15,588      31,176
+  CREDITC1     1,313       6,566      13,132
+
+6.4 TAMAÑO DE POSICIÓN SOSTENIBLE
+  ADVERTENCIA METODOLÓGICA: el monto por día acota el TRADE diario, no el tamaño
+  del portafolio. Para pasar de uno al otro hace falta un supuesto de salida
+  explícito. Aquí: "la posición debe poder liquidarse en N sesiones tomando el 10%
+  del volumen diario" — el criterio estándar de capacidad, con el supuesto a la
+  vista en vez de escondido en una multiplicación.
+
+  activo      pos. máx 1 día   pos. máx 5 días   pos. máx 20 días
+  INRETC1          217,541         1,087,705         4,350,819
+  ALICORC1         214,141         1,070,705         4,282,822
+  FERREYC1         140,583           702,915         2,811,659
+  CPACASC1          82,390           411,951         1,647,804
+  MINSURI1          65,718           328,589         1,314,357
+  LUSURC1           31,176           155,879           623,515
+  CREDITC1          13,132            65,661           262,644
+
+  EL ACTIVO QUE MANDA ES CREDITC1 (BCP): S/131,322 por día, el más delgado del
+  universo en DINERO pese a ser el banco más grande del país — su flotante es
+  mínimo (Credicorp concentra la propiedad) y su rotación mensual es 0.010%, dos
+  órdenes de magnitud por debajo de Ferreycorp.
+  Portafolio equiponderado dimensionado por él, con salida en 20 sesiones al 10%
+  de participación: posición tope S/262,644 => ~S/1.84 MM de cartera total.
+  Ponderar por liquidez en vez de equiponderar relaja bastante este techo.
+
+  CONSECUENCIA PARA LA TESIS: la escala es de portafolio pequeño (orden de
+  S/2 MM equiponderado, más si se pondera por liquidez). Es perfectamente
+  declarable —y honesto— como "prueba de concepto a escala de inversionista
+  individual o family office", pero NO como estrategia institucional escalable.
+
+
+========================================================================
+7. PENDIENTES
+========================================================================
+  [x] Sección 6 completada con la corrida de analiza_capacidad_oe1.py.
+  [x] Tramo pre-2022 de InRetail sustituido por el conteo oficial en config.yaml
+      (102,807,319 desde 2012-10; escalón del follow-on en 2022-04).
+  [x] Propagar la corrección de InRetail a riesgos_transversales_datos.txt y a
+      pendientes_implementacion_universo.txt (la limitación del <=2% ya no aplica;
+      anotar la mitigación y su residuo según la convención del registro).
+  [x] Corregido el desfase de reconocimiento de acciones del caso BCP (balance vs
+      fecha de listado): conteo HÍBRIDO [C] implementado y verificado, ver §8.3.
+  [ ] Decidir si el costo de transacción es por activo (spread observado) o único
+      para el universo (más simple, menos fiel). Afecta D7.
+  [ ] Evaluar un colector diario de listLastValue (volumen + puntas) para
+      construir serie hacia adelante. No reconstruye el histórico.
+  [ ] Considerar OCR para 2016-03 solo si se necesita la serie mensual completa.
+  [ ] Tarifario: comisión SAB + BVL + Cavali + SMV, CITANDO el tarifario
+      publicado (no inventar cifras). Es el otro componente de D7 junto al spread.
+
+========================================================================
+8. DESFASE DE RECONOCIMIENTO DE ACCIONES (CASO BCP) — ALTERNATIVAS
+========================================================================
+8.1 El problema, medido
+  El conteo del pipeline sale del CAPITAL DEL BALANCE (SMV) al cierre del
+  trimestre; la BVL lista las acciones nuevas después. BCP capitaliza utilidades
+  todos los años, así que el desfase se repite. Medición sobre 54 trimestres:
+
+    15 de 54 (28%) con |dif| > 1%, SIEMPRE en la misma dirección (pipeline por
+    encima del oficial), entre +2.26% y +25.85%:
+      2012-03 +24.64% | 2013-06 +20.94% | 2014-03 +25.85% | 2015-03 +23.95%
+      2017-03 +12.27% | 2018-03 +10.55% | 2019-03 +16.50% | 2020-06  +8.32%
+      2021-03/06/09 +2.26% (tres trimestres seguidos) | 2022-03/06 +7.59%
+      2023-03/06 +6.54%
+    Mediana global 0.00%; 72% de los trimestres por debajo de 1%.
+
+  El desfase NO es siempre de un trimestre: en 2021 duró tres (el pipeline
+  reconoció en Q1 y la BVL listó en noviembre).
+  Efecto: acciones sobrestimadas => EPS subestimado => P/E SOBRESTIMADO en la
+  misma proporción, de forma RECURRENTE Y ANUAL.
+
+  POR QUÉ IMPORTA MÁS DE LO QUE PARECE: no es ruido aleatorio sino un artefacto
+  con periodicidad anual. La normalización causal por activo de OE1 NO lo elimina
+  (no es un cambio de nivel, es una distorsión periódica), y el agente podría
+  aprenderlo como si fuera estacionalidad real.
+
+  CONTRASTE: el otro caso grande, Alicorp (13 de 55 trimestres, hasta -10%), NO es
+  un defecto: ahí el pipeline resta tesorería y la BVL no (§4.5(a)). Cualquier
+  solución debe arreglar BCP SIN romper Alicorp.
+
+8.2 Alternativas
+
+  [A] NO HACER NADA, DECLARARLO EN LIMITACIONES
+      Costo: cero. Se documenta el sesgo (+2 a +26%, 28% de los trimestres de
+      BCP, recurrente anual).
+      Contra: deja vivo el artefacto de estacionalidad anual descrito arriba, que
+      es justamente el tipo de patrón espurio que un agente DRL puede explotar.
+      Es la opción más barata pero la más débil en la sustentación.
+
+  [B] ENMASCARAR CON pe_reliable = 0 EN LOS TRIMESTRES AFECTADOS
+      Reutiliza el mecanismo que YA existe en build_dataset
+      (_PE_ARTIFACT_PERIODS / pe_reliable). Regla: marcar el trimestre cuando el
+      conteo del pipeline difiere del oficial en más de un umbral (p.ej. 1%).
+      A favor: barato, sin fuente nueva en el camino crítico, y la bandera deja la
+      decisión final en OE1 (no borra el dato).
+      Contra: no corrige, solo señaliza; pierde P/E utilizable en el 28% de los
+      trimestres de BCP. Y para marcar hay que comparar con el oficial, o sea la
+      fuente entra igual — con lo cual conviene evaluar [C].
+
+  [C] CONTEO HÍBRIDO — RECOMENDADA
+      Definición de libro de "acciones en circulación":
+          acciones = EMITIDAS Y LISTADAS (BVL, mensual)
+                     − EN CARTERA (tesorería SMV, 1D0711) / valor nominal
+      Toma la FECHA correcta de la BVL y el AJUSTE correcto del SMV.
+      Verificado numéricamente que reproduce Alicorp y corrige BCP:
+        Alicorp 2022-12: 847,191,731 − 84,719,000 = 762,472,731
+                         (pipeline actual 762,473,000 — idéntico)
+        Alicorp 2022-09: 847,191,731 − 27,069,000 = 820,122,731
+                         (pipeline actual 820,123,000 — idéntico)
+        BCP     2014-03: 3,752,616,786 − 0 = 3,752,616,786 (corregido)
+      => Es una MEJORA ESTRICTA: arregla los 15 trimestres de BCP y deja los 13 de
+      Alicorp exactamente donde están.
+      Alcance: sustituye SOLO la rama "Capital Emitido ÷ nominal" de
+      compute_shares_earnings. La precedencia schedule > override se mantiene, así
+      que InRetail (schedule) y Minsur (override, total económico) no se tocan.
+      Costos y bordes a resolver:
+        - bvl_mensual.parquet pasa a ser dependencia del pipeline (hoy es artefacto
+          de análisis).
+        - Hueco 2016-03: rellenar con el mes previo (ffill). Es exacto: el conteo
+          es una función escalonada.
+        - Periodos anteriores a 2012-01 (los fundamentales llegan a 2005): sin dato
+          oficial -> fallback al cálculo actual. Sin impacto real, porque el
+          horizonte de mercado arranca en 2012 y sin precio no hay P/E.
+        - Activos con nominal 0 (InRetail): no aplica, usan schedule.
+        - Exige pase de regresión sobre los 7 activos.
+      MOMENTO ÓPTIMO: la corrida R3->R6 del nuevo universo está pendiente de todos
+      modos, así que el costo marginal es SOLO el código; si se hace después habría
+      que volver a correr R4-R6 solo por esto.
+
+  [D] LAG FIJO (reconocer el aumento N trimestres después)
+      Descartada. El desfase real no es constante: fue de 1 trimestre en 2014 y de
+      3 en 2021. Un lag fijo cambia un sesgo conocido por otro peor, y encima
+      inventado.
+
+  [E] USAR LA CAPITALIZACIÓN BURSÁTIL QUE PUBLICA LA BVL
+      Descartada. La BVL calcula capitalización con el conteo EMITIDO, así que
+      reintroduce el problema de tesorería (§4.5(a)); además es mensual y el P/E
+      del panel es diario.
+
+8.3 DECISIÓN TOMADA (usuario, 2026-07-30): ir con [C] primero
+  Se implementa el CONTEO HÍBRIDO [C] y, SEGÚN LOS RESULTADOS, se evalúa después
+  si hace falta añadir [B] (pe_reliable = 0 en los trimestres corregidos). O sea
+  [B] NO se descarta: queda condicionada a lo que muestre [C].
+
+  >> IMPLEMENTADO Y VERIFICADO (2026-07-31).
+  Código (`src/fundamentals/fundamentals_client.py`): la rama general de
+  `compute_shares_earnings` es ahora
+      acciones = _shares_listed_bvl(periodo)          [emitidas y listadas, BVL]
+                 − |tesorería SMV 1D0711| / nominal   [ajuste de autocartera]
+  con `combine_first` al cálculo anterior donde no hay dato oficial. Helpers
+  nuevos: `_bvl_mensual()` (lee SOLO el parquet ya generado; si falta, avisa y NO
+  dispara la descarga de 174 PDF en medio de R4) y `_shares_listed_bvl()` (mapea
+  el periodo trimestral a su mes de cierre y hace ffill dentro del rango cubierto).
+  La precedencia schedule > override > híbrido quedó intacta: INRETC1 y MINSURI1
+  no se tocan. El P/E no requiere re-descargar R4 — `compute_ratios` se evalúa al
+  construir el panel (run_r6_integration), así que basta con la corrida R6.
+
+  RESULTADOS DE LA REGRESIÓN (parquets en disco: CREDITC1, ALICORC1, INRETC1):
+    CREDITC1  cambian 16 de 83 periodos, todos a la BAJA (el pipeline estaba por
+              encima del oficial entre +2.26% y +24.64%). Se cumple el criterio
+              2014-03 -> 3,752,616,786 al dígito. El P/E baja en la misma
+              proporción en 14 de esos 16; los otros dos (2013-06 y 2014-03) ya
+              tenían eps_ttm NaN por un hueco PREEXISTENTE de la serie de utilidad
+              de BCP en 2013 — no lo causa este cambio.
+              SON 16 Y NO LOS 15 PRONOSTICADOS EN §8.1: el 16º es 2016-03, el mes
+              del PDF rasterizado (§4.4). En la comparación de §4.5 ese mes no
+              tenía dato oficial y quedaba fuera de la cuenta; con el ffill sí lo
+              tiene, y es correcto: 2016-01/02/04/05 valen todos 5,854,050,896 y el
+              escalón de BCP cae en 2016-06.
+    ALICORC1  0 periodos cambian >1% (|dif| máx 0.00%). Se cumplen 2022-09 ->
+              820,122,731 y 2022-12 -> 762,472,731 al dígito. Las diferencias
+              residuales son de unos cientos de acciones: el SMV reporta en miles y
+              la BVL da el conteo exacto, o sea el híbrido además gana precisión.
+              Se verificó que sigue las CUATRO reducciones de capital de Alicorp
+              (2024-03, 2024-08, 2025-02, 2025-11) sin perder el neteo de
+              tesorería: 2025-12 -> 569,573,006 − 13,492,000 = 556,081,006.
+    INRETC1   usa schedule -> rama no ejecutada, 3 niveles de conteo intactos.
+    Los otros 4 activos (MINSURI1, CPACASC1, FERREYC1, LUSURC1) no tienen todavía
+    fundamentales en disco; su regresión se hace en la corrida R4.
+  => Es una MEJORA ESTRICTA, como se había previsto: corrige BCP y deja Alicorp
+     donde estaba.
+
+  DECISIÓN SOBRE [B]: NO se aplica. [B] señalizaba porque no se corregía; con [C]
+  el conteo ES el correcto en todo el tramo con precio, así que enmascarar perdería
+  P/E válido. Queda descartada por innecesaria, no por costosa.
+
+  RESIDUOS (declarados, no eliminados):
+    - 2005-2011 (28 trimestres por activo) caen al cálculo del balance porque el
+      informe mensual arranca en 2012-01. Sin efecto en el panel: sin precio no
+      hay P/E.
+    - 2016-03 es ffill, no lectura. Exacto por ser el conteo una función
+      escalonada, pero es un dato derivado.
+    - `data/interim/bvl_mensual.parquet` es ahora dependencia del pipeline de R4.
+      Si falta, el pipeline avisa y cae al cálculo anterior (con el sesgo de
+      vuelta) en lugar de abortar o descargar los PDF.
+
+========================================================================
+9. PUNTO DE RETOMA (sesión siguiente)
+========================================================================
+[C] está hecho (§8.3). Lo que sigue es la CORRIDA R3->R6 del universo de 7, tal
+como estaba en cola en docs/pendientes_implementacion_universo.txt. Se hizo [C]
+antes a propósito: hacerlo después habría obligado a repetir R4-R6 solo por esto.
+
+Al correr, verificar además de lo que ya lista ese documento:
+  - Regresión del conteo híbrido en los 4 activos sin fundamentales en disco
+    (MINSURI1 usa override, así que solo aplica a CPACASC1, FERREYC1 y LUSURC1):
+    que el conteo del panel coincida con la serie oficial de bvl_mensual.parquet y
+    que los avisos "[shares] ... sin conteo oficial" se limiten a 2005-2011.
+  - LUSURC1 tiene nominal 0.68 (no 1.0): comprobar que la tesorería convertida a
+    acciones (|1D0711|/0.68) es coherente con el conteo oficial de la BVL.
+  - Que ningún activo nuevo traiga un evento societario no-AL que exija una
+    entrada en _PE_ARTIFACT_PERIODS (ver riesgos, sección R4).
+
+FIN DEL DOCUMENTO
+========================================================================

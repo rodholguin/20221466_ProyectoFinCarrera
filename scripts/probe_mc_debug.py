@@ -1,8 +1,11 @@
 """Diagnóstico Media Cloud: verifica que story_count funciona y prueba queries."""
 import datetime as dt
+import os
 import mediacloud.api as mc
 
-TOKEN = "4e0a7d22a81b303a1bf2239560ed63ea22324323"
+TOKEN = os.environ.get("MEDIACLOUD_API_TOKEN", "")
+if not TOKEN:
+    raise SystemExit("Define MEDIACLOUD_API_TOKEN antes de ejecutar.")
 PERU_NATIONAL = 34412158
 
 search = mc.SearchApi(TOKEN)

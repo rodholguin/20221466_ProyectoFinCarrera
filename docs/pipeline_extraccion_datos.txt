@@ -825,6 +825,58 @@ ESTADO (jul-2026): IMPLEMENTADO y verificado end-to-end. Código:
     años de pérdida). Notebook exploracion_fundamentales_bvl.ipynb §5b (acciones en
     circulación + P/E/DY), ejecutado.
 
+3.10.3. ACTUALIZACIÓN (jul-2026): CONTEO HÍBRIDO BVL+SMV. Enmienda la fórmula
+        general de 3.10.2(g).
+------------------------------------------------------------------------
+3.10.2(g) fijó el conteo general en (Capital Emitido − tesorería)/nominal, todo
+del SMV. Esa fórmula tiene el AJUSTE correcto pero la FECHA equivocada: el
+capital del balance recoge el aumento cuando la junta lo aprueba, y la BVL lista
+las acciones nuevas después. En CREDITC1, que capitaliza utilidades todos los
+años, el pipeline se adelantaba hasta TRES trimestres (en 2021 el reconocimiento
+fue en Q1 y el listado en noviembre): 15 de 54 trimestres con el conteo entre
++2.26% y +25.85% por encima del oficial, siempre en la misma dirección => EPS
+subestimado y P/E SOBRESTIMADO, con periodicidad ANUAL. Ese es el problema real:
+no es ruido aleatorio sino un patrón periódico que un agente DRL puede aprender
+como si fuera estacionalidad.
+
+La fuente que faltaba es el Informe Bursátil Mensual de la BVL (módulo
+src/market/bvl_infmen.py, generador scripts/gen_bvl_mensual.py; documentado en
+docs/ejecutabilidad_y_costos_OE1.txt §4), que publica las acciones en circulación
+por emisor y por mes desde 2012-01. Pero tampoco sirve sola: la BVL cuenta
+acciones EMITIDAS y no descuenta la autocartera (ALICORC1 recompró en 2022 y
+anuló recién en 2024; la BVL siguió en 847,191,731 mientras el neto era
+762,472,731). Cada fuente es autoritativa en una dimensión distinta, así que se
+combinan:
+
+    acciones_en_circulación(t) = emitidas y LISTADAS (BVL, mes de cierre del
+                                 periodo)                      [FECHA correcta]
+                                 − |Acciones en Cartera 1D0711| / nominal
+                                                               [AJUSTE correcto]
+
+Precedencia sin cambios: shares_outstanding_schedule > shares_outstanding_override
+> híbrido. INRETC1 (tramos oficiales) y MINSURI1 (override con el total económico)
+no pasan por esta rama.
+
+Bordes:
+  - Periodos sin dato oficial (2005-2011, previos al primer informe) -> fallback a
+    la fórmula de 3.10.2(g). Sin impacto: el horizonte de mercado empieza en 2012.
+  - Hueco 2016-03 (tabla rasterizada, §4.4 del doc de ejecutabilidad) -> ffill
+    dentro del rango cubierto. Es exacto, no interpolación: el conteo es una
+    función escalonada (verificado: 2016-01/02/04/05 = 5,854,050,896; el escalón
+    de BCP cae en 2016-06).
+  - El parquet data/interim/bvl_mensual.parquet pasa a ser DEPENDENCIA de R4. Si
+    falta, se avisa por consola y se cae al cálculo anterior; NO se dispara la
+    descarga de los 174 PDF en medio del pipeline.
+
+Verificado (regresión jul-2026): CREDITC1 cambia en 16 de 83 periodos, siempre a
+la baja, y el P/E baja igual en 14 de ellos (los otros 2 ya tenían eps_ttm NaN por
+un hueco preexistente de la serie de utilidad de BCP en 2013). ALICORC1 no cambia
+en ningún periodo por encima del 0.00%, conservando el neteo de tesorería y
+ganando precisión (el SMV reporta en miles, la BVL da el conteo exacto). Es una
+mejora estricta. Código: fundamentals_client._bvl_mensual / _shares_listed_bvl y
+la rama general de compute_shares_earnings. Detalle y residuos:
+docs/ejecutabilidad_y_costos_OE1.txt §8.
+
 3.11. Almacenamiento de fundamentales
 ------------------------------------------------------------------------
 Archivos raw por activo (formato largo, todas las cuentas SMV):

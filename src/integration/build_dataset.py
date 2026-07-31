@@ -28,6 +28,11 @@ Decisiones de diseño (sesión 2026-06-23, ver memoria del proyecto):
     `known_date` — propagación sin look-ahead, ya validada (sin huecos de
     NaN en el horizonte de mercado 2012-2025 porque el primer `known_date`
     de los 5 activos es 2005-05-15).
+  * Macro (jul-2026): las 6 series del BCRP entran como columnas GLOBALES
+    `macro_*` (mismo valor para todos los activos en una fecha), en NIVELES
+    CRUDOS y ya alineadas point-in-time por `src.macro.macro_client`. El
+    builder no las descarga: las recibe ya resueltas (`macro=`), igual que
+    los dividendos, para no meter red/caché en la construcción del panel.
 """
 from __future__ import annotations
 
@@ -41,6 +46,21 @@ from src.market.technical_indicators import add_indicators
 _PRICE_COLS = ["close", "close_raw", "close_split_adj", "close_total_return"]
 _INDICATOR_COLS = ["ret_1d", "ret_1d_raw", "sma_20", "sma_50", "ema_12", "ema_26",
                     "macd", "macd_signal", "rsi_14", "volatility_20"]
+
+# Periodos donde el P/E no es confiable por un ARTEFACTO de acción corporativa
+# (además de los NaN por pérdidas, que ya marca eps<=0). Solo señalizamos: la
+# política de enmascarado/normalización es de OE1 (ver docs/riesgos R3/R4).
+#   SAGAC1: escisión de Inmobiliaria SIC (JGA 28-nov-2019, 2019Q4) redujo las
+#   acciones ~37% a media ventana TTM -> eps_ttm mezcla base de acciones pre/post
+#   en 2019Q4..2020Q2 (P/E distorsionado ~37%); además el precio quedó estancado
+#   en el evento, así que no hay repreciado real que ajustar (fix "fino"
+#   descartado con evidencia).
+_PE_ARTIFACT_PERIODS: dict[str, set[str]] = {
+    "SAGAC1": {"2019-12-31", "2020-03-31", "2020-06-30"},
+}
+
+# Prefijo de las columnas macro globales (BCRP). Ver src/macro/macro_client.py.
+_MACRO_PREFIX = "macro_"
 
 
 def _fill_no_trade_days(panel: pd.DataFrame) -> pd.DataFrame:
@@ -152,10 +172,41 @@ def _dividend_ttm(dates, ex_dates, amounts, window_days: int = 365) -> np.ndarra
     return cum[upper] - cum[lower]
 
 
+def _merge_macro(unified: pd.DataFrame, macro: pd.DataFrame) -> pd.DataFrame:
+    """Une las columnas macro GLOBALES (mismo valor para todos los activos en una
+    fecha) al panel, por 'date'.
+
+    `macro` puede venir indexado por fecha (salida directa de
+    `macro_client.macro_features`) o con una columna 'date'. Se hace después del
+    concat justamente porque son globales: un solo join en vez de uno por activo,
+    y queda explícito que no dependen del ticker.
+    """
+    m = macro.copy()
+    if "date" not in m.columns:
+        m = m.rename_axis("date").reset_index()
+    m["date"] = pd.to_datetime(m["date"])
+    cols = [c for c in m.columns if c != "date"]
+    if not cols:
+        return unified
+
+    choque = [c for c in cols if c in unified.columns]
+    if choque:
+        raise ValueError(f"columnas macro que ya existen en el panel: {choque}")
+
+    m = m.drop_duplicates("date")
+    out = unified.merge(m[["date"] + cols], on="date", how="left")
+
+    faltan = {c: int(out[c].isna().sum()) for c in cols if out[c].isna().any()}
+    if faltan:
+        print(f"  AVISO macro: NaN tras el join (fechas del panel sin dato macro): {faltan}")
+    return out
+
+
 def build_unified(market: pd.DataFrame, sentiment: pd.DataFrame,
                   fundamentals_ratios: pd.DataFrame,
                   dividends: pd.DataFrame | None = None,
-                  trading_calendar: pd.DatetimeIndex | None = None) -> pd.DataFrame:
+                  trading_calendar: pd.DatetimeIndex | None = None,
+                  macro: pd.DataFrame | None = None) -> pd.DataFrame:
     """Construye el panel (ticker, date) x features.
 
     Parameters
@@ -167,6 +218,9 @@ def build_unified(market: pd.DataFrame, sentiment: pd.DataFrame,
                 de `fundamentals_client.compute_ratios`
     trading_calendar : opcional, para pruebas. Por defecto se deriva de
                 `market` con `build_trading_calendar`.
+    macro : opcional, features macro GLOBALES ya alineados point-in-time
+                (`macro_client.macro_features(calendario)`), indexados por fecha
+                o con columna 'date'. Si es None el panel sale sin columnas macro.
     """
     if trading_calendar is None:
         trading_calendar = build_trading_calendar(market)
@@ -181,6 +235,12 @@ def build_unified(market: pd.DataFrame, sentiment: pd.DataFrame,
         mkt["date"] = pd.to_datetime(mkt["date"])
         panel = base.merge(mkt, on=["ticker", "date"], how="left")
         panel = _fill_no_trade_days(panel)
+
+        # Iliquidez: precio sin cambio vs día hábil previo (superset de
+        # is_no_trade; captura el float diminuto de CREDITC1 ~41% de días y
+        # cualquier tramo estancado). Señal cruda; OE1 modela costo/operabilidad.
+        panel["is_stale"] = (
+            panel["close_raw"] == panel["close_raw"].shift(1)).astype(int)
 
         # Sentimiento: alinear al calendario (roll-forward + reagregación),
         # luego forward-fill crudo del último score conocido.
@@ -217,6 +277,16 @@ def build_unified(market: pd.DataFrame, sentiment: pd.DataFrame,
         if "eps_ttm" in panel.columns:
             eps = panel["eps_ttm"].to_numpy()
             panel["pe"] = np.where(eps > 0, panel["close_raw"].to_numpy() / eps, np.nan)
+            # Confiabilidad del P/E: False donde es NaN (pérdidas) o donde un
+            # artefacto de acción corporativa lo distorsiona (escisión SAGA).
+            # No se enmascara el P/E de CREDITC1 pese al float diminuto: su nivel
+            # se neutraliza con la normalización causal por-activo de OE1 (queda
+            # como feature de baja información, no engañosa). Ver docs/riesgos R3.
+            reliable = pd.Series(np.isfinite(panel["pe"].to_numpy()), index=panel.index)
+            bad = _PE_ARTIFACT_PERIODS.get(ticker)
+            if bad and "period" in panel.columns:
+                reliable &= ~panel["period"].astype(str).isin(bad)
+            panel["pe_reliable"] = reliable.astype(int)
 
         # Dividend yield = dividendos por acción TTM (PEN) / close_raw.
         if dividends is not None:
@@ -229,28 +299,39 @@ def build_unified(market: pd.DataFrame, sentiment: pd.DataFrame,
         panels.append(panel)
 
     unified = pd.concat(panels, ignore_index=True)
+    if macro is not None and not macro.empty:
+        unified = _merge_macro(unified, macro)
     return unified.sort_values(["ticker", "date"]).reset_index(drop=True)
 
 
 def feature_views(unified: pd.DataFrame) -> dict[str, list[str]]:
-    """Devuelve las columnas de cada configuración de señales de R8."""
+    """Devuelve las columnas de cada configuración de señales de R8.
+
+    A las 4 vistas originales se añade `mercado_macro` (ablación del canal macro,
+    análoga a `mercado_sentimiento`); las columnas macro también entran en
+    `completa`. Las vistas de sentimiento/fundamentales NO llevan macro, para que
+    cada canal siga siendo aislable.
+    """
     technical = [c for c in unified.columns
                  if c in {"open", "high", "low", "close", "volume", "ret_1d",
                           "sma_20", "sma_50", "ema_12", "ema_26", "macd",
-                          "macd_signal", "rsi_14", "volatility_20", "is_no_trade"}]
+                          "macd_signal", "rsi_14", "volatility_20",
+                          "is_no_trade", "is_stale"}]
     sentiment = [c for c in
                  ["sentiment_score_last", "days_since_news", "has_news", "n_articles"]
                  if c in unified.columns]
     _fundamental_cols = {
         "roe", "roa", "net_margin", "debt_equity", "debt_ratio",  # derivados SMV
-        "pe", "dy",                                                # P/E y DY (implementados)
+        "pe", "dy", "pe_reliable",                                 # P/E y DY (+ flag)
     }
     fundamental = [c for c in unified.columns if c in _fundamental_cols]
+    macro = [c for c in unified.columns if c.startswith(_MACRO_PREFIX)]
     return {
         "solo_mercado":          technical,
         "mercado_sentimiento":   technical + sentiment,
         "mercado_fundamentales": technical + fundamental,
-        "completa":              technical + sentiment + fundamental,
+        "mercado_macro":         technical + macro,
+        "completa":              technical + sentiment + fundamental + macro,
     }
 
 

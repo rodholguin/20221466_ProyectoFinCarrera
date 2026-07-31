@@ -8,6 +8,11 @@ data/processed/*.csv
 
 # Cache de respuestas crudas del SMV (archivos JSON grandes ~8MB c/u)
 data/raw/smv_cache/
+# PDFs del Informe Bursátil Mensual de la BVL (~187 MB, 174 archivos).
+# Se regeneran con scripts/gen_bvl_mensual.py (URL predecible, ver bvl_infmen.py)
+data/raw/bvl_infmen/
+# Logs de corridas largas
+data/interim/*.log
 # Archivos de exploración/sondeo (generados por scripts de probe)
 data/interim/smv_*.json
 data/interim/smv_*.txt
@@ -52,3 +57,6 @@ build/
 
 # Windows
 Thumbs.db
+
+# Artefactos de caché creados al ejecutar notebooks con otro cwd
+notebooks/data/

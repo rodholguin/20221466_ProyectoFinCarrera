@@ -30,9 +30,110 @@ TIER 1 — RIESGOS TRANSVERSALES (nivel "validez de la tesis")
    cierre no ejecutables (no había contraparte), y sin `volume` no se puede
    estimar impacto/slippage. Un backtest de DRL sobre precios stale puede
    mostrar retornos ficticios.
-   → Mitigado parcial: bandera is_no_trade. Abierto: el modelado de costo de
-   transacción / impacto / slippage en OE1 es imprescindible; sin él el
-   resultado no es defendible como estrategia real.
+   → MITIGACIÓN 1 (señalización, hecho): banderas is_no_trade e is_stale en el
+     panel, para que OE1 pueda distinguir una sesión real de un precio arrastrado.
+   → MITIGACIÓN 2 (selección del universo, hecho jul-2026): se REEMPLAZARON los 3
+     activos que hacían el riesgo inmanejable y se amplió a 7. Medido como % de días
+     con precio DISTINTO al día hábil previo (= 1 − is_stale) sobre crudos BVL
+     2012-2025:
+       SALEN : SAGAC1 4.1%, CORAREC1 20.8%, BUENAVC1 23.7%
+       ENTRAN: FERREYC1 73.5%, CPACASC1 72.1%, MINSURI1 64.9%, INRETC1 63.1%,
+               LUSURC1 56.5%
+       SIGUEN: ALICORC1 75.9%, CREDITC1 58.6%
+     Es decir, el piso del universo subió de 4.1% a 56.5%. Evidencia y scorecard
+     completo (liquidez + fundamentales SMV + cobertura de prensa) en
+     scripts/probe_liquidez_candidatos.py y el handoff de universo.
+     LÍMITE de esta mitigación: ninguno de los 7 es líquido en el sentido de un
+     mercado desarrollado; el techo de la BVL para un activo nativo es ~74%.
+   → SIGUE ABIERTO (y es lo crítico): el modelado de costo de transacción /
+     impacto / slippage en OE1. Sin él el resultado no es defendible como
+     estrategia real, por más que el universo sea el más líquido disponible.
+
+   PLAN DE TRATAMIENTO EN OE1 (jul-2026, NO IMPLEMENTADO — es el diseño acordado
+   para cuando se construya el entorno; ninguno de estos puntos está en el código):
+     Diagnóstico: NO es un problema técnicamente difícil. Los mecanismos son
+     estándar y ninguno exige datos que el proyecto no tenga. Es sobre todo
+     CAUTELA DE MODELADO + declaración explícita de supuestos. Ordenados por
+     relación esfuerzo/credibilidad:
+     (1) EJECUCIÓN EN t+1: el agente observa el cierre de t y transa al cierre de
+         t+1. Elimina el look-ahead de ejecución. Costo de implementación ~nulo.
+     (2) PROHIBIR TRANSAR EN DÍAS NO EJECUTABLES: usar is_no_trade / is_stale para
+         forzar "hold" — si no hubo operación real, no hubo contraparte. Es la
+         mitigación con mejor relación esfuerzo/credibilidad y las banderas YA
+         están en el panel (para eso se agregaron).
+     (3) COSTO PROPORCIONAL POR OPERACIÓN: comisión de SAB + tarifas BVL/Cavali/SMV
+         (publicadas: citar el tarifario vigente, NO inventar el número) + un
+         SPREAD asumido. OJO: en un mercado delgado el spread domina el costo y NO
+         es observable con nuestros datos (el endpoint BVL da solo cierre, sin
+         puntas), así que entra como SUPUESTO declarado, no como estimación.
+     (4) TOPE DE POSICIÓN / CAPACIDAD: declarar un portafolio chico y acotar la
+         posición máxima. Sin volumen no se puede calcular participación de
+         mercado, así que también es un supuesto (ver acción barata abajo).
+     (5) PIEZA CENTRAL — COSTO DE EQUILIBRIO (break-even): en vez de defender UN
+         número de costo, reportar el desempeño sobre una grilla (p.ej. 0/25/50/100
+         pbs ida y vuelta) e informar A QUÉ COSTO el agente deja de superar al
+         buy-and-hold por activo y al equiponderado. Convierte un parámetro
+         incierto en un UMBRAL DE ROBUSTEZ evaluable, que es lo defendible en la
+         sustentación.
+     EL AGUIJÓN (lo que hay que saber ANTES de escribir conclusiones): el riesgo no
+     es que no se pueda modelar, es que el tratamiento honesto PUEDE BORRAR LA
+     VENTAJA. Si el edge solo aparece a costo ~0, el hallazgo pasa a ser "no hay
+     ventaja económicamente explotable en la BVL con estas señales": resultado
+     legítimo y reportable, pero cambia la narrativa. Mejor descubrirlo al diseñar
+     OE1 que al final.
+     ACCIÓN BARATA que mejora (4): probar si existen los tickers Yahoo de los 5
+     activos nuevos (FERREYC1.LM, CPACASC1.LM, LUSURC1.LM, MINSURI1.LM, INRETC1
+     ~PAL...); hoy solo CREDITC1.LM y ALICORC1.LM están en config (yahoo: null en
+     el resto). Si traen volumen, el tope de participación pasa de "supuesto
+     declarado" a "acotado con datos" en 5-7 activos. El close SIGUE siendo el de
+     la BVL (Yahoo solo enriquece OHLC/volumen donde ya hay fila BVL, ver
+     market_client). Probe de ~10 min.
+
+   ── ACTUALIZACIÓN jul-2026 (la "acción barata" se ejecutó; documento completo:
+      docs/ejecutabilidad_y_costos_OE1.txt) ──────────────────────────────────
+   RESULTADO DEL PROBE DE YAHOO: los 5 tickers .LM EXISTEN con cobertura
+   2012-2025 y moneda correcta (razón close Yahoo/BVL = 1.0000 en los 7), pero su
+   VOLUMEN quedó DESCARTADO como cantidad autoritativa. No está fabricado (Benford
+   MAD 0.0045-0.0068; sin números redondos ni relleno), pero: (i) no reconcilia
+   con el volumen oficial de la BVL —razón 0.16x a 5.12x el mismo día, sin
+   dirección consistente, descartados desfase de fecha y cambio de unidad—;
+   (ii) reporta volumen 0 en 5.1%-15.4% de los días en que el precio SÍ cambió,
+   con |retorno| indistinguible del resto; (iii) la correlación volumen-|retorno|
+   es 0.00-0.13. En consecuencia NO se cargan esos tickers en config.yaml y NO se
+   redefine is_no_trade sobre ese volumen (la idea quedó refutada por (ii)).
+
+   MITIGACIÓN APLICADA AL PUNTO (4) — capacidad: se adoptó el INFORME BURSÁTIL
+   MENSUAL de la BVL como fuente OFICIAL (174 PDF 2012-2026, URL predecible;
+   src/market/bvl_infmen.py, scripts/gen_bvl_mensual.py). Publica por emisor y por
+   mes: cantidad negociada, monto efectivo S/ y US$, N° de operaciones,
+   FRECUENCIA de negociación, rotación y acciones en circulación. Con eso el tope
+   de capacidad deja de ser supuesto y pasa a calcularse.
+   LÍMITE de la mitigación: granularidad MENSUAL, no diaria; no existe serie
+   diaria de volumen en ninguna fuente disponible (solo el último día vía
+   listLastValue). RESIDUO: falta 2016-03 (tabla rasterizada, 1 de 174 = 0.6%).
+
+   MITIGACIÓN APLICADA AL PUNTO (3) — spread: el supuesto de que el spread "NO es
+   observable" quedó CORREGIDO. El endpoint /v1/issuers/{cc}/value sí trae puntas
+   (`buy`/`sell`). Spread relativo observado el 2026-07-27: ALICORC1 0.08%,
+   INRETC1 0.13%, MINSURI1 0.14%, CPACASC1 0.63%, FERREYC1 0.70%, CREDITC1 1.65%,
+   LUSURC1 2.20% => ida y vuelta 8 a 220 pbs.
+   CONSECUENCIA SOBRE EL PUNTO (5): la grilla de break-even 0/25/50/100 pbs SE
+   QUEDA CORTA; debe llegar a ~250 pbs.
+   LÍMITE: es un snapshot de un momento, no una serie histórica; sigue siendo un
+   supuesto DECLARADO, pero ahora calibrado con un orden de magnitud observado en
+   vez de elegido a dedo.
+
+   REVISIÓN DEL PUNTO (2) — prohibir transar: el proxy `1 − is_stale` mide días con
+   precio DISTINTO, mientras que la `frecuencia` oficial mide días con
+   NEGOCIACIÓN, y la segunda es mayor (se opera sin mover el precio). Prohibir
+   transar en TODOS los días stale es más conservador de lo necesario. Ajuste
+   propuesto: is_no_trade (sin cotización) como restricción dura; is_stale como
+   señal de baja liquidez vía COSTO, calibrada con la frecuencia oficial del mes.
+
+   LO QUE SIGUE ABIERTO: el punto (1) ejecución t+1 y el (5) break-even siguen sin
+   implementar — son de OE1. El riesgo #1 NO se cierra: mejoró el insumo y la
+   calibración, pero el modelado de ejecución y costo sigue pendiente y sigue
+   siendo lo crítico para la credibilidad del trading.
 
 2. SELECCIÓN / SESGO DE SUPERVIVENCIA  [declarar — de diseño]
    5 empresas grandes elegidas a mano, una por sector, TODAS sobrevivientes
@@ -106,6 +207,55 @@ TIER 1 — RIESGOS TRANSVERSALES (nivel "validez de la tesis")
        de fallback (2012-2017), el lag de 40d podría ser algo optimista (entrada
        ~pocos días antes de la fecha pública real). Es raro, acotado al warm-up y
        no afecta la evaluación OOS. Ver scripts/probe_bvl_hechos.py.
+
+       (a.4) [DETECTADO Y CORREGIDO jul-2026] EL HECHO DEBE SER DEL MISMO TIPO DE
+       EEFF QUE SE CONSUME (individual vs consolidado). Al habilitar smv_tipo="C"
+       para INRETC1 (holding: su EEFF individual reporta pérdida, ver §R4), el
+       known_date seguía saliendo del hecho "Información Financiera Intermedia
+       INDIVIDUAL" mientras las CIFRAS venían del consolidado. Medición sobre los
+       Hechos de Importancia (rpj OE5087, 2005-2025):
+         - INRETC1: la CONSOLIDADA se divulga 9-19 días DESPUÉS de la individual
+           (mediana 14 d), en 30/30 trimestres con ambas.
+         - ALICORC1 (0/30) y CREDITC1 (0/26): mismo día (minutos de diferencia)
+           -> para los activos tipo "I" el punto es inocuo.
+       Es decir, sin corregir habría ~2 semanas de LOOK-AHEAD por trimestre en el
+       único activo consolidado del universo (el mercado no conocía el consolidado
+       en la fecha del individual). Corregido: `_EEFF_OBS_RE` pasó a ser un mapa
+       {"I": ...individual..., "C": ...consolidada...} y `_load_filing_dates` recibe
+       el `tipo` que usa fetch_smv. Verificado: 30/30 períodos de INRETC1 se
+       recorren +9..+14 d (p.ej. 2025Q2 31-jul -> 14-ago) y 0/30 de ALICORC1
+       cambian. Ver scripts/probe_bvl_hechos.py y el handoff de universo.
+         NOTA menor asociada: la ventana de búsqueda de hechos es el mismo
+         [start, end] del pedido SMV, así que el EEFF del ÚLTIMO trimestre del
+         horizonte (2025Q4, presentado en feb-2026) nunca encuentra fecha real y
+         cae al lag fijo de 60 d. Conservador (nunca adelanta), no se cambió.
+
+       ¿PERO el individual (que sale 2 semanas ANTES) no adelanta lo que dirá el
+       consolidado? Si lo hiciera, el mercado ya tendría la señal y la fecha
+       conservadora nos costaría información. MEDIDO (scripts/probe_inretail_i_vs_c.py,
+       53 trimestres 2012Q4-2025Q4, resumen InfoFinanciera SMV; detalle en
+       data/interim/probe_inretail_i_vs_c.csv): NO lo adelanta.
+         - Utilidad neta: el individual es apenas ~26% del consolidado (ratio
+           mediano 0.256). Correlación en NIVELES r=+0.275 (R²=0.076) y en CAMBIOS
+           trimestrales r=+0.082 (R²=0.007, t=0.58 -> no significativa). O sea, el
+           individual explica <1% de la variación del resultado del grupo.
+         - En 14/53 trimestres el individual reporta PÉRDIDA mientras el
+           consolidado reporta GANANCIA (p.ej. 2014Q4: ind -125,296 vs con +21,424
+           miles S/) -> la señal llega incluso con el signo invertido.
+         - Único indicio: la DIRECCIÓN del cambio coincide en 33/52 trimestres
+           (63%, binomial una cola p=0.035). Marginal, sin poder sobre la magnitud
+           y no sobreviviría a corregir por las 4 variables probadas.
+         - Ingresos: el individual es 1.6% del consolidado y sus cambios
+           correlacionan NEGATIVO (r=-0.19): es un holding sin operación propia
+           (su P&L lo dominan gastos financieros y dividendos recibidos).
+         - Patrimonio/activo correlacionan alto en NIVELES (0.84/0.87) pero eso es
+           la tendencia común de 13 años de crecimiento: en CAMBIOS caen a
+           0.18/0.18.
+       CONCLUSIÓN: fechar el consolidado con el hecho de la individual sí era
+       look-ahead genuino (el mercado no conocía las cifras consolidadas, ni algo
+       informativo sobre ellas), y usar la fecha de la consolidada NO desperdicia
+       información real. Correlación ≠ misma información: el panel guarda el VALOR
+       consolidado exacto, no una estimación.
    (b) [REEVALUADO jul-2026] Point-in-time vs restated: RIESGO MENOR de lo
        documentado antes para los fundamentales SMV. Se midió empíricamente
        (comparando, por emisor/cuenta/año, la columna propia del filing del año
@@ -172,14 +322,63 @@ MERCADO (R3)
   - Solo `close` (open=high=low=close, volume=NaN): sin señales de volumen
     (OBV, liquidez); volatilidad solo close-to-close (subestima intradía);
     MACD/RSI/SMA todos close. [documentado/abierto]
-  - CREDITC1 precio no representativo (free float ~33k/día): retornos,
-    volatilidad y P/E de BCP contaminados; su market cap implícita supera la
-    de Credicorp (imposible). Interpretar BCP con cautela. [documentado]
+  - ILIQUIDEZ UNIVERSAL Y SEVERA [CRÍTICO — cuantificado jul-2026]. Medido con
+    `is_stale` (close_raw == día previo) sobre los datos crudos BVL: el precio
+    NO se mueve en 24-96% de los días. Precios distintos en 13 años (2012-2025):
+        SAGAC1    74 (2.2%)   stale 95.9%   <- casi no negociable
+        CORAREC1 193 (5.5%)   stale 79.2%
+        CREDITC1 455 (13.0%)  stale 41.4%
+        BUENAVC1 558 (15.9%)  stale 76.3%
+        ALICORC1 588 (16.7%)  stale 24.1%
+    HALLAZGO CLAVE: `is_no_trade` (basado en filas nulas del endpoint) marcaba
+    solo 0-5.5% -> SUBCUENTA masivamente la iliquidez, porque la BVL devuelve un
+    precio de referencia ARRASTRADO los días sin operación sin marcarlos. El flag
+    `is_stale` (agregado al panel en build_dataset) es el proxy correcto.
+    Implicaciones: retornos mayormente cero (tramos planos largos -> ret_1d=0,
+    volatility/rsi degeneran); el backtest opera sobre marcas estancadas no
+    ejecutables. Esto hace del modelado de ejecución/costo en OE1 (Tier 1 #1) el
+    determinante de la validez de la tesis, no un "extra".
+    OJO: `is_stale` mezcla "operó al mismo precio" con "no operó" (sin volumen no
+    se separan). Los nombres BVL-nativos topan en ~20-25% de precios distintos;
+    los líquidos (BAP 58%, SCCO 52%) son cross-listed NYSE (fuera de premisa).
+    [abierto — CRÍTICO para OE1]
+  - DOS fenómenos de iliquidez DISTINTOS (no confundir):
+      (i) STALENESS (el precio no se mueve): universal, peor en SAGA/CORAREC/BVN.
+          -> flag `is_stale`; afecta realismo de retornos/técnicos.
+      (ii) DISTORSIÓN DE NIVEL por free-float: específica de CREDITC1 (BCP ~98%
+          en Credicorp). El PRECIO está mal en NIVEL (market cap implícita ~S/73B
+          > todo Credicorp = imposible; BCP es subsidiaria). Nota: CREDITC1 es
+          MENOS stale que 3 de los otros; su problema es el nivel, no el
+          estancamiento. Afecta la VALIDEZ del P/E (numerador), no ROE/ROA/etc.
+    Decisión: NO se enmascara el P/E de CREDITC1; la normalización causal
+    por-activo de OE1 (D6) disuelve el nivel (queda como feature de baja
+    información, no engañosa). Se evaluó y descartó cambiar BCP->Credicorp (BAP):
+    BAP es líquido pero se precia en NYSE (rompe la premisa de baja liquidez BVL)
+    y su EEFF consolidado/USD complica R4. [decidido/declarar]
+  - REEMPLAZO DE SAGA/CORAREC en evaluación [abierto — decisión de universo].
+    Ambos <10% de precios distintos (SAGA 2.2%, CORAREC 5.5%). Candidatos
+    BVL-nativos más viables (sin implementar): retail SAGA->INRETC1 (InRetail,
+    23% distintos) o CASAGRC1 (Casa Grande agro, 21%); construcción
+    CORAREC->CPACASC1 (Pacasmayo cemento, 12.6%) o AENZAC1 (20.6% pero Lava
+    Jato); alterno utilities LUSURC1 (19.3%). Ver investigación jul-2026.
+    → EJECUTADO (jul-2026): universo de 7 activos, SALEN SAGAC1/CORAREC1/BUENAVC1 y
+      ENTRAN INRETC1/CPACASC1/MINSURI1/FERREYC1/LUSURC1. Cada candidato se validó en
+      3 patas (liquidez BVL + fundamentales SMV utilizables + cobertura de prensa
+      MediaCloud); CASAGRC1 se DESCARTÓ por prensa (0.5 art/sem) y AENZAC1 por el
+      ruido Lava Jato. Las cifras finales de liquidez son las de Tier 1 #1 (piso del
+      universo 56.5%), medidas con probe_liquidez_candidatos.py sobre el horizonte
+      completo 2012-2025; los porcentajes de ESTE párrafo son de la exploración
+      preliminar (ventana/criterio distintos) y se conservan solo como registro.
+      Código de soporte cerrado en la misma sesión: precio US$->PEN (InRetail),
+      EEFF consolidados por activo, conteo de acciones por tramos, features macro.
+      Ver docs/pendientes_implementacion_universo.txt.
   - Ajuste por splits depende de la clasificación "AL" de la BVL: un split de
     valor nominal no marcado como AL se perdería. Guarda:
     detect_split_candidates avisa saltos >40% sin split. [mitigado parcial]
   - close_total_return reinvierte dividendos al close, sin impuestos/timing:
-    sobrestima el retorno total ligeramente. [declarar]
+    sobrestima el retorno total ligeramente. Además NO ajusta escisiones
+    (spin-offs): SAGA 2019Q4 (escisión Inmobiliaria SIC) subestima el retorno
+    ~2.6% sobre precio ya estancado. [declarar]
   - Enriquecimiento Yahoo reescalado por factor de split (solo algunos
     tickers): posible inconsistencia OHLC puntual; no afecta el close
     autoritativo. [menor]
@@ -206,14 +405,112 @@ FUNDAMENTALES (R4)
   - Individual (Tipo=I), no consolidado: BCP individual ≠ Credicorp;
     taxonomía SBS distinta → D/E del banco no comparable con no financieras.
     [documentado]
-  - Acciones: nominal constante = actual. Un cambio histórico de valor nominal
-    distorsionaría el conteo. Chequeo sugerido: que acciones=CapEmitido/nominal
-    solo salte en fechas de AL conocidas. [documentado §3.10.2(c)]
+  - Acciones para P/E: conteo neto = (CapEmitido - autocartera)/nominal.
+    [VERIFICADO §3.10.2(c) jul-2026] El chequeo "solo salta en AL" NO se cumple
+    literal, pero el CONTEO es correcto (captura cada evento societario real):
+      * BCP: +12-26% anual = capitalizaciones; las 13 AL de la BVL SÍ existen y
+        el precio SÍ se ajusta (el "SIN AL" de un chequeo previo era desalineo de
+        ventana: el AL es may-jun, el balance lo refleja en Q1). BCP OK en R4.
+      * ALICORP: -3..-10% 2022-2025 = recompras/amortización reales; el neto lo
+        captura, no requiere ajuste de precio. OK.
+      * SAGA 2019Q4: -37% = ESCISIÓN (spin-off Inmobiliaria SIC), NO es AL -> el
+        eps_ttm mezcla base de acciones pre/post en 2019Q4..2020Q2 -> P/E
+        distorsionado ~37%. Marcado con flag `pe_reliable=0` en esos periodos
+        (build_dataset._PE_ARTIFACT_PERIODS); NO se NaN-ea, se señaliza (OE1
+        decide). Precio estancado en el evento -> ajuste fino descartado.
+      * CORAREC: cambios menores (1-5%). OK.
+    GUARDA GENERAL diferida: un reconciliador auto (neto SMV vs AL por ex-date)
+    daría falsos positivos en BCP por el desalineo de timing; por ahora los
+    eventos no-AL se agregan a mano a _PE_ARTIFACT_PERIODS. [deuda de mantenib.]
+    → ACTUALIZACIÓN jul-2026 (nuevo universo): SAGAC1 y CORAREC salieron del
+      universo, así que sus casos concretos ya no entran al panel; el mecanismo
+      `_PE_ARTIFACT_PERIODS`/`pe_reliable` SE CONSERVA en build_dataset (es la guarda
+      para cualquier evento societario no-AL futuro) y su entrada de SAGAC1 se deja
+      como registro del criterio. Los activos NUEVOS aportaron dos casos de conteo
+      que se resolvieron por CONFIGURACIÓN, no con la bandera:
+        * INRETC1 (holding sin valor nominal, un follow-on en 2022-Q2): conteo por
+          TRAMOS (`shares_outstanding_schedule`). Baja el error del P/E pre-2022Q2
+          de ~8% a <=2% (el tramo viejo es reconstruido por razón de Capital
+          Emitido). El escalón del EPS en 2022Q2 NO se marca: un follow-on diluye el
+          P/E trailing por definición, a diferencia de una escisión, que saca
+          negocio del perímetro.
+        * MINSURI1 (acción de inversión = 33.3% del patrimonio): override con el
+          total económico. Sin bandera: el conteo es exacto y constante
+          (capital plano 2012-2025, tesorería 0).
+      PENDIENTE de verificar al correr R4: que los otros 4 activos nuevos
+      (CPACASC1, FERREYC1, LUSURC1, y el propio MINSURI1) no traigan eventos no-AL
+      que exijan una entrada nueva en _PE_ARTIFACT_PERIODS.
+
+    → ACTUALIZACIÓN jul-2026 (conteo de acciones con fuente OFICIAL). El Informe
+      Bursátil Mensual de la BVL publica "acciones en circulación" por emisor y por
+      mes (docs/ejecutabilidad_y_costos_OE1.txt §4.5). Efectos sobre este riesgo:
+      * INRETC1 — MITIGADO SIN RESIDUO: el tramo pre-2022 deja de ser reconstruido
+        y pasa al oficial 102,807,319 (config.yaml). El "<=2%" declarado arriba era
+        LIGERAMENTE OPTIMISTA: la reconstrucción erraba -2.19%. Error del P/E
+        pre-2022 ahora CERO (dato, no estimación).
+      * NUEVO RIESGO DETECTADO — desfase de reconocimiento de acciones. El conteo
+        del pipeline sale del capital del BALANCE; la BVL lista las acciones
+        después. En CREDITC1 (capitaliza utilidades cada año) el pipeline se
+        adelanta hasta un trimestre: en 2014-03 usa 4,722,752,000 cuando la BVL
+        registra 3,752,616,786 hasta junio => EPS subestimado y P/E sobrestimado
+        ~26% EN EL TRIMESTRE DEL SALTO, y se REPITE anualmente. Mediana de la
+        discrepancia 0.00% y 72% de los periodos por debajo de 1%, o sea el sesgo
+        es acotado y localizado, no generalizado. [RESUELTO jul-2026 con el
+        CONTEO HÍBRIDO, ver la actualización siguiente]. Alternativas evaluadas en
+        ejecutabilidad_y_costos_OE1.txt §8.
+      * LÍMITE DE LA FUENTE OFICIAL (por qué NO se reemplaza el cálculo en
+        general): la BVL cuenta acciones EMITIDAS y el pipeline resta TESORERÍA.
+        Verificado en Alicorp: recompró 84,719 mil acciones en 2022 y las anuló
+        recién en 2024-03; el pipeline da 762,473 (neto, correcto para EPS) y la
+        BVL sigue en 847,191,731 hasta 2024. Para EPS manda el neto, así que aquí
+        el pipeline es MEJOR que el oficial. El oficial se usa como capa de
+        VALIDACIÓN, no como reemplazo.
+
+    → ACTUALIZACIÓN jul-2026 (CONTEO HÍBRIDO — IMPLEMENTADO). El párrafo anterior
+      planteaba una disyuntiva falsa (BVL vs SMV): cada fuente es autoritativa en
+      una dimensión distinta y se pueden combinar. La rama general de
+      `compute_shares_earnings` pasó a ser
+          acciones = emitidas y LISTADAS (BVL mensual)   [FECHA correcta]
+                     − |tesorería SMV 1D0711| / nominal  [AJUSTE correcto]
+      manteniendo intacta la precedencia schedule > override > híbrido, así que
+      INRETC1 (tramos) y MINSURI1 (override) no se tocan. Alternativa [C] de
+      ejecutabilidad_y_costos_OE1.txt §8, decidida por el usuario el 2026-07-30.
+      MITIGACIÓN MEDIDA (regresión sobre los parquets en disco):
+        * CREDITC1: cambian 16 de 83 periodos (el pipeline estaba +2.26% a +24.64%
+          por encima del oficial); en 14 de ellos hay P/E utilizable y baja en la
+          misma proporción (los otros 2 —2013-06 y 2014-03— ya tenían eps_ttm NaN
+          por un hueco PREEXISTENTE de la serie de utilidad de BCP en 2013, ajeno a
+          este cambio). El artefacto de periodicidad ANUAL —el que un agente DRL
+          podría aprender como estacionalidad— queda ELIMINADO, no señalizado.
+        * ALICORC1: 0 periodos cambian >1% (|dif| máx 0.00%); las diferencias son
+          de unos cientos de acciones porque el SMV reporta en miles y la BVL da el
+          conteo exacto. Es decir, el híbrido conserva el neteo de tesorería que
+          hacía bien el pipeline y además gana precisión. Criterios de aceptación
+          reproducidos al dígito: 2022-09 → 820,122,731; 2022-12 → 762,472,731;
+          CREDITC1 2014-03 → 3,752,616,786.
+      RESIDUOS declarados (la mitigación no es total):
+        * Periodos SIN dato oficial → fallback al capital del balance. Son los
+          28 trimestres 2005-2011 de cada activo (el informe mensual arranca en
+          2012-01). Sin impacto en el panel: el horizonte de mercado empieza en
+          2012 y sin precio no hay P/E.
+        * Hueco 2016-03 (PDF rasterizado) rellenado con ffill. Es EXACTO y no una
+          interpolación: el conteo es una función escalonada y se verificó que
+          2016-01/02/04/05 valen todos 5,854,050,896 (el escalón de BCP cae en
+          2016-06). Aun así queda anotado como dato derivado, no leído.
+        * Si `data/interim/bvl_mensual.parquet` no existe, el pipeline avisa y cae
+          al cálculo anterior en vez de descargar 174 PDF en medio de R4 — o sea
+          el panel se puede regenerar sin la capa oficial, con el sesgo de vuelta.
+      DECISIÓN SOBRE [B] (`pe_reliable=0` en los trimestres afectados): NO se
+      aplica. [B] señalizaba porque no se corregía; con [C] el conteo ES el
+      correcto en todo el horizonte con precio, así que marcar perdería P/E válido.
+      Queda descartada por innecesaria, no por costosa.
   - BVN: utilidad USD / precio PEN. Conversión TTM al TC de fin de trimestre
     (aproximación); ancla de acciones SEC constante (SMV en USD, sin nominal
     limpio). Ver aclaración al inicio de este doc. [documentado]
   - P/E NaN en pérdidas (BVN ~45% del tiempo): ausencia semántica; OE1 debe
-    enmascarar, no imputar. [documentado]
+    enmascarar, no imputar. Unificado en la bandera `pe_reliable` del panel
+    (=0 donde P/E es NaN por pérdidas O donde hay artefacto de acción corporativa
+    -escisión SAGA-). OE1 consume la bandera. [documentado]
   - Forward-fill trimestral (hasta ~4.5 meses stale): no hay bandera de
     antigüedad del fundamental (análoga a days_since_news). Considerar una
     columna quarters_since_fundamental / days_since_known. [abierto — mejora]
@@ -227,6 +524,15 @@ SENTIMIENTO (R5)
     Probable causa de la correlación débil. Mitigable: exigir ancla financiera
     también para CORAREC1, o un paso de filtrado de relevancia con el LLM.
     [abierto — mitigable barato]
+    → MITIGACIÓN PARCIAL (jul-2026, colateral del cambio de universo): CORAREC1 —
+      el caso peor, el único sin ancla financiera — salió del universo, así que ese
+      query concreto ya no alimenta el panel. NO cierra el riesgo: (i) el mecanismo
+      (resúmenes de índice, homonimia) sigue vigente para los queries que quedan;
+      (ii) los 5 activos NUEVOS traen queries no auditados todavía. Al correr R5 hay
+      que medirles el ruido temático con el mismo criterio que se usó en R5 §5.3 y,
+      si aparece, aplicar la mitigación pendiente (ancla financiera / filtro de
+      relevancia con el LLM). Volumen de prensa ya medido: Pacasmayo 14.3 art/sem,
+      InRetail 11.8, Ferreycorp 5.0, Luz del Sur 2.8, Minsur 2.2.
   - Solo título, no cuerpo (limitación de MediaCloud story_list). [abierto]
   - Confianza del LLM no calibrada [0.60,0.95]: no usar como peso estadístico.
     [documentado]
@@ -247,7 +553,10 @@ REPRODUCIBILIDAD / PROCEDENCIA (transversal)
   - Fuentes vivas no versionadas: endpoints BVL no documentados (pueden
     cambiar/romperse); precios/acciones/dividendos son snapshot "as-of-now"
     (la BVL actualiza semanalmente) → re-correr en otra fecha da otros
-    números. Recomendado: CONGELAR los parquet crudos con fecha de extracción.
+    números. Desde jul-2026 se suma una dependencia viva: el endpoint BVL de
+    Hechos de Importancia (/v1/corporate-actions) para known_date real (mitigado
+    por caché data/raw/smv_cache/bvl_hechos_{rpj}_*.json). Recomendado: CONGELAR
+    los parquet/caches crudos con fecha de extracción (manifiesto de procedencia).
   - Token de MediaCloud expuesto en un probe script (ya en memoria del
     proyecto): riesgo de seguridad; la descarga no es re-ejecutable por
     terceros sin él.
@@ -258,18 +567,41 @@ REPRODUCIBILIDAD / PROCEDENCIA (transversal)
 ========================================================================
 QUÉ HACER (priorización para la próxima sesión)
 ========================================================================
-  1. [HECHO jul-2026] Verificado el lag de known_date contra los plazos
-     regulatorios de la SMV y corregido Q4 a 60 días (look-ahead eliminado,
-     crítico en BVN). Ver Tier 1 punto 3(a). Próximo look-ahead a atacar: el
-     de datos reexpresados vs point-in-time (3b), más difícil.
-  2. Modelado de costos/iliquidez en OE1 — sin esto los resultados de trading
-     no son creíbles; primero de la etapa del agente.
-  3. DECLARAR en limitaciones: selección/supervivencia, reexpresión (no
-     point-in-time), techo de la señal de sentimiento.
-  4. Barato y de alto valor: ancla financiera para CORAREC1 (arregla el peor
-     ruido temático) + congelar los crudos con fecha de extracción.
+  0. [HECHO jul-2026] known_date con fecha real BVL + fallback 40/60 calibrado
+     (3a); reexpresado REEVALUADO como bajo impacto (3b, ambos look-ahead
+     cerrados); banderas is_stale y pe_reliable en el panel; escisión SAGA
+     marcada. Verificación de acciones §3.10.2(c) hecha (BCP OK, SAGA=escisión).
+  1. DECISIÓN DE UNIVERSO [pendiente]: reemplazar SAGA (2.2% precios distintos)
+     y CORAREC (5.5%) por nombres BVL-nativos más viables. Candidatos:
+     retail->INRETC1 (23%) o CASAGRC1 (21%); construcción->CPACASC1 (12.6%);
+     alterno utilities LUSURC1 (19.3%). Ver R3 y la investigación jul-2026. Si
+     se cambia, re-correr todo el pipeline (mercado->R6) para los nuevos.
+     → DECIDIDA Y CODIFICADA (jul-2026): universo de 7 (ver Tier 1 #1, mitigación
+       2). El CÓDIGO del nuevo universo está cerrado; falta LA CORRIDA
+       R3->R6 + regenerar notebooks/docs. Detalle:
+       docs/pendientes_implementacion_universo.txt.
+  2. Modelado de costos/iliquidez en OE1 — AHORA CONFIRMADO como el determinante
+     de la validez: iliquidez universal (is_stale 24-96%, no-trade la subcuenta).
+     Sin ejecución/costo realista los resultados son ficción. Primero de OE1.
+     → PLAN DE TRATAMIENTO YA REDACTADO en Tier 1 #1 ("PLAN DE TRATAMIENTO EN
+       OE1"): 5 mecanismos (ejecución t+1; prohibir transar en días stale/no-trade;
+       costo proporcional con spread como supuesto declarado; tope de capacidad;
+       y como pieza central el COSTO DE EQUILIBRIO sobre una grilla de costos).
+       Diagnóstico: es cautela de modelado, no un problema técnico difícil; el
+       riesgo real es que el tratamiento honesto pueda borrar la ventaja. LEER ESO
+       ANTES de diseñar el entorno.
+     → Sub-tarea barata asociada: probar los tickers Yahoo de los 5 activos nuevos
+       para obtener volumen (hoy yahoo: null en config para todos ellos) y poder
+       acotar el tope de participación con datos en vez de por supuesto.
+  3. DECLARAR en limitaciones: selección/supervivencia; iliquidez universal
+     severa (con la tabla is_stale); reexpresión (bajo impacto); dos fenómenos
+     de iliquidez (staleness vs distorsión de nivel de BCP); BAP descartado y por
+     qué; techo de la señal de sentimiento.
+  4. Barato y de alto valor: ancla financiera para CORAREC1 (si sigue en el
+     universo) + CONGELAR los crudos con fecha de extracción (más urgente ahora
+     que known_date depende también del endpoint BVL de hechos).
   5. Considerar feature de antigüedad de fundamentales (análoga a
-     days_since_news).
+     days_since_news). Guarda general de shares_jump_unexplained (diferida).
 
 
 ========================================================================

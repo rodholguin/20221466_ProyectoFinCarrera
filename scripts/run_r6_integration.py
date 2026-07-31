@@ -1,8 +1,10 @@
 """R6 — Construcción del dataset unificado.
 
-Lee mercado (interim), sentimiento (interim) y fundamentales crudos (raw,
-vía compute_ratios) de los 5 activos del universo y arma el panel único
-(ticker, date) en data/processed/dataset_unificado.parquet.
+Lee mercado (interim), sentimiento (interim) y fundamentales crudos (raw, vía
+compute_ratios) de los activos de config.yaml, les suma los features macro
+globales del BCRP (src.macro.macro_client, alineados point-in-time sobre el
+calendario bursátil) y arma el panel único (ticker, date) en
+data/processed/dataset_unificado.parquet.
 
 Uso:
   python scripts/run_r6_integration.py
@@ -19,8 +21,11 @@ import pandas as pd
 
 from src.universe import Config
 from src.fundamentals.fundamentals_client import compute_ratios
+from src.macro.macro_client import macro_features
 from src.market.corporate_actions import fetch_actions, filter_actions_by_cutoff
-from src.integration.build_dataset import build_unified, feature_views, save
+from src.integration.build_dataset import (
+    build_trading_calendar, build_unified, feature_views, save,
+)
 
 
 def _dividends_frame(asset, end: str, market_dates: pd.Series) -> pd.DataFrame:
@@ -84,7 +89,24 @@ def main() -> None:
     print(f"Sentimiento:  {len(sentiment):>6} filas, {sentiment['ticker'].nunique()} activos")
     print(f"Fundamentales:{len(ratios):>6} filas, {ratios['ticker'].nunique()} activos")
 
-    unified = build_unified(market, sentiment, ratios, dividends=dividends)
+    # Macro (BCRP, 6 series globales): se resuelve AQUÍ sobre el calendario
+    # bursátil del panel y se pasa ya alineado point-in-time (niveles crudos; la
+    # transformación —retorno log en precios, nivel+cambio en tasa/EMBI— es de OE1).
+    calendar = build_trading_calendar(market)
+    try:
+        macro = macro_features(calendar)
+        print(f"Macro:        {len(macro):>6} fechas, {len(macro.columns)} series "
+              f"({', '.join(macro.columns)})")
+        nan_macro = macro.isna().sum()
+        if nan_macro.any():
+            print(f"  AVISO: NaN en macro (fechas previas al 1er dato de la serie): "
+                  f"{nan_macro[nan_macro > 0].to_dict()}")
+    except Exception as exc:
+        print(f"  AVISO: features macro no disponibles ({exc}); panel SIN columnas macro.")
+        macro = None
+
+    unified = build_unified(market, sentiment, ratios, dividends=dividends,
+                            trading_calendar=calendar, macro=macro)
 
     print(f"\nPanel unificado: {len(unified)} filas x {len(unified.columns)} columnas")
     print(f"Rango: {unified['date'].min().date()} -> {unified['date'].max().date()}")

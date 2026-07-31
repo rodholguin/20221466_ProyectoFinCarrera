@@ -1,0 +1,153 @@
+FUNDAMENTO: FACTORES MACRO Y CÓMO EL RIESGO POLÍTICO/GEOPOLÍTICO SE
+CONVIERTE EN INDICADORES NUMÉRICOS (sin parsear noticias)
+Tesis: Aprendizaje por refuerzo profundo aplicado a la BVL
+Autor: Rodrigo Holguin — Asesor: Dr. E. Villanueva
+Generado: jul-2026
+========================================================================
+
+PROPÓSITO
+---------
+Justificar dos decisiones de diseño del panel de features:
+  (1) Qué factores macroeconómicos duros se incorporan (hasta inflación).
+  (2) Por qué NO se agrega un feed de "noticias geopolíticas internacionales"
+      como feature de sentimiento, y en su lugar el canal de eventos
+      (guerras, vacancias presidenciales, conflictos sociales) entra a través
+      de indicadores numéricos que YA agregan esa información.
+
+La pregunta de fondo (planteada por el autor): ¿cómo se pasa de una noticia
+abstracta ("el Congreso vacó al presidente", "estalló un conflicto bélico")
+a un número que el agente pueda observar? Hay DOS mecanismos, ambos con
+respaldo en la literatura, y ambos evitan tener que clasificar esas noticias
+a mano.
+
+
+========================================================================
+1. FACTORES MACRO DUROS INCORPORADOS (decisión: hasta inflación)
+========================================================================
+Todos son GLOBALES (una columna, mismo valor para los 7 activos en una fecha),
+se difunden por fecha con merge_asof usando como known_date la fecha de
+ANUNCIO/publicación (misma disciplina point-in-time que los fundamentales).
+Fuente preferida: BCRP (API abierto ya usado en src/market/fx.py), coherente
+con el principio del proyecto "BVL/SMV/BCRP mandan sobre fuentes externas".
+
+  a. Precio del cobre        (diario)   — principal driver macro del Perú.
+  b. Tipo de cambio USD/PEN  (diario)   — YA implementado (serie PD04640PD).
+  c. Precio del oro          (diario)   — relevante para la minera (BVN: oro/plata).
+  d. Tasa de referencia BCRP (mensual)  — banca, consumo a crédito, construcción.
+  e. EMBI+ Perú (riesgo país)(diario)   — prima de riesgo soberano; ver Sec. 2.
+  f. Inflación (IPC)         (mensual)  — poder de compra del consumidor.
+
+Los precios (cobre, oro, TC) se entregan como variación/retorno log
+(estacionarios); tasas y EMBI como nivel + cambio.
+
+POR QUÉ EL COBRE ES EL FACTOR MAESTRO (respaldo empírico):
+El Perú es una economía pequeña, abierta y exportadora de minerales, por lo
+que los choques de TÉRMINOS DE INTERCAMBIO (dominados por metales) son el
+principal driver externo del producto. Evidencia:
+  - Los choques de términos de intercambio explican ~25.6% de la varianza del
+    crecimiento del PBI real 2001-2016; estudios recientes atribuyen 30%-60%
+    de la variabilidad del producto a choques de precios de commodities.
+    (Time-varying transmission of external shocks in Peru, ScienceDirect 2025;
+    IMF Article IV Peru 2023/2025-2026.)
+  - Perú y Chile (alta participación minera en exportaciones) acumulan
+    superávits fiscales en auges de cobre y déficits en caídas -> el ciclo
+    fiscal, el sol y la bolsa siguen al metal.
+  - La dolarización eleva la sensibilidad al TC (la deuda sube más y con más
+    persistencia ante depreciaciones que en pares regionales) -> el TC es
+    macrovariable de primer orden, no un detalle.
+
+
+========================================================================
+2. CÓMO "NOTICIA ABSTRACTA" -> "INDICADOR NUMÉRICO": DOS MECANISMOS
+========================================================================
+
+MECANISMO A — VÍA PRECIOS DE MERCADO (eficiencia informacional).
+Los mercados incorporan las noticias políticas a los PRECIOS en tiempo real;
+por tanto el spread soberano (EMBI), el tipo de cambio y el propio índice
+bursátil YA SON una agregación numérica de cómo los inversionistas valoran
+esos eventos. No hay que leer la noticia: su efecto ya está en el precio.
+
+  RESPALDO (específico de Perú):
+  Micozzi, Navia, Pinto y Saiegh (2024), "The Real-Time Impact of Political
+  Risk on Market Valuations: Evidence from Peru", Journal of Risk and
+  Financial Management 17(7):298.
+    - Usan datos de ALTA FRECUENCIA (minuto a minuto) de precios de acciones
+      peruanas y timestamps exactos de los medios (feeds de Twitter) para
+      alinear la noticia con la reacción del mercado.
+    - Evento focal: el intento de autogolpe de Pedro Castillo (dic-2022). El
+      mercado "incorporó pronta y correctamente" la noticia a las valuaciones
+      en cuestión de MINUTOS.
+    - Los quiebres del orden democrático BAJAN los precios de los activos; la
+      restauración del Estado de derecho los SUBE. Las empresas domésticas con
+      activos menos móviles son más vulnerables (justo el tipo de empresa del
+      universo de la tesis).
+    - Hallazgo metodológico clave: los datos DIARIOS pueden sugerir
+      erróneamente impacto "insignificante"; la reacción es visible en alta
+      frecuencia. (Advertencia para la tesis: nuestro panel es diario, así que
+      capturamos el NIVEL del reprecio, no la microdinámica intradía.)
+  Corolario para la geopolítica GLOBAL: una guerra (p.ej. Rusia-Ucrania 2022)
+  llega al Perú principalmente ENCARECIENDO metales/petróleo -> ese canal ya
+  está en el precio del cobre/oro (Sec. 1). No se necesita un feed de noticias
+  bélicas: sería redundante con los commodities.
+
+MECANISMO B — VÍA ÍNDICES DE TEXTO (news-based indices).
+Existen índices que SÍ se construyen contando/clasificando noticias, pero ya
+vienen hechos y validados: uno no parsea las notas, consume el índice.
+  - Metodología fundacional: Baker, Bloom & Davis (2016), "Measuring Economic
+    Policy Uncertainty", Quarterly Journal of Economics 131(4):1593. El índice
+    EPU = proporción de artículos de prensa que contienen, a la vez, términos
+    de (economía + incertidumbre + política). Validado contra 12,000 artículos
+    leídos por humanos. Cubre 22 países; lo distribuyen Bloomberg/FRED/Reuters.
+  - EXISTE UN EPU PARA EL PERÚ, y es del BCRP: documento de trabajo 002-2026,
+    "The Macroeconomic Effects of Economic Policy Uncertainty". Índice 2009-2025
+    construido por web-scraping de Gestión, El Comercio, Perú21, RPP, Diario
+    Correo y La Primera. Un VAR muestra que los choques de incertidumbre son
+    RECESIVOS (caída del producto, depreciación del sol, menores tasas cortas
+    en soles). Tiene sub-índices temáticos (fiscal, monetario, comercial,
+    COVID/no-COVID). También hay compilaciones regionales (Banco de España,
+    "EPU Indices for Latin America").
+
+  -> El EPU-Perú del BCRP es, literalmente, el "sentimiento de noticias
+     político-económicas domésticas" convertido en una serie numérica, hecho
+     por el regulador y ya validado. Es el add-on ideal si más adelante se
+     quiere el TONO/SORPRESA que un precio no captura, SIN construir un
+     clasificador propio de notas políticas.
+
+
+========================================================================
+3. DECISIÓN Y CONSECUENCIA PARA EL PANEL
+========================================================================
+  - NO se agrega un feed de noticias geopolíticas internacionales como
+    feature: para el Perú aporta poco de forma directa y su canal real
+    (global -> commodities) YA está en cobre/oro; el canal político doméstico
+    YA está en el EMBI y el TC (Mecanismo A).
+  - El riesgo político/geopolítico entra por proxies DUROS y point-in-time:
+    EMBI+ Perú (soberano), cobre y oro (externo), TC (dolarización).
+  - QUEDA COMO OPCIÓN DE BAJO COSTO Y ALTO RESPALDO: sumar el EPU-Perú del
+    BCRP (Mecanismo B) como feature global de incertidumbre político-económica
+    doméstica basada en texto, ya listo, sin clasificación propia. Pendiente
+    de decisión.
+  - Limitación declarada: el panel es DIARIO; captura el nivel del reprecio de
+    eventos políticos, no la reacción intradía que documentan Micozzi et al.
+
+
+========================================================================
+FUENTES
+========================================================================
+  - Micozzi, Navia, Pinto & Saiegh (2024). The Real-Time Impact of Political
+    Risk on Market Valuations: Evidence from Peru. J. Risk Financial Manag.
+    17(7):298. https://www.mdpi.com/1911-8074/17/7/298
+    (preprint: https://pages.ucsd.edu/~ssaiegh/peru_jrfm.pdf)
+  - Baker, Bloom & Davis (2016). Measuring Economic Policy Uncertainty.
+    QJE 131(4):1593. https://academic.oup.com/qje/article-abstract/131/4/1593/2468873
+    Datos: https://www.policyuncertainty.com/all_country_data.html
+  - BCRP (2026). The Macroeconomic Effects of Economic Policy Uncertainty.
+    Documento de Trabajo 002-2026. https://www.bcrp.gob.pe/docs/Publicaciones/
+    Documentos-de-Trabajo/2026/documento-de-trabajo-002-2026.pdf
+  - Banco de España. EPU Indices for Latin America.
+    https://www.bde.es/wbe/en/areas-actuacion/analisis-e-investigacion/america-latina/
+  - Time-varying transmission of external shocks in Peru (ScienceDirect, 2025).
+    https://www.sciencedirect.com/science/article/abs/pii/S0264999325002366
+  - IMF. Peru: Article IV Consultation Staff Reports 2023 y 2025/2026.
+    https://www.imf.org/ (Country Reports Peru)
+========================================================================

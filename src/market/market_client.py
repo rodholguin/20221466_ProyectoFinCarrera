@@ -20,6 +20,11 @@ Fuentes:
                    saltos artificiales >100%. Por eso el open/high/low de Yahoo
                    se reescala por el factor acumulado de splits antes de
                    fusionarlo con el close (siempre autoritativo) de la BVL.
+
+Moneda del precio: el pipeline entrega SIEMPRE el precio en PEN. Los activos que
+COTIZAN en US$ en la BVL (INRETC1; ver `Asset.price_currency`) se convierten con
+el tipo de cambio del BCRP vigente cada día (ver _to_pen y src/market/fx.py),
+después de grabar la capa cruda y antes de cualquier ajuste.
 """
 from __future__ import annotations
 
@@ -27,6 +32,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from src.market import fx
 from src.market.corporate_actions import (
     build_adjusted_prices, fetch_actions, filter_actions_by_cutoff, split_factor,
 )
@@ -117,6 +123,50 @@ def fetch_yahoo(asset: Asset, start: str, end: str) -> pd.DataFrame:
     return df[MARKET_SCHEMA]
 
 
+# ── Moneda del precio (US$ -> PEN) ────────────────────────────────────────────
+def _to_pen(asset: Asset, df: pd.DataFrame, label: str) -> pd.DataFrame:
+    """Lleva a PEN el precio de un activo que COTIZA en US$ (asset.price_currency).
+
+    Caso del universo: INRETC1 (InRetail, holding panameño) cotiza en la BVL en
+    dólares (~US$25) mientras el resto cotiza en soles. Todo lo demás del
+    pipeline está en PEN -- los dividendos de la BVL en US$ ya se convierten con
+    el TC del BCRP (corporate_actions), los EEFF de la SMV vienen en miles de PEN
+    y el P/E = close_raw / eps_ttm exige numerador y denominador en la misma
+    moneda -- así que el close se convierte aquí, en la frontera de ingesta.
+
+    OJO: es MÁS que el caso BUENAVC1/BVN. Ahí el close de la BVL ya venía en PEN
+    y solo el REPORTE de la SMV estaba en USD (eso se resuelve en
+    fundamentals_client); aquí es el precio negociado el que está en US$.
+
+    Se usa el TC de venta bancario del BCRP VIGENTE cada fecha (fx.rate_asof =
+    último dato hábil <= fecha), el mismo criterio aplicado a los dividendos en
+    US$, para que el factor de reinversión de close_total_return quede homogéneo
+    en soles. Fechas sin TC disponible se descartan (no deberían existir: la
+    serie del BCRP arranca en 2010 y el horizonte de mercado es 2012+).
+    """
+    if df.empty or not fx.is_usd(asset.price_currency):
+        return df
+
+    rate = fx.rate_asof(pd.DatetimeIndex(df["date"])).to_numpy()
+    out = df.copy()
+    missing = pd.isna(rate)
+    if missing.any():
+        print(f"[fx] {asset.bvl} ({label}): {int(missing.sum())} fecha(s) sin TC BCRP "
+              f"-> fila(s) descartada(s).")
+        out = out[~missing].copy()
+        rate = rate[~missing]
+    if out.empty:
+        return out
+
+    for col in ("open", "high", "low", "close"):
+        if col in out.columns:
+            out[col] = out[col].to_numpy() * rate
+    print(f"[fx] {asset.bvl} ({label}): close US$->PEN con TC BCRP en {len(out)} filas "
+          f"(TC {rate.min():.3f}..{rate.max():.3f}); último día "
+          f"US$ {df['close'].iloc[-1]:.2f} -> S/ {out['close'].iloc[-1]:.2f}")
+    return out
+
+
 # ── Orquestacion y merge ──────────────────────────────────────────────────────
 def fetch_market(asset: Asset, start: str, end: str, raw_dir: Path) -> pd.DataFrame:
     """Obtiene datos de mercado: BVL primaria (determina el horizonte) +
@@ -128,6 +178,8 @@ def fetch_market(asset: Asset, start: str, end: str, raw_dir: Path) -> pd.DataFr
       - Con BVL: close oficial de la BVL; OHLCV enriquecido con Yahoo en las
         fechas donde coinciden, si es el mismo instrumento en PEN (no aplica
         para BUENAVC1/BVN USD).
+      - Si el activo cotiza en US$ (price_currency), el precio se lleva a PEN
+        (_to_pen) antes del merge y del ajuste por acciones corporativas.
       - Tras consolidar close_raw, se agregan close_split_adj y
         close_total_return (ver corporate_actions.py).
     """
@@ -135,9 +187,23 @@ def fetch_market(asset: Asset, start: str, end: str, raw_dir: Path) -> pd.DataFr
     bvl = fetch_bvl(asset, start, end)
     yah = fetch_yahoo(asset, start, end)
 
+    # Capa cruda: se graba TAL COMO lo devolvió la fuente (en su moneda original).
     for name, df in (("bvl", bvl), ("yahoo", yah)):
         if not df.empty:
             df.to_parquet(raw_dir / f"market_{asset.bvl}_{name}.parquet")
+
+    # Conversión de moneda (INRETC1): antes del merge y de las acciones
+    # corporativas, para que el close, el OHLC y los dividendos (ya en PEN)
+    # estén en la misma moneda. Se asume que Yahoo, cuando existe, cotiza el
+    # mismo instrumento en la misma moneda que la BVL; hoy no aplica (INRETC1
+    # no tiene ticker Yahoo) y se avisa si algún día lo tuviera.
+    if fx.is_usd(asset.price_currency):
+        if asset.yahoo:
+            print(f"[fx] {asset.bvl}: price_currency=USD y tiene ticker Yahoo "
+                  f"({asset.yahoo}) -> VERIFICAR que Yahoo también cotice en US$ "
+                  f"antes de confiar en el open/high/low fusionado.")
+        bvl = _to_pen(asset, bvl, "bvl")
+        yah = _to_pen(asset, yah, "yahoo")
 
     if bvl.empty:
         print(f"[market] {asset.bvl}: SIN DATOS en la BVL (fuente primaria) -> "

@@ -10,76 +10,136 @@ period:
   start: "2005-01-01"
   end:   "2025-12-31"
 
-# Universo de activos. Un activo por sector para evaluar diversificación.
+# Universo de activos (7). REVISADO jul-2026 por liquidez (riesgo #1): se
+# reemplazaron SAGAC1 (2.2% días operados), CORAREC1 (20.8%) y BUENAVC1 (23.7%,
+# ilíquida en BVL) por nombres BVL-nativos más líquidos, y se amplió a 7 para
+# atacar el sesgo de universo chico. Cada candidato se validó en las 3 patas
+# (liquidez BVL + fundamentales SMV + cobertura mediática). Ya NO es "uno por
+# sector" estricto, sino "activos líquidos representativos".
 # - bvl    : ticker en la Bolsa de Valores de Lima (fuente primaria)
-# - yahoo  : ticker de respaldo en Yahoo Finance (verificar uno por uno;
-#            para acciones solo-BVL el sufijo suele ser ".LM" pero la
-#            cobertura es irregular -> por eso BVL es la primaria)
-# - smv    : entidad que PRESENTA los EEFF a la SMV (puede diferir del
-#            ticker bursátil, sobre todo en bancos/holdings)
-# - isin   : identificador estable, útil para reconciliar fuentes
+# - smv_rpj: código RPJ del emisor en la SMV (= rpjCode de la BVL; cross-validado)
+# - bvl_company_code: companyCode BVL para /v1/issuers/{cc}/value (dividendos +
+#            acciones liberadas + acciones en circulación)
 universe:
   - sector: banca
     name: "Banco de Credito del Peru (BCP)"
     bvl: "CREDITC1"
-    yahoo: "CREDITC1.LM"  # solo cubre ~2011+ ; para 2005-2010 usar la BVL
+    yahoo: "CREDITC1.LM"
     smv: "BANCO DE CREDITO DEL PERU"
-    smv_rpj: "B80005"     # código único SMV (confirmado con obtener_InfoFinanciera)
-    bvl_company_code: "12000"  # dividendos + acciones liberadas BVL (dataondemand /value)
-    nominal_value: 1.0         # S/ por acción (BVL listStock). Cuentas capital: 1F3301/1F3314 (banco SBS)
+    smv_rpj: "B80005"
+    bvl_company_code: "12000"
+    nominal_value: 1.0         # cuentas capital banco SBS 1F3301/1F3314
     isin: "PEP120001008"
-    xcheck: "BAP"          # Credicorp Ltd (NYSE, USD): validación cruzada, NO reemplazo
+    xcheck: "BAP"              # Credicorp Ltd (NYSE): validación cruzada, NO reemplazo
     notes: >
-      Cotiza en PEN (coherente con el resto). Reporta EEFF localmente a la SMV
-      en soles -> fundamentales limpios. Sigue siendo banco: taxonomía contable
-      SBS distinta a empresas no financieras -> mapear sus cuentas aparte (P/E,
-      ROE, DY sí son calculables). Liquidez baja (free float reducido, ~33k
-      acciones/día): limpiar huecos/cierres estancados y modelar el costo de
-      iliquidez en el entorno. Historia disponible desde ~1993 (S&P Global), así
-      que 2005 está cubierto desde la fuente oficial de la BVL.
+      Cotiza en PEN. Reporta a la SMV en soles (taxonomía SBS, mapear aparte).
+      Liquidez baja (free float ~33k acc/día): modelar costo de iliquidez en OE1.
 
   - sector: minero
-    name: "Compañia de Minas Buenaventura"
-    bvl: "BUENAVC1"
-    yahoo: "BVN"          # NYSE (ADR), USD
-    smv: "COMPAÑIA DE MINAS BUENAVENTURA S.A.A."
-    smv_rpj: "B20003"     # reporta en USD (Moneda=Dólares)
-    bvl_company_code: "61200"  # 69 dividendos en US$ (se convierten a PEN con TC BCRP)
-    nominal_value: 10.0        # S/ por acción (BVL). El SMV reporta capital en USD ->
-    shares_outstanding_override: 253715190  # acciones en circulación (emitidas 274,889,924
-                               # - tesorería 21,174,734), constante 2012-2025 según SEC 20-F
-                               # (EDGAR CIK 1013131). Ver docs/pipeline §3.10.2 (f).
+    name: "Minsur"
+    bvl: "MINSURI1"            # ACCIÓN DE INVERSIÓN (la común de Breca no cotiza)
+    yahoo: null
+    smv: "MINSUR S.A."
+    smv_rpj: "A20032"          # reporta en USD (Moneda=Dólares)
+    bvl_company_code: "62200"
+    nominal_value: 1.0         # S/ por acción (BVL). SMV en USD -> se usa el override
+    shares_outstanding_override: 2883002520  # TOTAL económico = 3 × 961,000,840
+                               # (la acción de inversión es 1/3 del patrimonio: cuentas
+                               # SMV 1D0703=300,634 vs 1D0701=601,269, exactamente 2:1,
+                               # PLANAS 2012-2025). Con el total, eps_ttm=utilidad/total
+                               # y el P/E de la acción de inversión sale correcto.
     isin: null
+    notes: >
+      Reemplaza a BUENAVC1 (jul-2026): liquidez 64.9% vs 23.7%, y rentable 7/9 años
+      (P/E usable) vs BVN 2/9 (P/E casi siempre NaN). Reporta USD -> utilidad USD→PEN
+      automática (TC BCRP). Precio en PEN (~S/5.3), NO se convierte. Estaño (#2 mundial)
+      + cobre (Mina Justa). Conteo perfectamente estable (sin emisiones/recompras).
 
   - sector: alimentos
     name: "Alicorp"
     bvl: "ALICORC1"
-    yahoo: "ALICORC1.LM"  # TODO: verificar
+    yahoo: "ALICORC1.LM"
     smv: "ALICORP S.A.A."
     smv_rpj: "B30006"
     bvl_company_code: "21400"  # 34 dividendos en S/.
-    nominal_value: 1.0         # S/ por acción. Tesorería 1D0711 material (hasta 10% en 2022-2023)
+    nominal_value: 1.0         # Tesorería 1D0711 material (hasta 10% 2022-2023)
     isin: null
 
   - sector: retail
-    name: "Saga Falabella"
-    bvl: "SAGAC1"
-    yahoo: "SAGAC1.LM"    # TODO: verificar
-    smv: "SAGA FALABELLA S.A."
-    smv_rpj: "014313"     # OJO: existe también RPJ B80144 (Banco Falabella) y 020045 (Falabella Peru)
-    bvl_company_code: "75700"  # 25 dividendos S/. + 1 acción liberada
-    nominal_value: 1.0         # S/ por acción. Tesorería 0 en el horizonte -> circulación = emitidas
-    isin: "PEP757001008"
+    name: "InRetail Peru Corp"
+    bvl: "INRETC1"
+    yahoo: null
+    smv: "INRETAIL PERU CORP"
+    smv_rpj: "OE5087"
+    smv_tipo: "C"              # CONSOLIDADO (holding; su individual da pérdida:
+                               # 2023Q4 consolidado +321,717 vs individual -40,729
+                               # miles S/). Lo consume fetch_smv (implementado).
+    bvl_company_code: "74222"
+    nominal_value: 0.0         # SIN valor nominal (holding Panamá) -> se usa el override
+    # Conteo por TRAMOS (no override constante): el follow-on fue exactamente en
+    # 2022-Q2 (Capital Emitido SMV 1D0701 plano en 2,739,714 desde 2012 hasta
+    # 2022-Q1 y salta a 2,962,923 en 2022-Q2; tesorería 1D0711 = 0 siempre).
+    # Conteo OFICIAL mes a mes, del Informe Bursátil Mensual de la BVL
+    # (data/interim/bvl_mensual.parquet, ver src/market/bvl_infmen.py).
+    # SUSTITUYE (jul-2026) a la reconstrucción por razón de Capital Emitido, que
+    # daba 100,556,000 para el tramo pre-2022: el oficial es 102,807,319, así que
+    # la reconstrucción erraba -2.19% (algo por encima del <=2% que se había
+    # declarado). Con esto la limitación se ELIMINA, no solo se acota.
+    shares_outstanding_schedule:
+      # Pre-IPO. Solo alcanza al periodo 2012Q3, que no tiene TTM todavía, así que
+      # no produce ningún P/E; se deja por fidelidad al registro oficial.
+      - ["2012-09-01", 79807319]
+      # IPO de octubre 2012.
+      - ["2012-10-01", 102807319]
+      # Follow-on: la BVL lo registra en ABRIL 2022 (antes se suponía 2022-06-30
+      # por el salto del Capital Emitido en 2022-Q2; abril cae dentro de ese
+      # trimestre, así que el efecto sobre los periodos trimestrales es el mismo).
+      - ["2022-04-01", 108746887]
+    price_currency: "USD"      # cotiza en US$ (~27) -> close US$→PEN con TC BCRP vigente
+                               # (market_client._to_pen, implementado; ~S/96-120 en 2025)
+    isin: "PAL1801171A1"
+    notes: >
+      Reemplaza a SAGAC1 (jul-2026). Único retail líquido (63.1%) con prensa (11.8/sem).
+      COMPLEJO: precio en US$ (convertir a PEN), sin valor nominal, fundamentales
+      consolidados. Acciones estables, un solo follow-on 2022-Q2 (100.56M -> 108.75M).
 
-  - sector: manufactura
-    name: "Corporacion Aceros Arequipa"
-    bvl: "CORAREC1"        # acción común; existe también CORAREI1 (inversión)
-    yahoo: "CORAREC1.LM"  # TODO: verificar
-    smv: "CORPORACION ACEROS AREQUIPA S.A."
-    smv_rpj: "CI0003"
-    bvl_company_code: "20601"  # 80 dividendos (56 S/. + 30 US$) + 6 acciones liberadas
-    nominal_value: 1.0         # S/ por acción. Tesorería 0 en el horizonte -> circulación = emitidas
-    isin: null
+  - sector: construccion
+    name: "Cementos Pacasmayo"
+    bvl: "CPACASC1"           # común; existe también CPACASI1 (inversión)
+    yahoo: null
+    smv: "CEMENTOS PACASMAYO S.A.A."
+    smv_rpj: "CD0005"
+    bvl_company_code: "23950"
+    nominal_value: 1.0
+    isin: "PEP239501005"
+    notes: >
+      Reemplaza a CORAREC1 (jul-2026). El candidato más completo: liquidez 72.1%,
+      prensa 14.3/sem, reporta en soles.
+
+  - sector: bienes_capital
+    name: "Ferreycorp"
+    bvl: "FERREYC1"
+    yahoo: null
+    smv: "FERREYCORP S.A.A."
+    smv_rpj: "B60001"
+    bvl_company_code: "73600"
+    nominal_value: 1.0
+    isin: "PEP736001004"
+    notes: >
+      Nuevo (jul-2026). Sector no representado antes (bienes de capital / distribución
+      Caterpillar). Liquidez 73.5%, prensa 5.0/sem, soles. Tiene acciones liberadas (AL).
+
+  - sector: utilities
+    name: "Luz del Sur"
+    bvl: "LUSURC1"
+    yahoo: null
+    smv: "LUZ DEL SUR S.A.A."
+    smv_rpj: "B40008"
+    bvl_company_code: "70252"
+    nominal_value: 0.68
+    isin: "PEP702521001"
+    notes: >
+      Nuevo (jul-2026, utilities). Liquidez 56.5%, prensa 2.8/sem, soles. 55 dividendos.
 
 # ---------------------------------------------------------------------
 # Fuentes de datos
@@ -118,6 +178,19 @@ sources:
       - "gestion.pe"
       - "elcomercio.pe"
       - "larepublica.pe"
+
+  # Features macroeconómicos globales (BCRP). Ver src/macro/macro_client.py y
+  # docs/fundamento_macro_riesgo_politico.txt. Series validadas 2012-2025.
+  macro:
+    provider: "bcrp"
+    api_url: "https://estadisticas.bcrp.gob.pe/estadisticas/series/api"
+    series:
+      tc_usdpen:  "PD04640PD"   # diaria (ya en src/market/fx.py)
+      cobre:      "PD04701XD"   # diaria (Londres, cUS$/lb)
+      oro:        "PD04704XD"   # diaria (Londres, US$/oz troy)
+      embi:       "PD04709XD"   # diaria (Spread EMBIG Perú, pbs)
+      tasa_ref:   "PD04722MM"   # mensual (tasa de referencia BCRP, %)
+      inflacion:  "PN01271PM"   # mensual (IPC Lima, var% mensual)
 
 paths:
   raw:       "data/raw"
