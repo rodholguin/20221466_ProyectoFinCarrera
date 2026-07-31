@@ -1,0 +1,273 @@
+VALIDACIÓN DEL ETIQUETADO DE SENTIMIENTO (R5) CONTRA ANOTACIÓN MANUAL
+Tesis: Aprendizaje por refuerzo profundo aplicado a la Bolsa de Valores de Lima
+Autor: Rodrigo Holguin — Asesor: Dr. E. Villanueva
+Fecha: 31 de julio de 2026
+========================================================================
+
+QUÉ SE VALIDÓ Y POR QUÉ AHORA
+------------------------------------------------------------------------
+El clasificador de R5 (gemma3:4b vía Ollama, zero-shot, 3 clases) nunca había
+sido contrastado contra una anotación de referencia: se asumió correcto. Antes de
+volver a correr R5 para el universo de 7 activos —el paso más caro del pipeline,
+días de cómputo— corresponde saber si lo que produce es una señal de sentimiento
+de empresa o ruido con signo.
+
+Universo evaluado: el corpus YA clasificado (universo viejo), 11,566 noticias de
+5 activos, 2013-2025. Las conclusiones son sobre el MÉTODO, no sobre esos activos,
+así que aplican al corpus nuevo.
+
+Script: scripts/valida_etiquetado_r5.py (--muestra / --evalua). Muestra y
+anotación quedan en data/interim/r5_validacion_*.csv, reproducibles con la
+semilla 20221466.
+
+
+1. DISEÑO DE LA VALIDACIÓN
+------------------------------------------------------------------------
+Muestra estratificada por (activo x etiqueta predicha), 12 por estrato = 180
+noticias. Se estratifica por etiqueta predicha porque interesa la precisión de
+las clases informativas (positivo/negativo), no solo la exactitud global; para
+volver a la población cada estrato se repondera por su frecuencia real.
+
+Anotación CIEGA: el anotador recibió solo activo, fecha, medio y titular, sin la
+etiqueta del modelo (archivo separado, unido recién al evaluar).
+
+IMPORTANTE — el anotador ve exactamente el mismo insumo que el modelo: el TÍTULO.
+MediaCloud story_list no devuelve el cuerpo del artículo, así que
+`llm_sentiment.classify_dataframe` clasifica con el titular casi siempre. Esto
+NO es una limitación de la validación, es una característica del pipeline que la
+validación hace visible.
+
+Se anotaron dos cosas distintas, a propósito:
+  rel_humana   : ¿la noticia trata de la empresa? (1/0)
+  sent_humano  : positivo / neutral / negativo
+y además una CATEGORÍA de la noticia:
+  empresa  — nombra o trata a la empresa
+  sector   — su industria, con contenido económico (utilidades de bancos,
+             inversión minera, ventas de tiendas por departamento)
+  mercado  — resumen del índice BVL, tipo de cambio, macro
+  ruido    — tema ajeno
+
+Política de anotación (declarada para que sea auditable):
+  * rel = 1 para empresa y sector; 0 para mercado y ruido.
+  * sent = impacto esperado en el valor de la acción. Para "mercado" se usa la
+    dirección del mercado (sube = positivo), que es la lectura más FAVORABLE al
+    modelo. Para "ruido", neutral: una noticia ajena no contiene sentimiento
+    sobre la empresa.
+
+
+2. RESULTADO 1 — RELEVANCIA: SOLO ~1 DE CADA 4 NOTICIAS HABLA DE LA EMPRESA
+------------------------------------------------------------------------
+  activo     relevantes (muestra, n=36 c/u)
+  SAGAC1        44.4%
+  BUENAVC1      36.1%
+  ALICORC1      27.8%
+  CREDITC1      25.0%
+  CORAREC1      16.7%
+  GLOBAL 30.0% en la muestra | 26.1% reponderado a la población
+
+Composición de la muestra: mercado 39%, ruido 31%, empresa 18%, sector 12%.
+
+CONFIRMACIÓN A NIVEL DE POBLACIÓN (todo el corpus, no la muestra; proxy por
+expresiones regulares sobre el titular):
+
+  activo    titula índice BVL   titula dólar/TC   nombra a la empresa   ninguno
+  CREDITC1        9.2%              23.3%              14.7%            53.6%
+  ALICORC1       37.0%               1.0%              15.9%            46.7%
+  BUENAVC1       52.7%               0.1%              16.1%            31.2%
+  SAGAC1          1.6%               1.1%              17.9%            79.5%
+  CORAREC1       61.2%               0.0%               9.3%            29.6%
+
+  => El titular nombra a la empresa en 9-18% de los casos. En CORAREC1 y BUENAVC1
+     MÁS DE LA MITAD del corpus son resúmenes del índice BVL. En CREDITC1 casi un
+     cuarto son cotizaciones del dólar. En SAGAC1 el 80% no es ni la empresa ni
+     el índice ni el TC: es ruido temático puro.
+     La muestra y la población coinciden, así que el hallazgo no es de muestreo.
+
+
+3. RESULTADO 2 — ACUERDO CON LA ANOTACIÓN
+------------------------------------------------------------------------
+  Toda la muestra                 54.4%
+  Reponderado a la población      51.3%
+  Solo noticias relevantes        61.1%  (n=54)
+  Solo categoría "empresa"        59.4%  (n=32)
+  Kappa de Cohen                  0.317   (acuerdo "aceptable", no bueno; el azar
+                                           con 3 clases ya da 33%)
+
+  Por clase PREDICHA:
+    positivo : 43.3% correcto (n=60)
+    neutral  : 75.0% correcto (n=60)
+    negativo : 45.0% correcto (n=60)
+
+  Matriz de confusión (filas = modelo, columnas = anotación):
+                  negativo  neutral  positivo
+    negativo           27       28         5
+    neutral             5       45        10
+    positivo            3       31        26
+
+  Por categoría de noticia: mercado 62.9%, sector 63.6%, empresa 59.4%,
+  ruido 37.5%.
+
+
+4. RESULTADO 3 — EL ERROR DOMINANTE ES POLARIDAD ESPURIA, NO SIGNO INVERTIDO
+------------------------------------------------------------------------
+Esta es la conclusión más útil, porque señala la causa y por tanto el arreglo.
+
+  Polaridad ESPURIA (modelo dice positivo/negativo, la noticia no dice nada de
+  la empresa)                                  59 de 120 = 49.2% de las
+                                               etiquetas con signo
+       de esas 59, 44 (75%) son de categoría mercado o ruido.
+  Error de SIGNO (positivo <-> negativo)        8 de 180 =  4.4%
+  Señal PERDIDA (modelo neutral, la noticia sí
+  tenía dirección)                             15 de 180 =  8.3%
+
+INTERPRETACIÓN: cuando la noticia sí es de la empresa y sí tiene dirección, el
+modelo casi nunca se equivoca de signo (4.4%). El problema es que el modelo NUNCA
+SE ABSTIENE: ante un titular ajeno —una huelga de Pluspetrol en el corpus de
+Alicorp, un fact-check sobre Tía Jemima, una olimpiada de matemáticas— igual
+emite positivo o negativo. La mitad de las etiquetas con signo del panel son de
+noticias que no hablan de la empresa.
+
+CAUSA DIRECTA, en el código: el prompt de `llm_sentiment._SYSTEM_PROMPT` pide
+clasificar "el sentimiento de la noticia sobre la empresa indicada" y ofrece tres
+salidas, ninguna de las cuales es "no trata de la empresa". No hay instrucción de
+responder neutral ante una noticia ajena ni filtro de relevancia previo. El modelo
+está haciendo lo que se le pidió.
+
+
+5. RESULTADO 4 — LA CONFIANZA DEL MODELO NO SIRVE COMO FILTRO
+------------------------------------------------------------------------
+  aciertos: confianza media 0.730 (mediana 0.75)
+  errores : confianza media 0.750 (mediana 0.75)
+
+La confianza autodeclarada es LIGERAMENTE MAYOR en los errores. No discrimina en
+absoluto: descartar las etiquetas de baja confianza no mejoraría nada. No usarla
+como criterio de calidad ni reportarla como si midiera algo.
+
+
+6. RESULTADO 5 — QUÉ LLEGA REALMENTE AL PANEL DIARIO
+------------------------------------------------------------------------
+El score diario es el promedio de las noticias del día. Con la tasa de relevancia
+medida y la distribución real de artículos por día:
+
+  activo     días con noticia   mediana art/día   P(ese día TODAS irrelevantes)
+  CREDITC1        2,734               2                     50%
+  ALICORC1        1,085               1                     64%
+  BUENAVC1          697               1                     56%
+  SAGAC1            331               1                     52%
+  CORAREC1          495               1                     78%
+
+  => En la mitad o más de los días CON noticia, el score del panel se calcula
+     íntegramente con noticias que no hablan de la empresa. La mediana de 1-2
+     artículos por día impide que el promedio diluya el ruido.
+
+Además, DUPLICADOS POR SINDICACIÓN: títulos idénticos repetidos dentro del mismo
+activo — CORAREC1 13.5%, BUENAVC1 11.0%, ALICORC1 5.6%, CREDITC1 2.6%, SAGAC1
+1.1% (4.3% del corpus). Cada copia se clasifica y se promedia otra vez, así que
+una misma nota pesa doble o triple en el score del día. Es barato de arreglar
+(deduplicar por título+fecha antes de clasificar) y además reduce el costo de LLM.
+
+
+7. RESULTADO 6 — ¿HAY SEÑAL? SÍ, PERO NO ES SENTIMIENTO DE EMPRESA
+------------------------------------------------------------------------
+Contraste con los retornos del panel vigente (5 activos, 2012-2025):
+
+(a) NO hay look-ahead. corr(sentimiento_t, retorno_t) = -0.042 a +0.018 según el
+    activo, es decir ~0. La hipótesis de que los resúmenes de índice ("BVL cierra
+    a la baja", publicados después del cierre) estuvieran re-codificando el
+    retorno YA OCURRIDO se probó y NO se sostiene. Además, bajo la convención de
+    ejecución en t+1 de OE1, una noticia del día t no sería look-ahead.
+
+(b) SÍ hay una asociación débil con el retorno del día SIGUIENTE:
+      pool 5 activos, días con noticia: n=4,594  corr = +0.046  p=0.002
+      por tercios del score, retorno medio del día siguiente:
+        score negativo (n=1,757):   -3.4 pbs
+        score neutro   (n=1,256):   +0.9 pbs
+        score positivo (n=1,581):  +21.1 pbs
+      Monótono y en la dirección esperada.
+
+(c) PERO esa asociación desaparece al quitar las noticias de índice, y NO es un
+    efecto de tener más artículos (se controló):
+
+      subconjunto                        n      corr        p
+      CON índice x 1 artículo           662    +0.0924    0.017
+      CON índice x 2+ artículos         855    +0.1309    0.000
+      SIN índice x 1 artículo         1,483    -0.0186    0.473
+      SIN índice x 2+ artículos       1,290    +0.0490    0.079
+
+    Fijado el número de artículos del día, los días con noticia de índice tienen
+    correlación significativa y los días sin ella no.
+
+CONCLUSIÓN DE ESTE PUNTO: lo poco que predice el canal de sentimiento proviene de
+titulares que describen la DIRECCIÓN DEL MERCADO, no de noticias de la empresa.
+Esa información ya está en los precios (es momentum de índice), así que el canal,
+tal como está hoy, no aporta información nueva: aporta una copia ruidosa de algo
+que el agente ya observa. Es exactamente el "techo de la señal de sentimiento"
+que el registro de riesgos anotaba como pendiente de declarar — ahora está medido.
+
+
+8. QUÉ HACER ANTES DE VOLVER A CORRER R5
+------------------------------------------------------------------------
+Ordenado por relación esfuerzo/beneficio. Los tres primeros son baratos y atacan
+la causa medida en §4.
+
+  [1] FILTRO DE RELEVANCIA ANTES DE CLASIFICAR. Es la mitigación que el registro
+      de riesgos (R5 §5.3) dejaba pendiente y que ahora está cuantificada.
+      Dos niveles, complementarios:
+        (a) Regla: descartar el boilerplate de índice y de tipo de cambio
+            (los patrones de §2 identifican 9-61% del corpus según el activo).
+        (b) Compuerta LLM: una pregunta previa de sí/no ("¿esta noticia trata de
+            la empresa X?") y solo clasificar sentimiento si pasa.
+      EFECTO COLATERAL IMPORTANTE: reduce el volumen a clasificar entre 30% y 60%
+      en los activos más ruidosos, o sea ataca directamente el cuello de botella
+      de cómputo de R5. El filtro no es un costo adicional, es un ahorro.
+
+  [2] PERMITIR LA ABSTENCIÓN EN EL PROMPT. Añadir al system prompt una instrucción
+      explícita: si la noticia no trata de la empresa o no tiene implicancia
+      identificable para su valor, responder neutral. Cambio de una línea que
+      ataca el 49.2% de polaridad espuria. Obliga a subir PROMPT_VERSION a "v2"
+      (el campo ya existe para esto) e invalidar la caché.
+
+  [3] DEDUPLICAR por (título, fecha) antes de clasificar. Quita 4.3% del corpus
+      (13.5% en el peor activo), corrige el doble conteo en el score diario y
+      abarata la corrida.
+
+  [4] DEJAR DE USAR `confidence` como si midiera calidad (§5).
+
+  [5] SEPARAR EL CANAL DE MERCADO DEL DE EMPRESA. Si las noticias de índice son lo
+      único que correlaciona, no mezclarlas en el score de la empresa: o se
+      descartan (recomendado, porque el precio ya las contiene) o se construyen
+      como una feature global aparte, honestamente rotulada como "tono de
+      mercado". Mezclarlas es lo que hace hoy el panel y es lo que impide
+      atribuirle nada al canal de sentimiento en la ablación `mercado_sentimiento`.
+
+  [6] RE-VALIDAR después de los arreglos con el MISMO protocolo (el script ya está
+      hecho y la muestra es reproducible). Sin una segunda medición no se puede
+      afirmar que mejoró.
+
+  [7] Considerar, si el presupuesto de cómputo lo permite, clasificar con el
+      CUERPO del artículo y no solo el titular. Hoy el titular es todo lo que hay
+      porque MediaCloud story_list no devuelve texto; traerlo exige otra fuente o
+      scraping, y es un sub-proyecto, no un ajuste. Documentar como limitación
+      si se decide no hacerlo.
+
+
+9. LIMITACIONES DE ESTA VALIDACIÓN
+------------------------------------------------------------------------
+  * Un solo anotador (asistente), sin segundo anotador humano ni medida de
+    acuerdo inter-anotador. Los casos "sector" y los titulares ambiguos (p.ej.
+    "BVL cerró al alza con una leve subida de 0,07%") admiten discusión; la
+    política de anotación está declarada en §1 para que sea auditable y
+    replicable, y los 180 casos anotados quedan en
+    data/interim/r5_validacion_anotada.csv para que el asesor los revise.
+  * n=180 (36 por activo, 60 por clase). Los intervalos de confianza a nivel de
+    activo son anchos (±~16 pp); los agregados por clase (n=60) y el total
+    (n=180) son los que soportan las conclusiones.
+  * La política de anotación es GENEROSA con el modelo en la categoría "mercado"
+    (se le da por buena la dirección del índice). Con un criterio más estricto
+    —"una noticia de índice no es sentimiento de la empresa, luego neutral"— el
+    acuerdo global BAJARÍA, no subiría.
+  * Se validó el corpus del universo viejo. Los 5 activos nuevos no están
+    clasificados todavía; el diagnóstico es del método y del diseño del prompt,
+    que no cambian, pero la TASA de ruido por activo sí debe re-medirse (§8[6]).
+
+========================================================================
