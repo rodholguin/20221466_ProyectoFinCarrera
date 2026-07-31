@@ -85,6 +85,101 @@ DECISIONES ABIERTAS (en orden sugerido de resolución)
       corrida afortunada).
     - Métricas: retorno acumulado, Sharpe/Sortino, max drawdown, turnover.
 
+[ ] D11. REPRESENTACIÓN DEL CANAL DE SENTIMIENTO — planteada 2026-07-31,
+    EN DELIBERACIÓN (el autor la decide con calma; no avanzar sin su decisión).
+    Surge de docs/validacion_etiquetado_r5.txt. Afecta a D3 y D5, y define qué
+    se corre en R5, así que conviene cerrarla ANTES de la corrida.
+
+    PROPUESTA DEL AUTOR (3 piezas):
+      (i)   dejar de usar un score continuo y quedarse con la POLARIDAD
+            {positivo, neutral, negativo};
+      (ii)  añadir una MAGNITUD {alto, medio, bajo};
+      (iii) que el valor DECAIGA en el tiempo, con los coeficientes exponenciales
+            APRENDIDOS por el agente DRL en vez de fijados a mano.
+
+    EVALUACIÓN (evidencia, no opinión):
+    (i) POLARIDAD CATEGÓRICA — respaldada. Con kappa 0.32 un score continuo es
+        falsa precisión: un promedio de {+1,-1,0} que da 0.333 comunica un matiz
+        que la medición no tiene. Encoding: polaridad y magnitud como features
+        SEPARADAS; NO multiplicarlas en un escalar (pos x alto = +3 reintroduce la
+        precisión falsa e impone que "alto" valga exactamente el triple).
+    (ii) MAGNITUD — la idea es correcta, LA FUENTE PROPUESTA NO. El pipeline ya le
+        pide al modelo una autoevaluación (`confidence`) y está medido que NO
+        discrimina: 0.750 de media en los errores contra 0.730 en los aciertos.
+        Pedirle a gemma3:4b un "impacto alto/medio/bajo" es pedir una segunda
+        autoevaluación al mismo modelo cuya única autoevaluación existente resultó
+        ruido. Además duplica la carga de validación.
+        ALTERNATIVA RECOMENDADA: TAXONOMÍA DE EVENTOS (resultados / dividendo /
+        M&A / regulatorio / conflicto laboral / expansión / patrocinio-RSE /
+        mención en índice) con magnitud asignada EX-ANTE por categoría. Clasificar
+        el TIPO es una tarea objetiva y mucho más fácil para un modelo chico que
+        juzgar importancia, y es auditable en la sustentación ("definí que unos
+        resultados pesan más que un patrocinio" en vez de "el LLM dijo alto").
+        BENEFICIO EXTRA: la taxonomía ES TAMBIÉN el filtro de relevancia
+        (patrocinio-RSE y mención en índice -> magnitud cero). Un mecanismo
+        resuelve los dos problemas.
+        DESCARTADA por medición: usar el nº de medios que cubren el hecho como
+        proxy objetivo de importancia. Con 3 medios en el allowlist, 80-97% de los
+        eventos aparecen en uno solo. Solo sería viable ampliando el allowlist, lo
+        que reintroduce el ruido que ese filtro evita.
+    (iii) DECAIMIENTO — la idea corrige un defecto REAL: hoy no hay decaimiento
+        CERO sino memoria infinita. `build_dataset` hace
+        `sentiment_score_last = ffill()`, así que una noticia rige intacta hasta
+        que llega otra. Y la infraestructura básica YA EXISTE: el panel tiene
+        `sentiment_score_last` y `days_since_news`, y una red que reciba ambas
+        puede representar cualquier f(valor, antigüedad) — eso ES un decaimiento
+        aprendido de forma libre. Lo que NO puede así es ACUMULAR varios eventos
+        pasados: solo decae el último.
+
+    LÍMITE DURO — LA MUESTRA. Días con evento de la empresa en el split de
+    entrenamiento (~70%), medidos sobre el corpus real:
+        CREDITC1 577 | ALICORC1 131 | BUENAVC1 69 | SAGAC1 41 | CORAREC1 33
+    Con 33 eventos no se aprenden coeficientes de decaimiento: se aprende el ruido
+    de 33 observaciones. Y eso es ANTES de repartirlos entre las celdas de la
+    grilla de magnitud. Solo CREDITC1 tiene régimen de datos para un decaimiento
+    libre. Para el resto el decaimiento hay que IMPONERLO como prior.
+    Cómo aprender decaimiento según arquitectura (entra en D3/D5):
+      - MLP sobre un paso: aprende f(último evento, days_since). Costo cero, ya
+        disponible. No acumula eventos.
+      - MLP + ventana de N rezagos: pesos libres por rezago; con 33-577 eventos
+        sobreajusta.
+      - LSTM/GRU: acumula, pero es el más caro en muestra — el peor candidato aquí.
+      - MLP + k EWMAs precalculadas (vidas medias 5/20/60 d): el agente aprende a
+        PONDERARLAS (3 parámetros). Cede pureza (elige entre coeficientes en vez
+        de aprenderlos) pero es lo único que la muestra sostiene fuera de BCP.
+
+    OBSERVACIÓN DE DISEÑO: la grilla 3x3 no tiene 9 estados útiles. En los 32
+    casos de categoría "empresa" anotados, "neutral" y "bajo impacto" resultaron
+    ser lo mismo (un how-to de Yape, un patrocinio escolar): la celda
+    (neutral, alto) está conceptualmente vacía. La grilla efectiva es de ~5
+    estados: neg-alto, neg-bajo, neutro, pos-bajo, pos-alto. Con 33-577 eventos
+    esa reducción no es cosmética.
+
+    ALTERNATIVAS EN LA MESA:
+      A. Solo limpiar datos y dejar el score continuo. Mínimo cambio; mantiene la
+         falsa precisión y la memoria infinita. Sirve de baseline, no de destino.
+      B. Taxonomía de eventos con magnitud ex-ante (recomendada para (ii)).
+      C. k EWMAs precalculadas + peso aprendido (recomendada para (iii)).
+      D. Enfoque de EVENTO en vez de score diario: días desde el último evento de
+         signo X + su magnitud. Es lo que la escasez sugiere naturalmente
+         (0.1-1.6 noticias/semana) y `days_since_news` ya existe.
+      E. Nº de medios como magnitud — DESCARTADA por medición (ver arriba).
+
+    RECOMENDACIÓN REGISTRADA (2026-07-31): (1) limpiar ANTES de codificar —con 74%
+    de irrelevancia cualquier esquema elegante decae ruido con más estilo—;
+    (2) polaridad categórica, sí; (3) magnitud por taxonomía (B), colapsada a ~5
+    estados; (4) decaimiento por EWMAs ponderadas (C) más `days_since_news`,
+    dejando el decaimiento libre como EXPERIMENTO solo en CREDITC1 —si ahí
+    funciona, es un resultado reportable sobre para qué régimen de datos alcanza—.
+
+    ADVERTENCIA A CONSIDERAR AL DECIDIR: nada de esto crea información que no esté
+    en el corpus. Si tras la limpieza el canal sigue sin predecir nada —posible,
+    dado que hoy lo único que correlacionaba eran los titulares de índice— el
+    resultado reportable es "la señal de sentimiento de prensa no aporta valor
+    explotable en la BVL para este universo". Es legítimo y publicable, pero
+    conviene decidir de antemano cuánta ingeniería se está dispuesto a invertir
+    antes de aceptar esa posibilidad.
+
 ========================================================================
 NOTAS DE RIESGO (para tener presente al decidir)
 ------------------------------------------------------------------------
