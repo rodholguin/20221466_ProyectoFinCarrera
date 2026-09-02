@@ -33,6 +33,24 @@ con el principio del proyecto "BVL/SMV/BCRP mandan sobre fuentes externas".
   a. Precio del cobre        (diario)   — principal driver macro del Perú.
   b. Tipo de cambio USD/PEN  (diario)   — YA implementado (serie PD04640PD).
   c. Precio del oro          (diario)   — relevante para la minera (BVN: oro/plata).
+     >> SUPERADO (2026-08-22): esta justificación ya no aplica. BVN salió del
+        universo en jul-2026 y ningún activo de los 7 produce oro; además el oro
+        no tiene efecto propio medible en NINGUNO de ellos. DECISIÓN: eliminar
+        la columna. Ver sección 4.4-(1) para la medición y el razonamiento.
+     >> IMPLEMENTADO EL 2026-09-01, y hay que anotar POR QUÉ TARDÓ: la decisión
+        estaba tomada desde ago-2026 pero la columna SEGUÍA ENTRANDO AL PANEL.
+        Al corregirlo apareció la causa de fondo — había DOS FUENTES DE VERDAD
+        para la lista de series: el bloque `macro.series` de config.yaml
+        (informativo, que NADIE LEE) y el dict `_SERIES` de
+        src/macro/macro_client.py (el que de verdad manda). Se editó solo el
+        primero y nada avisó durante un mes. Ahora están las dos alineadas, con
+        la línea del oro comentada (no borrada) y el motivo al lado, para que
+        reincorporarla sea descomentar si vuelve una minera de oro al universo.
+        Registrado como riesgo transversal en riesgos_transversales_datos.txt
+        §Tier 1 punto 0, junto con las otras dos instancias del mismo patrón.
+        EL PANEL VIGENTE TIENE 5 SERIES MACRO, no 6:
+        macro_cobre · macro_embi · macro_tasa_ref · macro_inflacion ·
+        macro_tc_usdpen.
   d. Tasa de referencia BCRP (mensual)  — banca, consumo a crédito, construcción.
   e. EMBI+ Perú (riesgo país)(diario)   — prima de riesgo soberano; ver Sec. 2.
   f. Inflación (IPC)         (mensual)  — poder de compra del consumidor.
@@ -132,6 +150,233 @@ vienen hechos y validados: uno no parsea las notas, consume el índice.
 
 
 ========================================================================
+4. VALIDACIÓN EMPÍRICA DE LOS FACTORES (2026-08-22)
+========================================================================
+
+4.0. POR QUÉ SE HIZO
+------------------------------------------------------------------------
+Los seis factores de la sección 1 se eligieron por ARGUMENTO ECONÓMICO y por
+literatura, no por medición sobre los datos de este proyecto. Eso servía para
+fijar un punto de partida, pero tenía un punto ciego: cuando el universo cambió
+(jul-2026, de 5 a 7 activos), la justificación de al menos un factor dejó de
+aplicar y NADIE LO NOTÓ. El oro figura justificado textualmente arriba como
+"relevante para la minera (BVN: oro/plata)" — y Buenaventura salió del universo.
+Ningún activo de los 7 produce oro.
+
+La pregunta del autor que disparó el análisis: si el oro ya no le toca
+directamente a ningún activo, ¿aun así impacta por la vía macro? ¿Y el petróleo?
+
+Esto responde con evidencia propia y cambia el criterio de inclusión: de aquí en
+adelante un factor entra si tiene EFECTO MEDIDO en el universo vigente, no si
+tiene una historia plausible.
+
+
+4.1. MÉTODO — cómo se midió, en detalle
+------------------------------------------------------------------------
+Implementación reproducible: `scripts/probe_macro_exposicion.py`.
+Salida completa: `data/interim/probe_macro_exposicion.log`.
+
+DATOS
+  - Precios: `data/interim/market_<TICKER>.parquet` (salida de R3), retorno
+    diario `ret_1d`. Se usa esto y NO el panel unificado a propósito: el panel
+    solo se regenera al correr R6, así que después de un R3 nuevo estaría
+    desactualizado y dejaría fuera a los activos recién incorporados sin avisar.
+  - Factores: los 6 de `macro_bcrp.parquet` MÁS dos series traídas para la
+    prueba: petróleo WTI diario (PD04705XD) y estaño mensual (PN01653XM).
+  - Horizonte 2012-2025. Los 7 del universo vigente MÁS los 3 del universo viejo
+    (BUENAVC1, CORAREC1, SAGAC1), que siguen en disco y sirven de contraste — en
+    particular Buenaventura, único caso de minera de oro, que permite verificar
+    que el método SÍ detecta un efecto cuando existe.
+
+FORMA ESTACIONARIA DE CADA FACTOR
+  - Precios y tipo de cambio -> retorno log (diferencia de logaritmos).
+  - EMBI y tasa de referencia -> primera diferencia (ya vienen en % o pbs).
+
+TRES ESPECIFICACIONES, cada una responde algo distinto
+  (a) Correlación simple, factor a factor. Sirve de panorama pero NO para
+      decidir: dos factores correlacionados entre sí (cobre y oro lo están) se
+      atribuyen mutuamente el efecto.
+  (b) REGRESIÓN MULTIFACTOR con los 6 factores compitiendo a la vez, errores
+      estándar de Newey-West con 5 rezagos (corrige autocorrelación y
+      heterocedasticidad, que en retornos diarios son la norma). ESTA es la que
+      decide: un factor que solo era proxy de otro pierde su coeficiente aquí.
+  (c) La misma regresión con los factores REZAGADOS UN DÍA. Es la relevante para
+      operar, porque D13 fija ejecución en t+1: lo que importa no es qué explica
+      el retorno de hoy, sino qué lo ANTICIPA.
+
+
+4.2. LOS TRES CUIDADOS QUE CAMBIAN EL RESULTADO
+------------------------------------------------------------------------
+Sin cualquiera de los tres, el análisis habría concluido lo contrario. Se
+documentan porque son reutilizables en cualquier estudio sobre la BVL.
+
+(a) DÍAS SIN COTIZAR (is_stale)
+    La BVL es ilíquida. Un precio que no se movió porque NADIE TRANSÓ no es un
+    retorno de cero: es un dato ausente disfrazado de observación. Incluirlos
+    mete ceros en la variable dependiente y ATENÚA cualquier correlación hacia
+    cero — se concluiría "no hay efecto" por un artefacto de liquidez.
+    Se replica la regla de `build_dataset.py:242`: rancio si el cierre crudo es
+    idéntico al del día hábil anterior.
+    OJO DE IMPLEMENTACIÓN: `is_stale` es int64 (0/1), no bool. El operador `~`
+    sobre un entero es bitwise y devuelve -1/-2, que como máscara booleana es una
+    bomba silenciosa. Hay que castear.
+
+(b) CEROS ARTIFICIALES vs CEROS LEGÍTIMOS
+    En una serie DIARIA un cambio de cero suele ser un feriado arrastrado por
+    forward-fill: dato ausente, hay que anularlo. En una serie MENSUAL (estaño,
+    tasa, inflación) el cero es información legítima — el valor no se movió ese
+    día porque solo cambia una vez al mes. Tratarlos igual (el error de la
+    primera versión de este análisis) dejaba la regresión conjunta con n=17.
+
+(c) REZAGO CON PRUEBA DE PRECIO RANCIO
+    Al medir el rezago aparece un problema: si el cierre de t-1 es viejo, el
+    "retorno de un día" en t abarca en realidad DOS días de información y va a
+    correlacionar con el macro de t-1 POR CONSTRUCCIÓN. Eso sería un artefacto,
+    no una oportunidad. Por eso el rezago se reporta en dos versiones: excluyendo
+    los días rancios en t, y exigiendo ADEMÁS que t-1 haya transado. Solo cuenta
+    lo que sobrevive a la segunda.
+
+
+4.3. RESULTADOS
+------------------------------------------------------------------------
+REGRESIÓN CON FACTORES REZAGADOS UN DÍA — en cuántos de los 7 activos vigentes
+cada factor tiene efecto propio (los 6 compitiendo entre sí):
+
+  factor          significativo en   detalle
+  --------------  -----------------  ------------------------------------------
+  TC USD/PEN      7 de 7             de t=-2.09 (LUSURC1) a t=-4.07 (ALICORC1)
+  EMBI Perú       6 de 7             todos menos CREDITC1 (t=-1.16)
+  cobre           4 de 7             MINSURI1 +5.62, INRETC1 +3.12,
+                                     CREDITC1 +2.04, FERREYC1 +1.96
+  petróleo WTI    2 de 7             MINSURI1 +2.72, FERREYC1 +2.52
+  ORO             0 de 7             máximo t=+1.51 (CREDITC1)
+  ESTAÑO          0 de 7             MINSURI1 t=-0.77, y con signo negativo
+
+CONTROL DE QUE EL MÉTODO FUNCIONA: sobre BUENAVC1 (minera de oro, universo
+viejo) el oro sale con t=+5.57 y beta=+1.20, y el cobre PIERDE significancia
+(t=+0.89). O sea, para una minera de oro el método aísla el oro y descarta lo
+demás. Cuando el efecto existe, se ve; que no aparezca en los 7 vigentes no es
+falta de potencia.
+
+R² por activo (especificación rezagada): MINSURI1 0.117 y FERREYC1 0.101 son los
+más altos — los dos nombres más pegados al ciclo industrial global. LUSURC1 0.021
+el más bajo, coherente con una distribuidora eléctrica regulada.
+
+
+4.4. DECISIONES DE DISEÑO Y SU PORQUÉ
+------------------------------------------------------------------------
+(1) ORO -> ELIMINAR. Perdió las dos patas a la vez: su activo justificante
+    (BUENAVC1) salió del universo, y no tiene efecto propio medible en NINGUNO de
+    los 7 vigentes. Mantenerlo es una columna que solo agrega ruido y parámetros.
+    NOTA: sí tiene efecto sobre una minera de oro (ver el control de 4.3); si
+    alguna vez vuelve un activo así al universo, se reincorpora.
+
+(2) ESTAÑO -> NO AGREGAR, pero por una razón distinta de la aparente.
+    La hipótesis era natural: Minsur es #2 mundial de estaño, así que su producto
+    debería moverlo. La medición la rechaza (t=-0.77, y con signo negativo); a
+    Minsur lo mueve el COBRE (t=+5.62), lo cual es económicamente razonable porque
+    Mina Justa pesa fuerte desde 2021 y porque el cobre es el factor país.
+    PERO el resultado correcto NO es "el estaño no le importa a Minsur". Es "esta
+    serie no sirve a frecuencia diaria": el BCRP solo publica estaño como PROMEDIO
+    MENSUAL (PN01653XM), y una escalera de 12 peldaños al año no puede explicar
+    retornos diarios. El bloque diario del BCRP (PD04701-04705XD) tiene cobre,
+    plata, zinc, oro y WTI — estaño no está; LME diario es de pago.
+    Si algún día se consigue una serie diaria de estaño, la hipótesis merece
+    volver a probarse. Con la mensual, no.
+
+(3) PETRÓLEO -> EN EVALUACIÓN, no incorporado aún. Aparece en MINSURI1 y
+    FERREYC1, que son exactamente los dos que uno predeciría ex ante (una minera y
+    el distribuidor de maquinaria Caterpillar para minería y construcción); esa
+    coherencia previa es lo que lo hace interesante. Pero 2 de 8 activos al 5% es
+    justo lo que se espera por azar con ~48 pruebas, así que no alcanza para
+    declararlo. Decisión: probarlo como brazo de ablación en R8, no darlo por
+    bueno de antemano.
+
+(4) COBRE, TC y EMBI -> SE QUEDAN, y son el esqueleto real.
+    El hallazgo de fondo es que el esqueleto NO son los precios de commodities
+    sino EL TIPO DE CAMBIO Y EL RIESGO PAÍS. El cobre tiene efecto propio solo en
+    4 de 7; en los demás lo absorben el TC y el EMBI. Eso no contradice la sección
+    1: la CONFIRMA y precisa el mecanismo. El cobre mueve al sol y el sol mueve a
+    la bolsa (la literatura mide -1.22% en el TC por cada +1% de cobre en el
+    trimestre siguiente), así que el efecto del cobre YA ESTÁ llegando por la vía
+    del TC. Se mantiene el cobre porque en 4 activos aporta algo por encima de eso.
+
+(5) COLUMNAS GLOBALES vs UNA COLUMNA POR ACTIVO -> GLOBALES.
+    Se consideró seriamente un diseño con exposición específica por activo
+    (`commodity_producto` / `commodity_insumo`, cada activo mapeado a su materia
+    prima). Habría sido más eficiente en datos: una red compartida aprendería
+    "subió el precio de mi producto" una sola vez, en vez de siete reglas
+    separadas.
+    LA EVIDENCIA LO DESCARTA para este universo. El único factor genuinamente
+    específico de un activo era el oro con Buenaventura, y ese activo ya no está.
+    En los 7 vigentes los factores que funcionan son COMPARTIDOS por todos (TC,
+    EMBI, cobre). Un mecanismo por activo agregaría complejidad y parámetros para
+    capturar una heterogeneidad que la medición dice que no existe. Gana el diseño
+    simple. Si el universo cambiara hacia activos con exposiciones idiosincráticas
+    fuertes, la decisión se revisa.
+
+
+4.5. HALLAZGO COLATERAL — el mercado reacciona con UN DÍA de retraso
+------------------------------------------------------------------------
+Las correlaciones REZAGADAS son sistemáticamente MAYORES que las contemporáneas,
+y sobreviven la prueba estricta de precio rancio (4.2c). Ejemplos con [t,t-1]:
+
+  MINSURI1: cobre +0.225***  WTI +0.152***  TC -0.249***  EMBI -0.160***
+  FERREYC1: cobre +0.154***  WTI +0.129***  TC -0.260***  EMBI -0.229***
+
+O sea: la BVL incorpora el macro global con un día de rezago, y NO es artefacto
+de precio rancio — eso ya se descartó exigiendo que t-1 haya transado. Es
+directamente relevante para OE1 porque coincide con el horizonte de D13 (observar
+en T, ejecutar en T+1): la información macro del día T todavía tiene contenido
+para el retorno de T+1.
+NO se ha estimado cuánto de eso sobrevive a costos de transacción y spread. Eso
+es trabajo de OE1 (ver docs/ejecutabilidad_y_costos_OE1.txt) y ahí se decide.
+
+
+4.6. HALLAZGO COLATERAL — INRETC1 y el tipo de cambio: correlación MECÁNICA
+------------------------------------------------------------------------
+En la correlación contemporánea, InRetail tiene el TC con signo POSITIVO
+(+0.182***) mientras los otros nueve activos lo tienen negativo. No es un
+hallazgo económico: es aritmética.
+
+INRETC1 COTIZA EN US$ en la BVL y su precio se convierte a PEN con el TC del BCRP
+del mismo día (`price_currency: "USD"` en config.yaml; `market_client._to_pen`).
+Entonces, por construcción:
+
+        ret_PEN(t) = ret_USD(t) + ret_TC(t)
+
+El retorno en soles CONTIENE el retorno cambiario. La conversión es correcta y
+deliberada — un inversionista peruano que arma un portafolio en soles sí carga esa
+exposición — pero hay que dejarlo escrito o se lee como efecto económico.
+
+CONSECUENCIAS:
+  - NO es look-ahead: ambos términos se conocen en t.
+  - SÍ es heterogeneidad: `macro_tc_usdpen` no significa lo mismo para InRetail
+    que para los otros seis. Con red compartida (D1 = portafolio) eso importa, y
+    es el mismo tipo de problema que D11 resolvió para el canal de sentimiento.
+  - En la especificación REZAGADA el efecto mecánico desaparece (el TC de t-1 ya
+    no entra en el precio de t) e InRetail vuelve al signo negativo esperado
+    (t=-2.18), que es el efecto económico limpio.
+
+
+4.7. LIMITACIONES DECLARADAS
+------------------------------------------------------------------------
+  - R² de 0.02 a 0.12. Son efectos REALES pero CHICOS: el macro explica una
+    fracción menor del retorno diario. Nada aquí sugiere que baste para operar.
+  - Múltiples pruebas: 6 factores x 8 activos con muestra suficiente x 2
+    horizontes. Al 5% se esperan ~2 falsos positivos. Los resultados fuertes (TC y
+    EMBI, consistentes en 6-7 de 7 activos) están muy por encima de eso; los
+    marginales (petróleo, 2 de 8) no, y por eso quedan en evaluación.
+  - SAGAC1 queda fuera de toda regresión (n<100 tras excluir días rancios): con
+    2.2% de días operados no hay muestra. Es la razón por la que salió del
+    universo, medida aquí una vez más.
+  - Análisis LINEAL y solo a horizonte contemporáneo/rezago-1. No captura efectos
+    no lineales ni cambios de régimen, que la literatura de TVP-VAR sí documenta
+    para el cobre.
+  - El estaño se probó SOLO en su versión mensual (ver 4.4-2).
+
+
+========================================================================
 FUENTES
 ========================================================================
   - Micozzi, Navia, Pinto & Saiegh (2024). The Real-Time Impact of Political
@@ -150,4 +395,15 @@ FUENTES
     https://www.sciencedirect.com/science/article/abs/pii/S0264999325002366
   - IMF. Peru: Article IV Consultation Staff Reports 2023 y 2025/2026.
     https://www.imf.org/ (Country Reports Peru)
+  - Impacto de las variables macroeconomicas en la rentabilidad de la BVL.
+    https://repositorioslatinoamericanos.uchile.cl/handle/2250/7421871
+  - Munoz Aguilar, J.C. Effects of copper prices volatility on Peruvian
+    economics: evidence from TVP-VAR-SV models.
+    https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5223054
+  - BCRP. Cotizaciones internacionales, series MENSUALES (estano PN01653XM y
+    resto del bloque de metales).
+    https://estadisticas.bcrp.gob.pe/estadisticas/series/mensuales/cotizaciones-internacionales
+  - BCRP. Cotizaciones internacionales, series DIARIAS (cobre PD04701XD, plata
+    PD04702XD, zinc PD04703XD, oro PD04704XD, WTI PD04705XD).
+    https://estadisticas.bcrp.gob.pe/estadisticas/series/diarias/cotizaciones-internacionales
 ========================================================================

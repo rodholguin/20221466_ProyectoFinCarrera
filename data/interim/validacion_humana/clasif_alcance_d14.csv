@@ -1,0 +1,114 @@
+n,clase,tipo_d14,nota
+383,otra_empresa,,Metalpren (tercero) no Aceros Arequipa
+47,mercado,,fiscal + tipo de cambio
+125,sector_debil,operacional,inversion publicitaria: proxy de demanda de consumo
+132,mercado,,finanzas corporativas genericas
+134,sector_debil,operacional,canal B2B consumo masivo = canal de Alicorp
+173,otra_empresa,,Bauducco competidor
+220,mercado,,papa no es insumo de Alicorp
+235,mercado,,credito de consumo
+261,mercado,,reforma constitucional
+301,mercado,,sector minero no es el de Alicorp
+349,mercado,,politica electoral / agro
+351,sector_debil,estrategia_inversion,infraestructura de almacenaje de aceites
+377,sector_debil,analisis_opinion,opinion sobre commodities de consumo
+378,mercado,,clima de inversion general
+434,otra_empresa,,Nestle competidor
+520,sector_fuerte,operacional,demanda de panetones = categoria clave
+536,mercado,,presupuesto publico de anemia
+541,mercado,,laboral transversal (D14 lo lista como mercado)
+13,sector_fuerte,regulatorio_material,regulacion previsional del sistema financiero
+20,mercado,,PBI
+49,sector_fuerte,resultados,el credito es el negocio del banco
+69,sector_fuerte,operacional,competencia bancaria por cuentas sueldo
+100,sector_fuerte,operacional,credito hipotecario
+108,sector_fuerte,regulatorio_material,retiro AFP mueve depositos
+123,sector_fuerte,operacional,consumo con tarjetas (Interbank es autor no objeto)
+136,sector_debil,operacional,infraestructura de pagos
+231,mercado,,Argentina
+268,sector_debil,analisis_opinion,perspectivas sectoriales multi-sector
+278,mercado,,politica monetaria (redundante con macro del panel)
+298,mercado,,PBI
+313,mercado,,PBI
+319,sector_fuerte,operacional,spread cambiario = ingreso del banco vs fintech
+347,mercado,,sector energetico no es el de BCP
+354,sector_debil,operacional,canales de atencion bancaria
+365,mercado,,FX (redundante con macro)
+366,mercado,,Chile
+373,otra_empresa,,Banco Ripley
+399,otra_empresa,,BanBif
+403,sector_fuerte,regulatorio_material,programa estatal de garantias crediticias
+415,sector_debil,analisis_opinion,nota de servicio sobre credito vehicular
+419,sector_debil,operacional,capacidad de ahorro y deuda de hogares
+430,mercado,,PBI
+452,mercado,,gasto de hogares
+493,otra_empresa,,gerencia del BCR
+527,mercado,,inmobiliario
+528,sector_debil,resultados,fondos mutuos (Credicorp Capital no el banco)
+533,mercado,,construccion
+542,mercado,,puerto
+545,mercado,,cobre (redundante con macro)
+23,mercado,,opinion macro
+133,sector_fuerte,operacional,Obras por Impuestos en Piura = demanda de cemento del norte
+310,mercado,,elecciones
+314,mercado,,institucionalidad
+451,mercado,,tipo de cambio (redundante con macro)
+549,sector_debil,operacional,canon Sechura financia obra publica en el norte
+91,sector_debil,operacional,empleo minero
+121,sector_fuerte,operacional,inversion minera +6.3%
+387,sector_debil,estrategia_inversion,cartera de proyectos mineros
+540,sector_fuerte,resultados,resultados de mineras peruanas
+34,mercado,,politica de exportaciones
+110,mercado,,cobre (2 pasos de la demanda de maquinaria)
+225,mercado,,agenda de gabinete
+271,mercado,,exportaciones
+326,mercado,,aranceles India
+331,mercado,,consorcios exportadores
+438,mercado,,competitividad exportadora
+487,mercado,,dias no laborables APEC
+79,sector_fuerte,operacional,nueva area de malls = negocio Real Plaza
+112,sector_debil,operacional,consumo en canal moderno
+294,sector_fuerte,operacional,crecimiento del canal moderno
+332,sector_fuerte,regulatorio_material,etiquetado de alimentos procesados
+369,mercado,,ISC apuestas online
+372,sector_fuerte,operacional,nombra Plaza Vea dentro del grupo retail
+394,mercado,,promocion de consumo de pescado
+397,sector_fuerte,operacional,tiendas de descuento = Mass
+424,sector_fuerte,operacional,competencia directa a Mass
+469,sector_debil,operacional,cosmetica (InkaFarma)
+486,sector_debil,operacional,habitos en supermercados
+488,sector_debil,estrategia_inversion,retail inmobiliario
+491,sector_fuerte,estrategia_inversion,Mall Aventura compite con Real Plaza
+501,sector_fuerte,operacional,marcas propias en supermercados
+524,mercado,,M&A generico
+531,sector_fuerte,operacional,salida de un competidor del retail peruano
+171,sector_fuerte,regulatorio_material,tarifas electricas
+188,mercado,,PBI
+297,mercado,,AFP
+306,sector_debil,estrategia_inversion,generacion (LdS es distribuidora)
+416,sector_debil,operacional,activo del mismo controlador
+455,mercado,,medidas tributarias
+467,mercado,,inversion china generica
+515,sector_fuerte,regulatorio_material,diseno del mercado electrico
+2,sector_debil,regulatorio_material,canon minero (consecuencia fiscal)
+26,mercado,,BVL + cobre
+54,sector_fuerte,resultados,ingresos de mineras
+55,mercado,,feria del sector
+77,mercado,,riesgo pais regional
+144,sector_debil,operacional,inversion social minera
+162,sector_fuerte,resultados,recaudacion minera cae 56%
+232,sector_debil,operacional,cobre no estano
+303,sector_fuerte,regulatorio_material,permisos ambientales mineros
+361,sector_debil,estrategia_inversion,exploracion de cobre
+396,sector_debil,analisis_opinion,perspectivas de cobre
+411,sector_debil,operacional,innovacion del sector
+498,sector_fuerte,crisis_evento_adverso,conflictividad social minera
+500,sector_debil,operacional,seguros laborales mineros
+64,sector_fuerte,operacional,entrada de Amazon a grandes almacenes
+120,otra_empresa,,operador de Crocs
+189,otra_empresa,,Platanitos
+238,sector_fuerte,analisis_opinion,tiendas por departamento = Saga exactamente
+253,sector_debil,analisis_opinion,transformacion digital del retail
+293,sector_debil,regulatorio_material,proteccion al consumidor en outlets
+330,sector_debil,analisis_opinion,opinion sobre retailers
+460,sector_fuerte,regulatorio_material,Indecopi a call centers (D14 lo lista como regul x sector)

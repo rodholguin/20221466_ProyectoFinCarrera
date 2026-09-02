@@ -914,6 +914,29 @@ ese índice ya resuelto.
 
 4.2. Sentimiento: alineación al calendario + esquema de 4 columnas crudas
 ------------------------------------------------------------------------
+>> ACTUALIZADO EL 2026-09-01 (D15, D17). Lo de abajo describe el esquema de
+   junio y su metodología SIGUE VIGENTE — las 4 columnas crudas se conservan
+   tal cual y el roll-forward funciona igual. DOS PRECISIONES QUE HAY QUE LEER
+   ANTES:
+   (a) LA REAGREGACIÓN NO ES "MEDIA PONDERADA" PARA TODO. Solo `sentiment_score`
+       se promedia ponderado por n_articles, porque es una media de polaridad.
+       LAS COLUMNAS DE CONTEO SE SUMAN: un sábado con 2 eventos que cae sobre un
+       lunes con 1 tiene 3 eventos, no 1.5. La versión de junio promediaba TODO
+       —era correcto entonces, porque las únicas columnas eran el score y
+       n_articles— y al implementar D15 se habría convertido en un sesgo
+       sistemático contra los eventos divulgados en día NO hábil, que son
+       justamente los que el emisor publica fuera de sesión. Corregido en
+       `_align_sentiment_to_calendar` y cubierto por scripts/test_d15_d17.py.
+   (b) EL PANEL YA NO TIENE 4 COLUMNAS DE SENTIMIENTO, TIENE 4 + 36. Las 4
+       crudas se conservan (siguen siendo el baseline del canal), y encima se
+       construyen las EWMAs de D15: 9 del canal base
+       `sent_{pos,neu,neg}_ewma_{5,20,60}`, 18 del brazo por tramos y 9 del
+       brazo restringido de D17. El párrafo de abajo que dice "el panel NO
+       guarda un score ya decaído" hay que leerlo con matiz: el decaimiento
+       sigue SIN aprenderse libremente, pero ya no se deja entero al agente —
+       D11(iii) fijó BASE FIJA (vidas medias 5/20/60) y PESOS APRENDIDOS, que es
+       una posición intermedia y deliberada.
+
 Fuente: sentiment_{TICKER}.parquet (R5, esquema SENTIMENT_SCHEMA). Antes
 de incorporarse al panel, cada fecha se alinea al calendario bursátil con
 _align_sentiment_to_calendar(): las noticias publicadas en día NO

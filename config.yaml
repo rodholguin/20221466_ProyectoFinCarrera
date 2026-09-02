@@ -168,8 +168,14 @@ sources:
     # Media Cloud API v4. story_list EXIGE collection_ids o sources.
     # El token va por variable de entorno MEDIACLOUD_API_TOKEN.
     peru_national_collection_id: 34412158  # "Peru - National" (confirmado con DirectoryApi)
-    llm_provider: "ollama"              # ollama (gemma3:4b local)
-    llm_model: "gemma3:4b"              # modelo Ollama local
+    llm_provider: "ollama"
+    # Modelo ELEGIDO tras el barrido contra las 550 anotaciones del autor
+    # (docs/seleccion_modelo_R5.txt). La anotación humana INVIRTIÓ el ranking:
+    # el handoff decía qwen2.5:32b y gana gemma3:12b. No corre en local — va por
+    # el túnel SSH al servidor xwing (ver PENDIENTES_R5 §INFRAESTRUCTURA):
+    #   ssh -f -N -L 11435:127.0.0.1:11434 phantom
+    #   $env:OLLAMA_URL="http://127.0.0.1:11435"
+    llm_model: "gemma3:12b"
     daily_aggregation: "mean"           # mean | net_sentiment
     # Solo medios económicos peruanos de referencia. Excluye tabloides,
     # medios deportivos y fuentes extranjeras que se cuelan en la colección
@@ -187,7 +193,17 @@ sources:
     series:
       tc_usdpen:  "PD04640PD"   # diaria (ya en src/market/fx.py)
       cobre:      "PD04701XD"   # diaria (Londres, cUS$/lb)
-      oro:        "PD04704XD"   # diaria (Londres, US$/oz troy)
+      # ORO ELIMINADO EL 2026-09-01, aplicando el veredicto (1) de
+      # docs/fundamento_macro_riesgo_politico.txt §4.4, que estaba DECIDIDO desde
+      # ago-2026 y nunca se había implementado en el config (la columna seguía
+      # entrando al panel). Perdió las dos patas a la vez: su activo justificante
+      # (BUENAVC1, minera de oro) salió del universo en jul-2026, y no tiene
+      # efecto propio medible en NINGUNO de los 7 vigentes (0 de 7; máximo
+      # t=+1.51 en CREDITC1, regresión multifactor con Newey-West).
+      # El método sí detecta el efecto cuando existe: sobre BUENAVC1 el oro sale
+      # con t=+5.57 y beta=+1.20. SI ALGUNA VEZ VUELVE UNA MINERA DE ORO AL
+      # UNIVERSO, SE REINCORPORA descomentando esta línea.
+      # oro:      "PD04704XD"   # diaria (Londres, US$/oz troy)
       embi:       "PD04709XD"   # diaria (Spread EMBIG Perú, pbs)
       tasa_ref:   "PD04722MM"   # mensual (tasa de referencia BCRP, %)
       inflacion:  "PN01271PM"   # mensual (IPC Lima, var% mensual)

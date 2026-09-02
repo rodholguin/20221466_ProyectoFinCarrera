@@ -1,0 +1,343 @@
+SELECCIÓN DEL MODELO DE CLASIFICACIÓN — R5 (SENTIMIENTO)
+Tesis: Aprendizaje por refuerzo profundo aplicado a la Bolsa de Valores de Lima
+Autor: Rodrigo Holguin — Asesor: Dr. E. Villanueva
+Abierto: 2026-08-18. DOCUMENTO VIVO — se anota cada modelo probado.
+========================================================================
+
+PROPÓSITO
+------------------------------------------------------------------------
+Dejar constancia de QUÉ modelos se evaluaron para la clasificación de noticias
+de R5, CON QUÉ evidencia, y POR QUÉ se eligió el que finalmente se use. La
+elección del clasificador condiciona todo el canal de sentimiento, así que debe
+poder defenderse con números y no con preferencia.
+
+Especificación de la tarea: docs/taxonomia_eventos_R5.txt
+Decisión que la ordena: D11 en docs/decisiones_pendientes_OE1.txt
+
+
+========================================================================
+1. EL BANCO DE PRUEBAS (idéntico para todos los modelos)
+========================================================================
+Muestra: **180 noticias** de data/interim/r5_validacion_anotada.csv, anotadas A
+CIEGAS en julio 2026 (relevancia + sentimiento + categoría), sobre una muestra
+estratificada por (activo x etiqueta) con semilla 20221466.
+Tasa base: **30.0% relevantes**. Referencia: rel_referencia = 1 <=> la categoría
+anotada es "empresa" o "sector".
+
+>> ADVERTENCIA CRÍTICA SOBRE LA NATURALEZA DE ESTE BANCO DE PRUEBAS
+   (detectada por el autor el 2026-08-18; ver §1B). **LA ANOTACIÓN NO ES
+   HUMANA.** La produjo el ASISTENTE (Claude) en la sesión del 2026-07-31.
+   Las columnas se llaman `rel_humana` / `sent_humano`, lo cual INDUCE AL ERROR
+   —de hecho indujo al asistente a afirmarlo en esta misma sesión— pero el
+   anotador fue un modelo. Todo lo que sigue debe leerse como "acuerdo con el
+   juicio de un LLM", no como "acierto contra criterio humano".
+
+Todos los modelos reciben EXACTAMENTE lo mismo: el mismo prompt, las mismas 180
+noticias, el mismo prefiltro regex, `temperature=0` y salida forzada a JSON.
+Script: scripts/piloto_r5_taxonomia.py --model <modelo> --etiqueta <etiqueta>
+Tabla comparativa: scripts/compara_modelos_r5.py [--md]
+
+NOTA METODOLÓGICA IMPORTANTE: la tabla se recalcula desde los CSV con la
+taxonomía VIGENTE, así que todas las corridas se comparan bajo la misma
+asignación de magnitudes aunque se hayan corrido antes de un cambio. Por eso
+las cifras de gemma3:4b/v2 en la tabla (78.3% exactitud) NO coinciden con las
+reportadas el día de esa corrida (65.6%): entonces `sector_macro` valía 0.3 y
+hoy vale 0.0. La tabla es la comparación válida; los números históricos quedan
+en taxonomia_eventos_R5.txt §7.9 como registro de por qué se cambió la magnitud.
+
+
+========================================================================
+1B. EL BANCO DE PRUEBAS NO ES HUMANO — ALCANCE DEL PROBLEMA
+========================================================================
+Detectado por el autor el 2026-08-18 al preguntar quién había anotado.
+
+EVIDENCIA (tres fuentes convergentes):
+  1. docs/validacion_etiquetado_r5.txt §10 lo declara: "Un solo anotador
+     (ASISTENTE), sin segundo anotador HUMANO ni medida de acuerdo
+     inter-anotador". El documento de julio fue honesto; lo que falló fue la
+     lectura posterior.
+  2. Timestamps: r5_validacion_muestra.csv se escribió 2026-07-31 12:39:31 y
+     r5_validacion_anotada.csv 12:44:10. **4 min 39 s para 180 noticias** =
+     1.55 s por ítem, con tres juicios cada uno. Materialmente imposible a mano.
+  3. Los nombres de columna (`rel_humana`, `sent_humano`) dicen "humano" y son
+     la causa próxima del error: indujeron al asistente a afirmar en la sesión
+     del 2026-08-18, varias veces y por escrito, que había anotación humana.
+
+QUÉ SIGUE SIENDO VÁLIDO (medido contra el MERCADO o la estructura del corpus,
+sin pasar por las anotaciones):
+  * Los titulares de índice aciertan el signo del retorno de la propia acción
+    50.5% (n=838, binomial p=0.81) — contra retornos reales de R3.
+  * La ventana de evento plana T-2..T+2 que sostiene la ejecución en t+1 (D13).
+  * Tasas de duplicados por sindicación; volumen de las queries; el desplome de
+    Pacasmayo (10,390 -> 1,529 al desambiguar).
+  * **El anidamiento de los modelos (§4B)**: es una propiedad de las
+    predicciones de unos modelos RESPECTO DE OTROS. Se cumple con cualquier
+    referencia, incluso con una equivocada. Ese hallazgo NO depende del ground
+    truth y sobrevive entero.
+
+QUÉ QUEDA DEBILITADO (todo lo medido contra las anotaciones):
+  * Relevancia 26%, kappa 0.32, polaridad espuria 49% (validación de julio).
+  * **TODAS las métricas de la tabla de §3** — precisión, recall, F1, espuria.
+    No dejan de ser útiles para ORDENAR modelos entre sí, pero no significan
+    "acierto": significan "acuerdo con el juicio de un LLM".
+
+EL SESGO NUEVO, Y ES EL MÁS SERIO PARA LO QUE SIGUE:
+  Evaluar un modelo comercial (Gemini, Claude) contra etiquetas producidas por
+  un modelo comercial favorece a los modelos que razonan como el anotador. Si
+  Gemini o Claude puntúan alto, no se podrá distinguir "es mejor en la tarea"
+  de "se parece más a quien hizo la referencia". La comparación local-vs-local
+  está menos afectada (todos son igual de ajenos al anotador), pero la
+  comparación local-vs-comercial —justo la que íbamos a correr— está
+  contaminada de origen.
+
+PLAN PARA ARREGLARLO (requiere trabajo del autor, no es automatizable):
+  1. El AUTOR anota a ciegas una submuestra de las mismas 180 (60 alcanza:
+     ~30-45 min). Se reutiliza el mismo archivo ciego, que ya existe.
+  2. Se mide el acuerdo autor-vs-asistente. Si es alto, las 180 quedan
+     razonablemente respaldadas y se declara como validación de segundo
+     anotador; si es bajo, la referencia se reemplaza por la del autor.
+  3. La decisión final de modelo (§7) se toma sobre la submuestra anotada por
+     el autor, no sobre la del asistente — así el sesgo de similitud no decide.
+  4. Renombrar `rel_humana`/`sent_humano` a `rel_referencia`/`sent_referencia`
+     y registrar quién anotó cada fila. Los nombres actuales seguirán induciendo
+     el error mientras existan.
+  5. En la tesis, declarar el procedimiento tal cual es. Un banco anotado por
+     LLM y validado parcialmente por el autor es defendible si se dice; llamarlo
+     "anotación humana" no lo es.
+
+
+========================================================================
+2. CRITERIO DE DECISIÓN (fijado ANTES de seguir probando)
+========================================================================
+Se declara de antemano para no elegir el modelo que mejor quede en la métrica
+que más convenga a posteriori.
+
+MÉTRICA PRINCIPAL: **precisión de relevancia**. Con 30% de tasa base, lo escaso
+es la precisión: un canal diluido en ruido no es explotable por el agente, y
+`days_since_news` ya captura "algo pasó" aunque el evento se descarte.
+MÉTRICA SECUNDARIA: **recall**, con un piso. Los eventos son el recurso escaso
+de todo el canal (ver D11/D12): un recall de 40% deja a los activos delgados
+—MINSURI1, CPACASC1, LUSURC1— prácticamente sin señal.
+DESEMPATE: polaridad espuria (el error dominante de v1, 49%) y tasa de fallo de
+parseo.
+DESCARTE AUTOMÁTICO: un modelo que colapse la taxonomía (usa 3-4 categorías de
+15) o que no sostenga el formato JSON.
+
+NO son criterios: la velocidad (el servidor la resolvió: 0.8-1.6 s/artículo) ni
+el costo por sí solo (la corrida completa cuesta entre $0 y $34 en cualquier
+escenario; irrelevante frente al valor de la tesis).
+
+CONSIDERACIÓN DE REPRODUCIBILIDAD (peso propio, no métrico): un modelo local de
+pesos abiertos es re-ejecutable por cualquiera que lea la tesis; un modelo
+comercial depende de un servicio y de que el proveedor no lo retire. Se mitiga
+fijando un snapshot con fecha, pero debe declararse como limitación. A igualdad
+razonable de métricas, se prefiere el modelo local.
+
+
+========================================================================
+3. RESULTADOS (regenerar con scripts/compara_modelos_r5.py --md)
+========================================================================
+Base: 180 noticias, 30.0% relevantes. v1 de referencia: relevancia efectiva 26%,
+kappa 0.32, polaridad espuria 49.0%.
+
+| Modelo      | Prompt | Exact. | Prec. | Recall | F1    | Espuria | Parseo | Cats  | no_relevante |
+|-------------|--------|--------|-------|--------|-------|---------|--------|-------|--------------|
+| gemma3:4b   | v2     | 78.3%  | 64.2% | 63.0%  | 63.6% | 42.7%   | 0.0%   | 14/15 | NO           |
+| gemma3:4b   | v2.1   | 76.1%  | 57.7% | 77.4%  | 66.1% | 36.2%   | 2.2%   | 14/15 | NO           |
+| gemma3:12b  | v2.1   | 79.9%  | 81.5% | 41.5%  | 55.0% | 20.0%   | 0.6%   | 12/15 | NO           |
+| gemma3:27b  | v2.1   | 76.7%  | 65.0% | 48.1%  | 55.3% | 39.4%   | 0.0%   | 13/15 | NO           |
+| qwen2.5:14b | v2.1   | 75.0%  | 69.6% | 29.6%  | 41.6% | 41.7%   | 0.0%   | 14/15 | sí           |
+| qwen2.5:32b | v2.1   | 78.3%  |**82.6%**| 35.2%| 49.4% |**18.8%**| 0.0%   | 14/15 | sí           |
+
+MEJORES POR MÉTRICA: precisión y polaridad espuria -> qwen2.5:32b; recall y F1 ->
+gemma3:4b. Ningún modelo lidera en ambas dimensiones: la frontera precisión-recall
+no se movió con más parámetros ni con otra familia.
+
+4.6 qwen2.5:32b — EL MEJOR EN EL CRITERIO PRINCIPAL, PERO SIN RECALL
+  Precisión 82.6% (la más alta de las siete corridas, por encima del 81.5% de
+  gemma3:12b), polaridad espuria 18.8% (la más baja), 0.0% de fallos de parseo y
+  14/15 categorías vivas incluyendo `no_relevante`. Bajo el criterio de §2 es el
+  líder actual.
+  PERO recall 35.2%: descarta 2 de cada 3 eventos reales. Con la extrapolación de
+  eventos de D11 eso deja a MINSURI1 (~74 estimados) en ~26 y a CPACASC1 (~75-100
+  tras la corrección de §7.7 de taxonomia) en ~30. Por debajo de lo que D11(iii) y
+  D12 necesitan para estimar cualquier cosa.
+  El anidamiento se repite: gemma3:4b + qwen2.5:32b da unión = gemma3:4b exacto e
+  intersección = qwen2.5:32b exacto. Cinco modelos, dos familias, de 4B a 32B:
+  TODOS anidados. El hallazgo de §4B queda robustecido, no matizado.
+
+(La corrida gemma3:4b/v2.1 aparece dos veces en la tabla generada: CPU local y
+GPU del servidor. Reproducen entre sí dentro de 0.5 pp —76.1% vs 75.7%— lo que
+valida que el backend Vulkan del servidor no altera el resultado.)
+
+
+========================================================================
+4. HALLAZGOS POR MODELO
+========================================================================
+
+4.1 gemma3:4b — SOBRE-INCLUSIVO
+  Llama relevante a casi todo: con v2.1 alcanza el mejor recall del grupo
+  (77.4%) pero la peor precisión (57.7%). Es el único que mantiene 14/15
+  categorías vivas, pero eso incluye repartir ruido entre ellas. Tasa de fallo
+  de parseo la más alta (2.2%), y sube al alargar el prompt.
+
+4.2 gemma3:12b — SOBRE-EXCLUYENTE (el inverso exacto)
+  Mejor precisión del grupo (81.5%) y mejor polaridad espuria (20.0%), pero
+  recall de 41.5%: descarta el 58% de los eventos reales. Manda 79 de 180
+  predicciones (44%) a `mencion_incidental`; de esas, 14 eran relevantes.
+  Colapsa a 12/15 categorías (`regulatorio_material` y `dividendo_capital` sin
+  usar). Es el mejor candidato del grupo bajo el criterio de §2, pero su recall
+  está por debajo del piso que los activos delgados toleran.
+
+4.3 gemma3:27b — NO RESUELVE EL BALANCE
+  Escalar de 12B a 27B EMPEORÓ la precisión (81.5% -> 65.0%) y la polaridad
+  espuria (20.0% -> 39.4%) a cambio de +6.6 pp de recall. F1 empatado con el
+  12B (55.3 vs 55.0). Único mérito propio: 0.0% de fallos de parseo.
+  >> CONCLUSIÓN IMPORTANTE: más parámetros NO arreglaron la tarea. Eso descarta
+     "el modelo es muy chico" como explicación única y apunta a que la tarea
+     —clasificar tipo de evento desde un TITULAR en español, con 15 categorías—
+     es intrínsecamente ambigua en una fracción del corpus.
+
+4.4 PATRÓN COMÚN A TODA LA FAMILIA GEMMA — el hallazgo que motivó ampliar
+  **Ninguno de los tres modelos usó `no_relevante` ni una sola vez**, en ninguna
+  de las dos versiones de prompt, ni siquiera tras reescribir su glosa y agregar
+  una regla explícita de duda. Tres tamaños y dos prompts con el mismo síntoma
+  no parece falta de capacidad: parece un rasgo de la familia. De ahí la
+  decisión de probar OTRAS FAMILIAS antes de concluir nada.
+
+
+4.5 qwen2.5:14b — CONFIRMA LA HIPÓTESIS DE FAMILIA, PERO NO MEJORA
+  **Es el primer modelo que usa `no_relevante`: 27 veces** (de las cuales 23 son
+  irrelevantes de verdad, 85% de acierto). Eso CONFIRMA que la negativa a
+  abstenerse era un rasgo de la familia gemma y no un límite de capacidad ni un
+  defecto del prompt — un hallazgo que solo se podía obtener probando otra
+  familia, y que justifica retrospectivamente haberlo hecho antes de pagar API.
+  PERO no mejora la tarea: precisión 69.6% (por debajo del 81.5% de gemma3:12b)
+  y **recall 29.6%, el peor de todos** — descarta el 70% de los eventos reales.
+  Manda 92 de 180 predicciones (51%) a los dos casilleros de abstención
+  (`mencion_incidental` 65 + `no_relevante` 27), y 28 de esas eran relevantes.
+  Polaridad espuria 41.7%, peor que gemma3:12b. Único mérito adicional: 0.0% de
+  fallos de parseo.
+  LECCIÓN: resolver la abstención NO resolvió el problema. Abstenerse de más no
+  es mejor que no abstenerse; el problema es DÓNDE se pone el corte.
+
+
+========================================================================
+4B. LOS MODELOS ESTÁN ANIDADOS, NO SON COMPLEMENTARIOS (2026-08-18)
+========================================================================
+Script: scripts/analiza_ensemble_r5.py — base común de 175 noticias que los
+cuatro modelos clasificaron sin error de parseo.
+
+MOTIVACIÓN: los modelos fallan en direcciones opuestas (gemma3:4b sobre-inclusivo,
+gemma3:12b y qwen2.5:14b sobre-excluyentes). Si sus errores fueran independientes,
+combinarlos superaría a cualquiera por separado. Y ahora es viable: con el
+servidor, correr dos modelos sobre el corpus completo cuesta ~7.6 h.
+
+RESULTADO — EL ENSEMBLE NO APORTA NADA. Y el porqué es más informativo que el qué:
+    gemma3:4b + gemma3:12b   UNIÓN         = 76.0% / 57.1% / 76.9%
+    gemma3:4b solo                         = 76.0% / 57.1% / 76.9%   <- IDÉNTICO
+    gemma3:4b + gemma3:12b   INTERSECCIÓN  = 79.4% / 80.8% / 40.4%
+    gemma3:12b solo                        = 79.4% / 80.8% / 40.4%   <- IDÉNTICO
+  Lo mismo con gemma3:4b + qwen2.5:14b. La unión iguala EXACTAMENTE al modelo
+  más inclusivo y la intersección al más excluyente.
+
+  >> ESO SIGNIFICA QUE LOS POSITIVOS DE UN MODELO SON SUBCONJUNTO ESTRICTO DE
+     LOS DEL OTRO. Los modelos no aportan información distinta: ordenan el
+     corpus casi igual y solo difieren en DÓNDE CORTAN. Un modelo "más estricto"
+     no es más listo — es el mismo ranking con el umbral más arriba.
+
+  El voto mayoritario de los 4 da 77.8% de precisión y 40.4% de recall: PEOR en
+  precisión que gemma3:12b solo (80.8%) con el mismo recall. Cuatro modelos para
+  nada. La mejor combinación (gemma3:12b + gemma3:27b, intersección) llega a
+  83.3% de precisión contra 80.8% del 12b solo: +2.5 pp a cambio de duplicar el
+  cómputo y bajar el recall de 40.4% a 38.5%. No compensa.
+
+CONSECUENCIAS PARA LA DECISIÓN:
+  1. La vía del ensemble queda CERRADA. No se vuelve sobre ella.
+  2. La elección se reformula: no es "qué modelo es más inteligente" sino
+     "en qué punto de la curva precisión-recall se opera". Con modelos anidados,
+     gemma3:12b ES el punto excluyente y gemma3:4b el inclusivo; qwen2.5:14b no
+     agrega un punto útil (corta más abajo y con peor precisión).
+  3. Aparece una pregunta NUEVA y falsable, que es la que justifica probar un
+     modelo comercial —y no "seguro es mejor"—:
+       ¿Un modelo frontier ROMPE el anidamiento (más precisión Y más recall a la
+       vez), o simplemente corta en otro punto del mismo ranking?
+     Si lo rompe, el techo era CAPACIDAD y vale pagar por él.
+     ESE es el experimento que decide, y cuesta centavos sobre las 180 notas.
+
+  >> SOBRE EL TECHO: ¿INFORMACIÓN O CAPACIDAD? (corregido dos veces el
+     2026-08-18; la segunda corrección invalida a la primera)
+     PRIMERA VERSIÓN (asistente): "si ningún modelo rompe el anidamiento, el
+       techo es la INFORMACIÓN: el titular solo no alcanza".
+     SEGUNDA VERSIÓN (asistente, tras observación del autor): "está refutada,
+       porque el anotador HUMANO alcanzó esas etiquetas leyendo solo el
+       titular, luego la información basta y falta capacidad".
+     >> LA SEGUNDA VERSIÓN ERA FALSA. El anotador no fue humano sino el propio
+        asistente (§1B). El argumento era CIRCULAR: un modelo produjo las
+        etiquetas, luego "un modelo puede producirlas" no prueba nada.
+     LO QUE SE PUEDE AFIRMAR HOY, con lo que hay:
+       - El titular basta para que UN LLM CAPAZ emita etiquetas coherentes
+         (eso sí está demostrado: es lo que hizo el anotador). No está
+         demostrado que esas etiquetas sean correctas.
+       - Los modelos locales no reproducen ese juicio.
+       - Si el titular basta para un HUMANO experto: NO MEDIDO. Requiere que el
+         autor anote una submuestra (§1B, plan).
+     CONSECUENCIA PRÁCTICA: la pregunta "¿hace falta el cuerpo del artículo?"
+     queda ABIERTA, no cerrada. No se prioriza el scraping todavía, pero
+     tampoco se descarta con el argumento de arriba, que no se sostiene.
+
+
+========================================================================
+5. HISTORIAL DE CAMBIOS QUE AFECTAN LA COMPARACIÓN
+========================================================================
+Se registran porque mueven las métricas y sin ellos la tabla no se entiende.
+
+2026-08-18  prompt v2 -> v2.1. Pregunta de filtro binaria primero, regla de duda
+            hacia GRUPO B, caso explícito del tipo de cambio, glosas reescritas
+            de `mencion_incidental` y `no_relevante`.
+            EFECTO MEDIDO (gemma3:4b, magnitudes iguales): precisión 64.2% ->
+            57.7%, recall 63.0% -> 77.4%. Cambió precisión por recall; bajo el
+            criterio de §2 es discutible que sea una mejora. Se conserva porque
+            arregló CREDITC1 (38.9% -> 79.4%), que era un fallo sistemático.
+2026-08-18  `sector_macro` de magnitud 0.3 -> 0.0. Era el basurero del modelo
+            (55/180 predicciones, 29% relevantes). Detalle en
+            taxonomia_eventos_R5.txt §7.9.
+2026-08-18  Infraestructura: de CPU local (27 s/artículo) a las 2x RTX 3080 del
+            servidor xwing vía túnel SSH (0.8-1.6 s/artículo). Verificado que el
+            backend no altera el resultado (§3).
+
+
+========================================================================
+6. CANDIDATOS PENDIENTES
+========================================================================
+LOCALES (gratis, infraestructura ya montada, ~10 min por modelo):
+  [ ] qwen2.5:14b   — familia distinta (Alibaba). Fuerte en seguimiento de
+                      instrucciones y en español, que importa: el corpus es
+                      prensa peruana y el español no es la fortaleza de gemma.
+  [ ] qwen2.5:32b   — el mismo, en el tamaño comparable al gemma3:27b.
+  [ ] mistral-small — tercera familia, cobertura de lenguas romances.
+  [ ] phi-4 (14b)   — Microsoft, mucho razonamiento por parámetro.
+
+COMERCIALES (requieren API key; el piloto de 180 cuesta centavos):
+  [ ] Gemini 2.5 Flash — probablemente el más barato; tiene nivel gratuito.
+  [ ] Claude (Haiku 4.5 / Sonnet 5 / Opus 5) — corrida completa $6.7 / $13.4 /
+      $33.5 con Batch API (50% dto.). Hay descuentos académicos: preguntar
+      antes de pagar.
+  [ ] DeepSeek — muy barato.
+
+Costos de la corrida COMPLETA (11,487 artículos tras prefiltro), para dimensionar:
+local = $0 (ya se paga el servidor); comercial = $7 a $34. El costo NO es el
+criterio (§2); se registra para descartarlo explícitamente como objeción.
+
+
+========================================================================
+7. DECISIÓN FINAL
+========================================================================
+[ ] PENDIENTE. Se cierra cuando terminen las corridas de §6 y se completará
+    aquí con: modelo elegido, versión/snapshot exacto, métricas que lo
+    sustentan, y la limitación declarada (reproducibilidad si es comercial;
+    techo de calidad si es local).
+
+========================================================================
+FIN DEL DOCUMENTO
+========================================================================

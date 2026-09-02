@@ -39,6 +39,10 @@ from src.market import fx
 from src.universe import Asset
 
 _SPLIT_CANDIDATE_THRESHOLD = 0.40
+# Días de tolerancia al cruzar un salto contra las acciones corporativas de la
+# BVL. La BVL fecha por `dateCut`, que puede adelantarse unos días al ajuste real
+# del precio (mismo motivo que align_splits_to_price).
+_VENTANA_CONFIRMACION = 5
 
 _BVL_DOD = "https://dataondemand.bvl.com.pe"
 _BVL_HEADERS = {
@@ -172,10 +176,66 @@ def _to_ns(idx: pd.DatetimeIndex) -> pd.DatetimeIndex:
 
 def detect_split_candidates(close_raw: pd.Series,
                             threshold: float = _SPLIT_CANDIDATE_THRESHOLD) -> pd.Series:
-    """Retornos diarios |ret| > threshold: candidatos a split/acción liberada
-    NO confirmada. Uso: revisión manual contra avisos BVL/SMV."""
+    """Retornos diarios |ret| > threshold: saltos overnight anómalos.
+
+    Detección PURA, sin interpretar: la lectura (¿acción corporativa o noticia?)
+    la hace `clasificar_saltos`, que además cruza contra los eventos ya
+    descargados de la BVL.
+    """
     ret = close_raw.sort_index().pct_change()
     return ret[ret.abs() > threshold]
+
+
+def clasificar_saltos(candidatos: pd.Series, splits: pd.Series,
+                      dividends: pd.Series,
+                      ventana_dias: int = _VENTANA_CONFIRMACION) -> pd.DataFrame:
+    """Separa los saltos por SIGNO y los cruza con las acciones corporativas.
+
+    POR QUÉ EL SIGNO IMPORTA. Un split o una acción liberada aumentan el número
+    de acciones y por lo tanto HACEN CAER el precio: el salto es NEGATIVO. Lo
+    mismo un dividendo grande en su ex-date. Un salto grande y POSITIVO casi
+    nunca es una acción corporativa —salvo un contrasplit, raro en la BVL— y
+    típicamente es una NOTICIA, sobre todo una compra o fusión.
+
+    Tratarlos por igual producía falsos positivos caros. En la corrida del
+    2026-08-22 los dos únicos avisos del universo eran anuncios de M&A reales:
+    CPACASC1 +61.1% (Holcim, US$1,500M) y LUSURC1 +41.1% (Sempra -> China
+    Yangtze Power, US$3,590M). Ninguno requería ajuste. Ver
+    docs/hallazgos_mercado_R3.txt 5.8.
+
+    POR QUÉ SE CRUZA CON LOS EVENTOS. `fetch_actions` ya trajo de la BVL las
+    acciones liberadas y los dividendos del emisor; si hay uno a pocos días del
+    salto, el salto queda explicado y no hay nada que revisar a mano. La ventana
+    existe porque la BVL fecha por `dateCut`, que puede adelantarse unos días al
+    ajuste real de precio (mismo motivo que `align_splits_to_price`).
+
+    Devuelve un DataFrame indexado por fecha con `ret`, `evento` y `veredicto`.
+    """
+    cols = ["ret", "evento", "veredicto"]
+    if candidatos.empty:
+        return pd.DataFrame(columns=cols)
+
+    tol = pd.Timedelta(days=ventana_dias)
+    eventos: list[tuple[pd.Timestamp, str]] = []
+    for serie, nombre in ((splits, "acción liberada/split"),
+                          (dividends, "dividendo")):
+        if serie is not None and not serie.empty:
+            eventos += [(pd.Timestamp(d), nombre) for d in serie.index]
+
+    filas = []
+    for fecha, ret in candidatos.items():
+        fecha = pd.Timestamp(fecha)
+        cerca = [n for d, n in eventos if abs(d - fecha) <= tol]
+        if cerca:
+            filas.append({"ret": ret, "evento": cerca[0],
+                          "veredicto": "explicado por acción corporativa"})
+        elif ret < 0:
+            filas.append({"ret": ret, "evento": "",
+                          "veredicto": "REVISAR: caída sin acción corporativa"})
+        else:
+            filas.append({"ret": ret, "evento": "",
+                          "veredicto": "alza: probable noticia, NO ajustar"})
+    return pd.DataFrame(filas, index=pd.DatetimeIndex(candidatos.index))[cols]
 
 
 def _backward_cumulative_factor(dates: pd.DatetimeIndex, events: pd.Series) -> pd.Series:
@@ -340,11 +400,19 @@ def build_adjusted_prices(asset: Asset, close_raw: pd.Series,
     dividends = actions["dividends"]
 
     candidates = detect_split_candidates(close_raw)
-    if not candidates.empty and splits.empty:
-        fechas = ", ".join(d.strftime("%Y-%m-%d") for d in candidates.index)
-        print(f"[corporate_actions] {asset.bvl}: {len(candidates)} salto(s) overnight "
-              f">{_SPLIT_CANDIDATE_THRESHOLD:.0%} sin split confirmado -> revisar "
-              f"avisos BVL/SMV manualmente. Fechas: {fechas}")
+    # El aviso se emite por SALTO y con su veredicto, no en bloque: antes solo
+    # aparecía si la serie no tenía NINGÚN split (`splits.empty`), así que un
+    # emisor con splits se quedaba sin revisar sus saltos anómalos, y a la vez
+    # las alzas por noticia se reportaban como si hubiera un dato que corregir.
+    saltos = clasificar_saltos(candidates, splits, dividends)
+    for fecha, r in saltos.iterrows():
+        detalle = f" [{r['evento']}]" if r["evento"] else ""
+        print(f"[corporate_actions] {asset.bvl}: salto overnight "
+              f"{r['ret']:+.1%} el {fecha:%Y-%m-%d} -> {r['veredicto']}{detalle}")
+    revisar = int((saltos["veredicto"].str.startswith("REVISAR")).sum()) if len(saltos) else 0
+    if revisar:
+        print(f"[corporate_actions] {asset.bvl}: {revisar} salto(s) requieren "
+              f"revisión manual contra avisos BVL/SMV.")
 
     is_split_adjusted = not splits.empty
     is_div_adjusted = not dividends.empty

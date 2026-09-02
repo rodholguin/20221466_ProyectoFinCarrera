@@ -1,0 +1,699 @@
+ESTADO DE AVANCE — DIFERENCIAS RESPECTO DE LA ÚLTIMA VERSIÓN DOCUMENTADA (E3)
+Tesis: Desarrollo de agentes de inversión bursátiles mediante aprendizaje por
+       refuerzo y LLM en la Bolsa de Valores de Lima
+Autor: Rodrigo Holguin — Asesor: Dr. Edwin Villanueva
+Generado: 2026-08-28
+Línea base: 20221466_RodrigoHolguin_EdwinVillanueva_E3.pdf (127 pp.)
+========================================================================
+
+
+CÓMO LEER ESTE DOCUMENTO
+------------------------------------------------------------------------
+El E3 documenta el OE2 (Resultados 3 a 6) con el universo de CINCO empresas y
+con el pipeline tal como estaba en julio. Desde entonces —y sin que nada de
+esto haya entrado todavía al documento de tesis— el proyecto cambió en tres
+frentes: (1) se reemplazó el universo por razones de liquidez, (2) se rehízo
+por completo el canal de sentimiento tras medir que estaba dominado por ruido,
+y (3) se abrió el trabajo de OE1 (entorno y agente) a nivel de decisiones de
+diseño registradas.
+
+Secciones 1 a 8: qué cambió respecto del E3, con la evidencia.
+Sección 9:  qué está efectivamente corrido y qué no (estado honesto).
+Sección 10: qué párrafos, tablas y figuras del E3 quedan obsoletos.
+Sección 11: próximos pasos, en orden y con sus bloqueantes.
+Sección 12: lo que conviene consultar con el asesor.
+Sección 13: guion corto para la reunión.
+
+Todos los números citados provienen de los documentos internos del repositorio
+(carpeta docs/) y de las corridas registradas en data/interim/*.log; cada
+sección indica su fuente.
+
+
+========================================================================
+0. RESUMEN EN UNA PÁGINA
+========================================================================
+
+  Dimensión              E3 (documentado)          Hoy
+  ---------------------  ------------------------  --------------------------
+  Universo               5 empresas                7 empresas (3 reemplazadas)
+  Criterio de universo   1 activo por sector       liquidez medida + sectores
+  Piso de liquidez       SAGAC1 9.1% de sesiones   90.5% (Luz del Sur / BCP)
+  Fuente de dividendos   yfinance                  BVL (oficial)
+  Ratios fundamentales   5 ratios                  5 ratios + P/E + DY
+  P/E                    DESCARTADO por falta de   IMPLEMENTADO (acciones en
+                         acciones en circulación   circulación resueltas)
+  Fecha de conocimiento  lag fijo 40/60 días       fecha real de presentación
+   de los EEFF                                     (BVL) con fallback al lag
+  Factores macro         ninguno                   6 columnas BCRP validadas
+                                                   empíricamente
+  Sentimiento: tarea     polaridad libre           categoría de evento
+                         (score continuo ±1)       (taxonomía de 15 códigos) +
+                                                   polaridad solo si importa
+  Sentimiento: modelo    gemma3:4b                 barrido de 5 modelos; gana
+                                                   gemma3:12b (falta cerrar)
+  Sentimiento: valida-   cualitativa (face         550 titulares anotados a
+   ción                  validity)                 ciegas por el autor
+  Relevancia del corpus  no medida                 7.2% ±2.8pp (poblacional)
+  Columnas del panel     36                        43 hoy; ~49 tras la corrida
+  OE1                    no iniciado               14 decisiones registradas,
+                                                   3 cerradas con evidencia
+
+  EL HALLAZGO QUE MÁS CAMBIA LA TESIS: el canal de sentimiento del E3 no medía
+  sentimiento de la empresa. El 49% de las etiquetas con signo provenían de
+  noticias que no hablaban de la empresa, y los resúmenes de cierre de la BVL
+  —hasta el 61% del corpus de un activo— aciertan el signo del movimiento de la
+  propia acción el 50.5% de las veces (n=838, binomial p=0.81), es decir, azar.
+  Esa es la explicación de la correlación débil que el E3 reporta en 5.4.5, y
+  obligó a rediseñar R5 entero antes de volver a correrlo.
+
+
+========================================================================
+1. CAMBIO DE UNIVERSO: DE 5 A 7 EMPRESAS
+========================================================================
+Fuente: config.yaml; docs/ejecutabilidad_y_costos_OE1.txt.
+
+MOTIVO. El E3 eligió un activo por sector para poder discutir diversificación.
+Al medir liquidez con el Informe Bursátil Mensual oficial de la BVL apareció
+que tres de los cinco activos no son operables a frecuencia diaria:
+
+    SALEN   SAGAC1    frecuencia oficial  9.1% de sesiones · S/52,212/mes
+            BUENAVC1  25.0%  (ilíquida en la BVL; su liquidez está en el ADR)
+            CORAREC1  35.0%
+    ENTRAN  INRETC1   InRetail (retail)        95.2%
+            CPACASC1  Pacasmayo (construcc.)   95.5%
+            MINSURI1  Minsur (minería)         95.0%
+            FERREYC1  Ferreycorp (bienes de   100.0%
+                      capital, sector nuevo)
+            LUSURC1   Luz del Sur (utilities)  90.5%
+    SIGUEN  CREDITC1  BCP (banca)              90.5%
+            ALICORC1  Alicorp (alimentos)     100.0%
+
+Cada candidato se validó en tres patas antes de entrar: liquidez en la BVL,
+disponibilidad de fundamentales en la SMV y cobertura mediática en MediaCloud.
+Se pasó de 5 a 7 para atacar también el sesgo de universo pequeño.
+
+CONSECUENCIA METODOLÓGICA QUE HAY QUE DECLARAR: el criterio dejó de ser "un
+activo por sector" estricto y pasó a ser "activos líquidos representativos de
+sectores distintos". Es un cambio de criterio de selección y va explicado, no
+escondido.
+
+DATO COLATERAL IMPORTANTE. El proxy de liquidez que usaba el E3 (días sin
+cambio de precio) subestima la frecuencia real de negociación entre 23 y 34
+puntos porcentuales. El piso real del universo es 90.5% de sesiones, no 56.5%.
+Esto NO invalida la decisión de universo (el orden entre activos se preserva y
+la brecha es aún más nítida en dinero negociado), pero sí cambia el nivel de la
+métrica y afecta al diseño del entorno: prohibir transar en todo día "rancio"
+le quitaría al agente cerca de un tercio de sus días operables sin razón real.
+
+
+========================================================================
+2. R3 — MERCADO: RE-CORRIDO Y CON FUENTE OFICIAL DE ACCIONES CORPORATIVAS
+========================================================================
+Fuente: docs/hallazgos_mercado_R3.txt; data/interim/r3_universo7.log (2026-08-23).
+
+Lo que el E3 documenta sigue siendo válido en su arquitectura (la BVL como
+fuente autoritativa del cierre, Yahoo solo como enriquecimiento de OHLC, tres
+series de precio, horizonte 2012–2025). Lo que cambió:
+
+  a) DIVIDENDOS Y ACCIONES LIBERADAS DESDE LA BVL, no desde yfinance. Se
+     descubrió el endpoint /v1/issuers/{companyCode}/value, que entrega el
+     historial oficial. Esto resuelve de raíz la limitación que el E3 declara
+     para SAGAC1 y CORAREC1 ("sin ninguna fuente de splits/dividendos") y da
+     cobertura completa a los activos nuevos, que tampoco tienen Yahoo.
+     Corrida del 2026-08-23: 13 acciones liberadas y 21 dividendos en CREDITC1,
+     56 dividendos en LUSURC1, 26 en FERREYC1, 19 en MINSURI1 (13 de ellos en
+     US$, convertidos a soles con el tipo de cambio del BCRP de cada fecha).
+
+  b) CONVERSIÓN US$ → PEN DEL PRECIO DE INRETAIL. InRetail cotiza en dólares en
+     la BVL. Se convierte con el tipo de cambio venta bancario del BCRP vigente
+     en cada fecha, después de guardar la capa cruda en su moneda original y
+     antes de aplicar acciones corporativas. Verificado sobre 3,321 filas.
+
+  c) DETECTOR DE SALTOS ANÓMALOS: dos avisos en el universo nuevo (CPACASC1
+     +61.1% el 2025-12-17 y LUSURC1 +41.1% el 2019-10-01), ambos evaluados como
+     noticia real (la OPA de China Three Gorges por Luz del Sur, en el segundo
+     caso) y por tanto NO ajustados. El E3 dejaba abierto un caso análogo en
+     BUENAVC1; ese activo salió del universo y además la fuente que faltaba ya
+     existe.
+
+  d) NUEVA FUENTE: INFORME BURSÁTIL MENSUAL DE LA BVL. 173 PDFs mensuales
+     2012–2026 con volumen, monto negociado, frecuencia de negociación y número
+     de acciones listadas por emisor. Parser validado. Es la fuente de la
+     medición de liquidez de la sección 1 y del conteo de acciones de la
+     sección 3. Único hueco: 2016-03 (tabla rasterizada en el PDF).
+
+  e) CONFIABILIDAD DEL VOLUMEN DE YAHOO, MEDIDA. El volumen de Yahoo no está
+     inventado (pasa la prueba de Benford) pero no reconcilia con la BVL
+     (factores de 0.16x a 5.12x) y falla en 5–15% de los días. Queda declarado
+     como no autoritativo. En cambio se descubrió que la BVL sí expone puntas
+     de compra/venta: el spread ida y vuelta observado va de 8 a 220 puntos
+     básicos, dato que el plan de costos del E3 no tenía.
+
+
+========================================================================
+3. R4 — FUNDAMENTALES: P/E Y DIVIDEND YIELD PASAN DE DESCARTADOS A IMPLEMENTADOS
+========================================================================
+Fuente: docs/ejecutabilidad_y_costos_OE1.txt §4.5 y §8.3;
+        docs/pendientes_implementacion_universo.txt.
+
+ESTE ES EL CAMBIO QUE MÁS DIRECTAMENTE CONTRADICE EL TEXTO DEL E3. La sección
+5.3.6 del documento concluye que el P/E "queda fuera del conjunto de
+indicadores" por no existir una fuente confiable del número de acciones en
+circulación. Esa conclusión ya no se sostiene: el insumo se resolvió por tres
+vías distintas, una por activo, y ambos indicadores están en el panel.
+
+  ACCIONES EN CIRCULACIÓN — CONTEO HÍBRIDO (implementado 2026-07-31):
+      acciones = emitidas según el Informe Bursátil Mensual de la BVL
+                 − |acciones en tesorería, cuenta SMV 1D0711| / valor nominal
+  La BVL aporta la FECHA correcta y la SMV el AJUSTE por tesorería. Antes se
+  usaba el Capital Emitido del balance dividido por el nominal, que se adelanta
+  hasta tres trimestres a la fecha en que las acciones quedan listadas: medido
+  en CREDITC1, 16 de 83 periodos con el conteo hasta +24.6% por encima del
+  oficial, siempre en la misma dirección y con periodicidad ANUAL (el BCP
+  capitaliza cada año). Era un artefacto estacional que un agente DRL podría
+  haber aprendido como si fuera señal.
+  Precedencia: calendario por tramos (InRetail) > override constante (Minsur) >
+  híbrido (el resto).
+
+  CASOS PARTICULARES RESUELTOS:
+  - InRetail: serie oficial por tramos (79,807,319 pre-IPO / 102,807,319 desde
+    oct-2012 / 108,746,887 desde abr-2022 por el follow-on). La reconstrucción
+    que se usaba antes erraba −2.19%; el error del P/E pre-2022 pasa a cero.
+  - Minsur: MINSURI1 es acción de INVERSIÓN y representa 1/3 del patrimonio
+    (verificado en las cuentas SMV, proporción 2:1 exactamente plana 2012–2025).
+    Se usa el total económico (2,883,002,520) para que el EPS y el P/E salgan
+    correctos. Reporta en dólares: la utilidad se convierte a soles.
+  - Alicorp: la tesorería es material (hasta 10% del capital en 2022–2023). El
+    neteo se verificó contra los EEFF.
+
+  DIVIDEND YIELD: se calcula con el dividendo de los últimos 12 meses tomado
+  del historial oficial de la BVL, disponible ahora para los 7 activos (el E3
+  lo daba por factible solo en 2 de 5).
+
+  FECHA DE CONOCIMIENTO PÚBLICO REAL (no un lag supuesto). El E3 propaga los
+  fundamentales usando un desfase fijo de 40/60 días. Ahora `known_date` toma
+  la fecha real de registro del hecho de importancia en la BVL
+  (/v1/corporate-actions) y solo cae al lag fijo cuando esa fecha no existe.
+  Al implementarlo se detectó y corrigió un look-ahead propio: para InRetail se
+  estaba tomando la fecha del EEFF INDIVIDUAL cuando el pipeline consume el
+  CONSOLIDADO, que se divulga entre 9 y 19 días después (mediana 14) en 30 de
+  30 trimestres. En Alicorp y BCP ambas fechas coinciden (0 de 30 y 0 de 26).
+  El modelo temporal es "primera versión reportada" e inmutable; el tratamiento
+  bitemporal de las reexpresiones queda declarado como trabajo futuro.
+
+
+========================================================================
+4. CANAL MACRO: NUEVO, Y VALIDADO CONTRA LOS DATOS DEL PROYECTO
+========================================================================
+Fuente: docs/fundamento_macro_riesgo_politico.txt §1 y §4;
+        scripts/probe_macro_exposicion.py; data/interim/probe_macro_exposicion.log.
+
+El E3 no tiene factores macro. Se incorporaron seis series del BCRP, globales
+(un solo valor por fecha para todos los activos) y alineadas point-in-time con
+la misma disciplina que los fundamentales: tipo de cambio USD/PEN, cobre, oro,
+tasa de referencia, EMBI+ Perú e inflación.
+
+La justificación original era económica y bibliográfica, no medida. Al cambiar
+el universo eso mostró un punto ciego: el oro estaba justificado por
+Buenaventura, que ya no está, y nadie lo había notado. Se hizo entonces una
+validación empírica sobre los datos del propio proyecto (regresión multifactor
+con los seis factores compitiendo, errores estándar de Newey-West, factores
+rezagados un día porque la ejecución es en t+1, excluyendo días sin cotización
+para no atenuar los coeficientes con ceros artificiales).
+
+  factor           significativo en   comentario
+  ---------------  -----------------  -------------------------------------
+  TC USD/PEN       7 de 7             de t=−2.09 a t=−4.07
+  EMBI Perú        6 de 7             todos menos el BCP
+  cobre            4 de 7             Minsur +5.62 es el más fuerte
+  petróleo WTI     2 de 7             Minsur y Ferreycorp
+  oro              0 de 7             máximo t=+1.51
+  estaño (mensual) 0 de 7             y con signo negativo
+
+  DECISIONES: se elimina el ORO (perdió sus dos patas a la vez). No se agrega
+  ESTAÑO, pero por una razón distinta de la aparente: el BCRP solo lo publica
+  como promedio mensual y una escalera de doce peldaños al año no puede
+  explicar retornos diarios; la hipótesis (Minsur es #2 mundial de estaño)
+  merece volver a probarse si aparece una serie diaria. El PETRÓLEO queda como
+  brazo de ablación, no incorporado: 2 de 8 activos al 5% es lo esperable por
+  azar con ~48 pruebas.
+
+  CONTROL DE QUE EL MÉTODO FUNCIONA: aplicado sobre BUENAVC1 (minera de oro,
+  universo viejo, que sigue en disco) el oro sale con t=+5.57 y el cobre pierde
+  significancia. Cuando el efecto existe, la prueba lo ve; su ausencia en los 7
+  vigentes no es falta de potencia.
+
+  HALLAZGO DE FONDO, REPORTABLE: el esqueleto macro de la BVL no son los
+  precios de commodities sino EL TIPO DE CAMBIO Y EL RIESGO PAÍS. El cobre
+  llega en buena parte por la vía del tipo de cambio.
+
+  Se descartó también, con evidencia, un diseño de exposición específica por
+  activo (cada activo mapeado a su materia prima): el único factor genuinamente
+  específico era el oro con Buenaventura, y ese activo ya no está.
+
+
+========================================================================
+5. R5 — SENTIMIENTO: REDISEÑO COMPLETO (EL CAMBIO MÁS GRANDE)
+========================================================================
+Fuente: docs/validacion_etiquetado_r5.txt, docs/taxonomia_eventos_R5.txt,
+        docs/seleccion_modelo_R5.txt, docs/auditoria_anotacion_humana_R5.txt.
+
+5.1 LO QUE SE MIDIÓ, Y QUE EL E3 NO PODÍA SABER
+------------------------------------------------------------------------
+El E3 declara explícitamente que la validación de R5 es cualitativa y que
+faltaba la métrica cuantitativa contra etiquetado humano. Al hacerla, el
+resultado obligó a rehacer el resultado entero:
+
+  - Relevancia real del corpus: 26% en la primera medición (julio), 7.2% ±2.8pp
+    en la medición definitiva con las queries nuevas. A nivel de corpus completo
+    el titular nombra a la empresa en solo 9–18% de los casos.
+  - El error dominante NO es el signo. Las inversiones positivo↔negativo son el
+    4.4%. El error es POLARIDAD ESPURIA: el 49% de las etiquetas con signo
+    provienen de noticias que no hablan de la empresa. Causa exacta en el
+    código: el prompt no ofrecía abstención, así que el modelo SIEMPRE emitía
+    un signo.
+  - La `confidence` autoreportada NO discrimina: 0.750 de media en los errores
+    contra 0.730 en los aciertos. Inservible como filtro y como peso. (El E3 ya
+    advertía que no era una probabilidad calibrada; ahora está medido.)
+  - Composición del ruido: los resúmenes del índice BVL son el 61% del corpus
+    de CORAREC1, 53% de BUENAVC1 y 37% de ALICORC1; las notas de tipo de cambio
+    el 23% del BCP; SAGAC1 tenía 80% de ruido puro.
+  - Los titulares de índice NO son rescatables: sí nombran a la empresa con su
+    retorno exacto, pero aciertan el signo del movimiento de la propia acción el
+    50.5% de las veces (n=838, p=0.81). Y no se arreglan leyendo el cuerpo,
+    porque ahí la "noticia" sería el retorno del día, que R3 ya tiene mejor y
+    antes. Se descartan, no se reparan.
+  - Duplicados por sindicación: 4.3% en promedio, 13.5% en el peor activo.
+  - Entre el 50% y el 78% de los días CON noticia tenían su score calculado
+    SOLO con noticias irrelevantes.
+
+5.2 EL REDISEÑO
+------------------------------------------------------------------------
+  (i)   Se abandona el SCORE CONTINUO. Con el acuerdo medido, promediar
+        {+1, 0, −1} dentro del día y reportar 0.333 es falsa precisión.
+  (ii)  Se cambia la TAREA que se le pide al modelo: ya no "¿qué sentimiento
+        tiene esto?" sino "¿qué TIPO de hecho es?", sobre una taxonomía ex-ante
+        de 15 categorías en 4 tramos de magnitud (1.0 / 0.6 / 0.3 / 0.0). La
+        clasificación del tipo es una tarea objetiva; la magnitud la fija el
+        autor y es auditable. Las categorías de magnitud cero SON el filtro de
+        relevancia y la abstención.
+  (iii) La polaridad SOLO se pide si la categoría tiene magnitud > 0, y se
+        fuerza en código (categoría cero → polaridad nula, diga lo que diga el
+        modelo). Esto elimina por construcción el error dominante.
+  (iv)  Tres fixes previos a la corrida: filtro regex anterior al LLM (mata los
+        resúmenes de índice sin gastar una llamada), abstención explícita y
+        deduplicación por título+fecha. Los tres REDUCEN el volumen a clasificar
+        entre 30% y 60% en los activos ruidosos: la corrida de 7 activos sale
+        más barata que la de 5.
+  (v)   La representación en el panel pasa a ser SEIS COLUMNAS NUEVAS:
+        sent_pos_ewma_{5,20,60} y sent_neg_ewma_{5,20,60}, es decir medias
+        móviles exponenciales de la intensidad de eventos, separadas por signo
+        y en tres escalas temporales. Positivo y negativo van SEPARADOS porque
+        una serie firmada colapsa (una noticia buena y una mala el mismo día
+        dan cero, indistinguible de "no pasó nada") y prohíbe por construcción
+        la reacción asimétrica. Se conservan las 4 columnas crudas actuales.
+  (vi)  PUNTO DE ARQUITECTURA que vale la pena mencionarle al asesor: R5 emite
+        solo CATEGORÍA + POLARIDAD por artículo; magnitudes, vidas medias y
+        agregación se calculan río abajo en build_dataset. Cualquier
+        recalibración posterior cuesta milisegundos y NO exige volver a pagar
+        el LLM.
+
+5.3 LA VALIDACIÓN: 550 TITULARES ANOTADOS A CIEGAS POR EL AUTOR
+------------------------------------------------------------------------
+Se detectó y corrigió un problema serio de método: las 180 anotaciones de julio
+que servían de referencia las había producido el asistente de IA, no una
+persona, pese a que las columnas se llamaban `rel_humana` y `sent_humano`.
+Evaluar modelos contra una referencia hecha por un modelo está sesgado a favor
+de los que razonan igual que el anotador.
+
+Se rehízo: 550 titulares, taxonomía de 15 categorías, polaridad donde
+corresponde, juzgando solo por el titular (que es todo lo que ve el modelo),
+en dos bloques barajados y ciegos (120 + 430).
+
+  DECLARACIÓN QUE VA EN LA TESIS TAL CUAL ES: es UN anotador (el autor), no un
+  panel. Siete filas de 550 (1.3%) llevan nota de haber sido consultadas con el
+  asistente después de emitir el juicio propio; cinco confirmaron la etiqueta
+  original y dos la cambiaron. Se declara, no se corrige hacia atrás. Las 180
+  etiquetas del asistente quedan como SEGUNDO ANOTADOR con criterio distinto y
+  declarado.
+
+  RESULTADOS:
+  - El prefiltro regex descarta 109 de 550 titulares (19.8%) antes de gastar una
+    llamada al LLM, y de esos 109 los relevantes son CERO. Acierto de categoría
+    en lo descartado: 97.2%. Era un punto ciego total (lo que el prefiltro mata,
+    ningún modelo puede recuperarlo) y quedó medido a su favor.
+  - Acuerdo autor vs asistente: 81.7% en relevancia (kappa 0.456) y 76.9% en
+    polaridad (kappa 0.618). El kappa 0.456 se leería como "acuerdo moderado",
+    y esa lectura es incorrecta: el desacuerdo es 100% UNIDIRECCIONAL (22 ítems
+    a 0) y se explica entero por dos convenciones explícitas —noticia sectorial
+    con magnitud cero (14 de 22) y "M&A siempre neutral" (los 3 de polaridad)—,
+    no por ruido de criterio. Las etiquetas del autor son un subconjunto
+    estricto de las del asistente.
+  - Relevancia poblacional: 7.2% ±2.8pp. Por activo: MINSURI1 21.3%,
+    LUSURC1 20.8%, INRETC1 16.9%, CPACASC1 6.5%, ALICORC1 5.7%, CREDITC1 2.5%,
+    FERREYC1 1.9%.
+  - Eventos esperados en todo 2012–2025 (cotas superiores; el tramo de
+    entrenamiento es un subconjunto): INRETC1 ~540, CREDITC1 ~253, LUSURC1 ~218,
+    MINSURI1 ~193, ALICORC1 ~96, CPACASC1 ~54, FERREYC1 ~33. Total ~1,390.
+
+  DOS CONSECUENCIAS INCÓMODAS, Y SE REPORTAN:
+  a) FERREYCORP aporta ~2.4 eventos POR AÑO. Con vidas medias de 5/20/60 días
+     sus columnas de sentimiento van a ser cero casi siempre. Pacasmayo está
+     cerca. Dos de los siete activos casi no alimentan el canal.
+  b) EL BCP ES EL 51% DEL CORPUS Y SOLO EL 18% DE LOS EVENTOS (relevancia 2.5%).
+     Más de la mitad del presupuesto de clasificación se gasta en el activo de
+     menor rendimiento. La causa está identificada: la consulta incluye
+     "Credicorp", que es el holding, mientras que el activo del universo es el
+     banco; arrastra Credicorp Capital, Prima AFP y Pacífico. No es look-ahead
+     y la taxonomía manda esas notas a magnitud cero, pero explica el número.
+
+  REVISIÓN DE PERÍMETRO SOCIETARIO (descarta un riesgo de look-ahead): se
+  auditaron los alias de cada consulta para verificar que no se esté aplicando
+  el perímetro de HOY hacia atrás. Está limpio: InRetail lleva InkaFarma, Plaza
+  Vea y Supermercados Peruanos, todas del grupo durante toda la ventana, y
+  Mifarma —que llegó en 2018 con Quicorp— NO está en la consulta. Ferreycorp y
+  Ferreyros son la misma entidad. Luz del Sur cambió de dueño, no de emisor.
+
+5.4 SELECCIÓN DEL MODELO: BARRIDO DE CINCO MODELOS LOCALES
+------------------------------------------------------------------------
+El E3 usa gemma3:4b sin comparación. Se corrió un barrido de 5 modelos, 2
+familias, de 4B a 32B parámetros, medido contra la referencia del autor:
+
+    modelo          precisión  recall   F1     acierto de categoría
+    gemma3:12b        75.0%    92.3%   82.8%        59.2%
+    qwen2.5:14b       71.4%    76.9%   74.1%        67.5%
+    qwen2.5:32b       64.3%    69.2%   66.7%        63.3%
+    gemma3:27b        46.2%    92.3%   61.5%        64.2%
+    gemma3:4b_v2.1    27.7%   100.0%   43.3%          —
+    gemma3:4b (E3)    19.4%   100.0%   32.5%          —
+
+  Test de McNemar: gemma3:12b supera a toda la familia 4B (p<0.02) y a 27b
+  (p=0.016); es INDISTINGUIBLE de qwen2.5 14b (p=0.752) y 32b (p=0.289).
+  DATO METODOLÓGICO FUERTE: contra la referencia vieja (la del asistente)
+  ganaba qwen2.5:32b. Con la referencia humana el ranking SE INVIRTIÓ — que es
+  exactamente el sesgo que se había anticipado al detectar el problema.
+  HALLAZGO QUE CIERRA UNA VÍA: los cinco modelos están ANIDADOS (la unión es el
+  más inclusivo y la intersección el más excluyente, exactamente). No aportan
+  información distinta: ordenan igual y solo cambian dónde cortan. El ensemble
+  queda descartado con evidencia.
+
+5.5 INFRAESTRUCTURA
+------------------------------------------------------------------------
+El E3 reporta 10–17 segundos por artículo sin GPU, lo que obligaba a clasificar
+en varias sesiones a lo largo de días. Se montó un servidor con GPU (2× RTX
+3080, acceso por túnel SSH) y el ritmo bajó a 0.8–1.6 s/artículo, entre 10 y 20
+veces más rápido. La clasificación deja de ser el cuello de botella logístico.
+
+5.6 CORPUS NUEVO YA DESCARGADO (2026-08-22)
+------------------------------------------------------------------------
+Con las consultas rediseñadas y deduplicación por sindicación:
+
+    CREDITC1 10,029 · INRETC1 3,202 · FERREYC1 1,752 · ALICORC1 1,725 ·
+    LUSURC1 1,056 · MINSURI1 921 · CPACASC1 843        TOTAL 19,528
+
+Contra las 11,566 del E3. El prefiltro regex retirará en torno al 19.8% antes
+de llamar al modelo.
+
+
+========================================================================
+6. R6 — INTEGRACIÓN: LO QUE YA ESTÁ EN EL CÓDIGO Y NO EN EL E3
+========================================================================
+Fuente: docs/hallazgos_integracion_R6.txt; src/integration/build_dataset.py.
+
+  a) DÍAS SIN COTIZACIÓN. Bandera `is_no_trade` con precio sostenido e
+     indicadores técnicos recalculados sobre la serie completa. Al hacerlo se
+     encontró y corrigió un defecto preexistente de R3: el RSI de 14 días tenía
+     27.5% de valores nulos; hoy 0.4%, que es el mínimo irreducible del warm-up.
+  b) COLUMNAS MACRO (sección 4), con una vista de ablación propia
+     ("mercado_macro") análoga a la de sentimiento, para poder aislar el canal.
+  c) P/E, DIVIDEND YIELD y acciones en circulación en el panel (sección 3).
+  d) El panel actual en disco tiene 43 columnas (contra las 36 del E3) y sigue
+     siendo el del universo VIEJO. Tras la corrida pendiente quedará en torno a
+     49 columnas con las 6 EWMAs de sentimiento y las 6 macro.
+  e) PENDIENTE CONOCIDO al implementar las EWMAs: la función que alinea el
+     sentimiento al calendario promedia por número de artículos al hacer
+     roll-forward; las columnas de magnitud deben SUMARSE, no promediarse.
+
+
+========================================================================
+7. OE1 — TRABAJO NUEVO: DECISIONES DE DISEÑO REGISTRADAS
+========================================================================
+Fuente: docs/decisiones_pendientes_OE1.txt (14 decisiones); docs/
+        ejecutabilidad_y_costos_OE1.txt; docs/riesgos_transversales_datos.txt.
+
+El E3 no toca OE1. Se abrió un registro formal de decisiones de diseño del
+entorno y del agente, con opciones, evidencia y criterio de cierre. Tres están
+cerradas con argumento escrito:
+
+  D1  ALCANCE DEL AGENTE — CERRADA: agente de PORTAFOLIO (pesos sobre los 7
+      activos + caja). Se eligió por el eje central de la tesis (evaluar
+      diversificación) por encima de la conveniencia estadística. Cascadea:
+      espacio de acción continuo y familia PPO / SAC / TD3.
+      CONSECUENCIA ASUMIDA: una sola red comparte pesos entre 7 activos muy
+      heterogéneos en cobertura de prensa. Mitigación decidida: normalización
+      causal por activo (que D6 ya exige, coste cero) y un feature de régimen de
+      cobertura.
+      CRITERIO DE ABANDONO FIJADO DE ANTEMANO: si el canal de sentimiento no
+      supera al baseline en la ablación de R8, no se usa.
+
+  D11 REPRESENTACIÓN DEL SENTIMIENTO — CERRADA: es el rediseño de la sección 5
+      (polaridad categórica + magnitud por taxonomía + decaimiento por mezcla de
+      tres EWMAs). Se eligió la mezcla de exponenciales sobre un parámetro de
+      vida media libre por doble razón: los pesos entran linealmente (problema
+      bien condicionado) y una mezcla de tres exponenciales representa MÁS
+      formas que una sola, por ejemplo caída rápida con cola larga.
+
+  D13 MOMENTO DE EJECUCIÓN — CERRADA: EJECUCIÓN EN t+1, vinculante. El agente
+      observa el sentimiento del día T pero solo puede operar al precio de T+1.
+      CAUSA: la fecha de publicación de MediaCloud no tiene hora (verificado:
+      100% de los artículos a las 00:00), así que no se puede saber si una nota
+      salió antes o después del cierre de la BVL.
+      EVIDENCIA DE QUE EL FIX NO CUESTA NADA, medida con |retorno| y la BANDERA
+      de noticia (nunca con la polaridad, así que es independiente del
+      etiquetado roto): la ventana de evento T−2..T+2 es PLANA, sin pico en T.
+      Los días con noticia no son días de salto: son días DENTRO de periodos de
+      volatilidad elevada. El conjunto de oportunidad de T+1 iguala al de T.
+
+  ABIERTAS: D2–D10 (espacio de acción, algoritmo, recompensa, observación,
+  normalización, costos, no-trade, benchmark, protocolo de evaluación), D12
+  (magnitud fija vs aprendida por tramo) y D14 (ver sección 12).
+
+TRATAMIENTO DE LA ILIQUIDEZ Y LOS COSTOS (planificado, no implementado). Cinco
+mecanismos, en orden de relación esfuerzo/credibilidad: ejecución en t+1;
+prohibir transar en días no ejecutables; costo proporcional con comisión SAB +
+tarifas BVL/Cavali/SMV citando el tarifario publicado, más el spread (que ahora
+SÍ es observable: 8 a 220 pbs); tope de capacidad; y como PIEZA CENTRAL, el
+COSTO DE EQUILIBRIO: reportar el desempeño sobre una grilla de costos e
+informar a qué costo el agente deja de superar al buy-and-hold. Eso convierte
+un parámetro incierto en un umbral de robustez evaluable en la sustentación.
+
+CAPACIDAD DEL PORTAFOLIO, MEDIDA. Monto negociado por día operado (mediana):
+InRetail S/2.18 MM, Alicorp S/2.14 MM, Ferreycorp S/1.41 MM, Pacasmayo
+S/824 mil, Minsur S/657 mil, Luz del Sur S/312 mil y BCP S/131 mil — el banco
+más grande del país es el más delgado en dinero negociado, por flotante mínimo.
+Con una salida en 20 sesiones al 10% de participación, la posición tope es
+S/262,644 y la cartera equiponderada ~S/1.84 MM. Se declarará como prueba de
+concepto a escala de inversionista individual o family office, NO institucional.
+
+EL AGUIJÓN, Y CONVIENE DECIRLO ANTES DE ESCRIBIR CONCLUSIONES: el riesgo no es
+que la iliquidez no se pueda modelar, es que el tratamiento honesto PUEDE
+BORRAR LA VENTAJA. Si el edge solo aparece a costo cero, el hallazgo pasa a ser
+"no hay ventaja económicamente explotable en la BVL con estas señales":
+legítimo y reportable, pero cambia la narrativa de la tesis.
+
+
+========================================================================
+8. CAMBIOS DE MÉTODO QUE VALE LA PENA REPORTAR COMO APRENDIZAJE
+========================================================================
+Tres, y los tres son transferibles:
+
+  1. UN FACTOR ENTRA SI TIENE EFECTO MEDIDO EN EL UNIVERSO VIGENTE, no si tiene
+     una historia plausible. El caso del oro lo demuestra: sobrevivió a un
+     cambio de universo porque nadie volvió sobre su justificación.
+  2. UN RIESGO QUE DEJA DE APLICAR SE ANOTA CON SU MITIGACIÓN, SU LÍMITE Y SU
+     RESIDUO; nunca se borra del registro. Es lo que permite auditar por qué se
+     tomó cada decisión.
+  3. LA REFERENCIA DE VALIDACIÓN TIENE QUE SER HUMANA Y ESTAR DECLARADA COMO
+     TAL. El ranking de modelos se invirtió al cambiarla; sin ese control se
+     habría elegido el modelo equivocado con una tabla de aspecto impecable.
+
+
+========================================================================
+9. ESTADO REAL DE LA CORRIDA — QUÉ ESTÁ HECHO Y QUÉ NO
+========================================================================
+Distinción importante para no sobrevender: el CÓDIGO del universo nuevo está
+cerrado; la CORRIDA completa no. El panel unificado que hay en disco sigue
+siendo el de las 5 empresas viejas.
+
+  Etapa                       Código   Corrido para los 7 activos
+  --------------------------  -------  --------------------------------------
+  R3 mercado                  SÍ       SÍ  (2026-08-23, 7/7)
+  R3 acciones corporativas    SÍ       SÍ  (2026-08-23, dividendos BVL)
+  Informe Bursátil Mensual    SÍ       SÍ  (173 meses, 2012–2026)
+  Macro BCRP                  SÍ       SÍ  (caché generado; falta quitar oro)
+  R4 fundamentales            SÍ       PARCIAL: InRetail hecho; faltan
+                                       Pacasmayo, Ferreycorp, Luz del Sur y
+                                       Minsur
+  R5 descarga de noticias     SÍ       SÍ  (2026-08-22, 19,528 notas)
+  R5 clasificación con LLM    SÍ       NO  — es el cuello de botella
+  R5 EWMAs pos/neg en R6      NO       NO  — falta implementarlas
+  R6 panel unificado          SÍ       NO  (el panel en disco es el viejo)
+  Notebooks de exploración    —        NO  — hay que regenerarlos
+  Capítulo 5 del documento    —        NO  — describe el estado de julio
+
+  Trabajo sin versionar en git al momento de escribir esto: los módulos nuevos
+  de R5 (taxonomia.py, llm_backends.py), los cambios de prompt y consultas, los
+  scripts de piloto y evaluación, y los documentos nuevos de docs/. Conviene
+  commitearlo antes de seguir.
+
+
+========================================================================
+10. QUÉ QUEDA OBSOLETO DEL DOCUMENTO E3
+========================================================================
+Inventario para planificar la reescritura del Capítulo 5:
+
+  SECCIÓN 5.1 (introducción del capítulo): el párrafo del universo de cinco
+     empresas y el criterio "un activo por sector".
+  SECCIÓN 5.2 (R3): tablas y figuras con los cinco activos; las limitaciones
+     sobre splits/dividendos de SAGAC1 y CORAREC1 y sobre el salto de BUENAVC1
+     quedan superadas. Falta incorporar el Informe Bursátil Mensual.
+  SECCIÓN 5.3.6 (P/E y DY): CONTRADICE el estado actual. Hay que reescribirla
+     entera: los indicadores están implementados, no descartados.
+  SECCIÓN 5.3.4 (fechas de conocimiento): el lag fijo pasa a ser el fallback.
+  SECCIÓN 5.4 COMPLETA (R5): Tabla 18, Figuras 11 a 15 y el análisis de
+     correlación con el retorno están todos calculados sobre un corpus con ~74%
+     de ruido. No se corrigen: se reemplazan tras la corrida nueva. La sección
+     5.4.6 (limitaciones) es el punto de partida honesto de la reescritura,
+     porque anticipó el problema.
+  SECCIÓN 5.5.5 (diccionario de datos, Tabla 19): 36 columnas → ~49.
+  SECCIÓN 5.5.6 (Tabla 20, cobertura por activo): recalcular.
+  NUEVA SECCIÓN NECESARIA: el canal macro y su validación empírica.
+  NUEVA SECCIÓN NECESARIA: la validación humana de R5 y la selección de modelo.
+  CAPÍTULO 6 (conclusiones y trabajos futuros): sigue vacío.
+
+
+========================================================================
+11. PRÓXIMOS PASOS
+========================================================================
+
+INMEDIATO — CIERRE DEL CANAL DE SENTIMIENTO (bloquea todo lo demás)
+  1. Resolver la convención de dos filas de la anotación (ver sección 12) y
+     cerrar §7 de docs/seleccion_modelo_R5.txt con el modelo elegido, su
+     snapshot exacto y la limitación declarada. Candidato: gemma3:12b.
+  2. Opcional y barato, pero responde algo que ningún modelo local puede
+     responder: correr un modelo frontier (Gemini Flash, API gratuita; el
+     código de despacho ya está escrito) para ver si ROMPE el anidamiento —es
+     decir, si consigue más precisión Y más recall a la vez— o si solo corta en
+     otro punto. Esa pregunta es válida con independencia de la referencia.
+  3. Medir los conteos reales de eventos por activo y por tramo SIN LLM (solo
+     prefiltro y deduplicación sobre títulos). Es el número que gobierna D12.
+  4. Correr la clasificación de los 19,528 titulares con el modelo elegido.
+     Con el servidor GPU son unas horas de máquina, no días.
+
+DESPUÉS — CERRAR EL PANEL (OE2)
+  5. Completar R4 para Pacasmayo, Ferreycorp, Luz del Sur y Minsur.
+     Verificar que el conteo híbrido de acciones coincide con la serie oficial
+     de la BVL; atención a Luz del Sur, cuyo valor nominal es 0.68 y no 1.00.
+  6. Implementar las 6 EWMAs de sentimiento en build_dataset (recordar: las
+     magnitudes se SUMAN al hacer roll-forward, no se promedian) y quitar la
+     columna de oro.
+  7. Correr R6 y verificar: P/E de Minsur e InRetail sensatos, cero nulos en las
+     columnas macro, liquidez de los activos nuevos coincidente con lo medido.
+  8. RE-CORRER LA PRUEBA DE LOOK-AHEAD (correlación del sentimiento con el
+     retorno del mismo día) ahora que las etiquetas significan algo. La de julio
+     dio ~0 pero se midió sobre 74% de ruido, donde un cero no prueba nada.
+  9. Re-validar el etiquetado con el mismo protocolo, sobre la corrida limpia.
+ 10. Regenerar los cuatro notebooks de exploración y reescribir el Capítulo 5
+     según el inventario de la sección 10.
+
+EN PARALELO — ARRANQUE DE OE1
+ 11. Cerrar D2 a D10. El orden natural es D2 (espacio de acción) → D3
+     (algoritmo) → D4 (recompensa) → D10 (protocolo de evaluación).
+     D10 CONVIENE FIJARLO ANTES DE ENTRENAR NADA: es lo que evita el autoengaño.
+ 12. Implementar el entorno estilo Gymnasium sobre el panel (R2), con los cinco
+     mecanismos de iliquidez de la sección 7 desde el primer día, no después.
+ 13. Entrenar PPO, SAC y TD3 con múltiples semillas (R7) y montar el estudio
+     comparativo con backtesting walk-forward y las cuatro vistas de señales
+     como ablación (R8).
+
+
+========================================================================
+12. LO QUE CONVIENE CONSULTAR CON EL ASESOR
+========================================================================
+
+  (a) EL CAMBIO DE UNIVERSO Y SU JUSTIFICACIÓN. Se pasó de "un activo por
+      sector" a "activos líquidos representativos". Es defendible con la
+      medición de frecuencia oficial, pero es un cambio de criterio de
+      selección y conviene que quede validado antes de escribirlo.
+
+  (b) D14 — SEPARAR EL EJE DE ALCANCE EN LA TAXONOMÍA. Al terminar las 550
+      anotaciones apareció que la taxonomía pregunta QUÉ TIPO DE HECHO ES y usa
+      la respuesta como proxy de CUÁNTO IMPORTA. Son dos preguntas distintas y
+      el proxy falla en las colas: un robo en una tienda Plaza Vea y una toma de
+      control reciben la misma magnitud 1.0; toda la regulación SECTORIAL
+      (que sí mueve al activo) cae en magnitud cero y se trata igual que una
+      nota de farándula. La propuesta es UN SOLO CAMPO NUEVO —alcance ∈ {unidad,
+      empresa, sector, mercado}, con magnitud = base(tipo) × factor(alcance)—
+      más un campo `rol` solo para M&A, del que se DERIVA la polaridad.
+      Costo: re-anotar ~167 filas, no las 550. Río abajo el costo es cero.
+      CONDICIÓN PARA ADOPTARLA, ya fijada: hay que MEDIR que un modelo chico
+      responde `alcance` mejor de lo que hoy elige entre 15 códigos. Si no, se
+      habría cambiado una taxonomía mala por otra.
+
+  (c) UN PROBLEMA CONCRETO QUE D14 VUELVE URGENTE: el 58% de los eventos
+      relevantes —y el 58% de la masa de magnitud— quedó en `neutral`, y los 13
+      M&A, que son la categoría material más frecuente del corpus, son TODOS
+      neutrales por regla. En el diseño actual `neutral` no entra ni a la EWMA
+      positiva ni a la negativa. EL EVENTO MÁS MATERIAL DEL CORPUS ES HOY
+      INVISIBLE EN LAS SEIS COLUMNAS.
+
+  (d) LA MÉTRICA CON QUE SE ELIGE EL MODELO. La propuesta es que la métrica
+      principal sea PONDERADA POR MAGNITUD y que el macro-F1 plano quede como
+      secundario y con advertencia. Razón: dos noticias equivalentes de
+      regulación previsional pueden caer en casillas distintas de magnitud cero
+      sin que al panel le cambie absolutamente nada, y sin embargo el macro-F1
+      penaliza esa diferencia como un error completo. La métrica ponderada
+      resuelve además, y gratis, qué hacer con una categoría que no tiene
+      ninguna fila en la muestra (`gobierno_corporativo`, 0 de 550).
+
+  (e) LA ESCALA DEL EXPERIMENTO. La capacidad medida (~S/1.84 MM de cartera)
+      hay que declararla explícitamente en el alcance de la tesis. Conviene
+      acordar cómo se enuncia.
+
+  (f) EL ESCENARIO EN QUE EL RESULTADO ES NEGATIVO. Si al aplicar costos
+      realistas el agente deja de superar al buy-and-hold, eso es un resultado
+      legítimo y publicable, pero cambia la narrativa. Vale la pena acordarlo
+      ahora y no al escribir conclusiones.
+
+
+========================================================================
+13. GUION CORTO PARA LA REUNIÓN (5 MINUTOS)
+========================================================================
+  1. "El E3 quedó con cinco empresas; al medir liquidez con el informe oficial
+     de la BVL descubrí que tres no son operables a frecuencia diaria. Cambié
+     el universo a siete y el piso de liquidez subió de 9% a 90% de sesiones."
+  2. "El P/E y el Dividend Yield, que en el E3 declaré descartados por no tener
+     el número de acciones en circulación, están implementados: resolví el
+     insumo combinando el informe mensual de la BVL con la cuenta de tesorería
+     de la SMV."
+  3. "Agregué seis factores macro del BCRP y los validé contra mis propios
+     datos en vez de justificarlos solo con literatura. Resultado: el esqueleto
+     macro de la BVL es el tipo de cambio y el riesgo país, no los commodities.
+     Eliminé el oro porque no tiene efecto medible en ninguno de los siete."
+  4. "Lo más importante: medí el canal de sentimiento del E3 y no medía
+     sentimiento de la empresa. El 49% de las etiquetas con signo venían de
+     noticias que no hablaban de la empresa. Lo rediseñé entero: ahora el modelo
+     clasifica el TIPO de evento sobre una taxonomía ex-ante y solo emite
+     polaridad cuando el evento importa."
+  5. "Para validarlo anoté a ciegas 550 titulares yo mismo, porque descubrí que
+     la referencia anterior la había producido una IA. Al cambiar la referencia
+     el ranking de modelos SE INVIRTIÓ: sin ese control habría elegido el
+     modelo equivocado."
+  6. "Falta la corrida de clasificación y la regeneración del panel. Tengo un
+     servidor con GPU montado; son horas, no días. Y tengo dos preguntas de
+     diseño para consultarle." (→ puntos b y d de la sección 12)
+
+
+========================================================================
+FIN DEL DOCUMENTO
+========================================================================

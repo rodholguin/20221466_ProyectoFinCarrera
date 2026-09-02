@@ -73,6 +73,62 @@ _QUARTER_END = {1: (3, 31), 2: (6, 30), 3: (9, 30), 4: (12, 31)}
 # barrido completa y la justificación numérica.
 _FILING_LAG_DAYS = {1: 40, 2: 40, 3: 40, 4: 60}
 
+# --- CORRECCIÓN 2026-09-01: EL LAG GLOBAL SE CALIBRÓ CONTRA UN UNIVERSO QUE YA
+# --- NO ES EL VIGENTE, Y PARA InRetail ADELANTA AL MERCADO.
+# El barrido de arriba (n=109) se hizo con CREDITC1, BUENAVC1, ALICORC1, SAGAC1
+# y CORAREC1. INRETC1 entró DESPUÉS (reemplazó a SAGAC1 en la decisión de
+# universo de jul-2026) y su comportamiento de presentación nunca se revalidó.
+# Re-medido incluyéndolo, sobre las mismas Q1-Q3:
+#     universo viejo (n=109):  lag 40d ->  4/109 ( 3.7%) look-ahead
+#     + INRETC1     (n=130):   lag 40d -> 25/130 (19.2%) look-ahead
+# 21 de esos 25 son InRetail, repartidos en los 8 años — NO son prórrogas de
+# emergencia. Su lag real es 43-47d en Q1-Q3 (mediana 45) y 57-61d en Q4: el
+# fallback de 40/60 le mete ~5-7 días de look-ahead TODOS los trimestres del
+# tramo 2012-2017. Es una regresión por cambio de configuración: cambió el
+# universo y la constante calibrada no se re-verificó.
+#
+# EL ARREGLO: el lag de fallback se calibra POR ACTIVO con la distribución real
+# de ese mismo emisor (`_calibra_lag`), y solo se usa el global cuando el activo
+# no tiene observaciones suficientes.
+# DIRECCIÓN SEGURA: alargar el lag solo RETRASA (diluye); acortarlo ADELANTA
+# (contamina el backtest). Ante la duda se alarga. Por eso el calibrado toma el
+# MÁXIMO normal observado más un colchón, y nunca baja del global.
+_FILING_LAG_COLCHON = 5      # mismo criterio con que se eligió 40 sobre 35
+_FILING_LAG_MIN_OBS = 4      # menos observaciones que esto -> no se calibra
+# Trimestres con prórroga de emergencia DOCUMENTADA: no representan el
+# comportamiento normal del emisor y sesgarían el calibrado hacia arriba.
+#   COVID-2020: Res. 033-2020-SMV/02 (Q1) y 046-2020-SMV/02 (Q2).
+_FILING_PRORROGAS = {(2020, 1), (2020, 2)}
+
+
+def _calibra_lag(filing_dates: dict[tuple[int, int], date] | None) -> dict[int, int]:
+    """Lag de fallback POR ACTIVO, a partir de sus propias presentaciones reales.
+
+    Devuelve {trimestre: días}. Para cada grupo de trimestres (Q1-Q3 comparten
+    deadline legal; Q4 es distinto) toma el MÁXIMO lag normal observado más un
+    colchón, y nunca devuelve menos que el global — así el cambio solo puede
+    retrasar, nunca adelantar, respecto del comportamiento actual.
+
+    Con menos de `_FILING_LAG_MIN_OBS` observaciones no calibra: un máximo sobre
+    2-3 puntos no es una cota, es ruido.
+    """
+    if not filing_dates:
+        return dict(_FILING_LAG_DAYS)
+    lags: dict[int, list[int]] = {}
+    for (year, q), fecha in filing_dates.items():
+        if (year, q) in _FILING_PRORROGAS:
+            continue
+        lags.setdefault(q, []).append((fecha - _period_end(year, q)).days)
+    out = dict(_FILING_LAG_DAYS)
+    for grupo in ((1, 2, 3), (4,)):
+        obs = [d for q in grupo for d in lags.get(q, [])]
+        if len(obs) < _FILING_LAG_MIN_OBS:
+            continue
+        propuesto = max(obs) + _FILING_LAG_COLCHON
+        for q in grupo:
+            out[q] = max(_FILING_LAG_DAYS[q], propuesto)
+    return out
+
 # --- known_date por FECHA REAL de presentación (BVL Hechos de Importancia) ---
 # Fuente preferida cuando existe: el registerDate del hecho "Información Financiera
 # Intermedia <Individual|Consolidada>" en POST /v1/corporate-actions de la BVL.
@@ -168,18 +224,28 @@ def _known_date(
     year: int,
     q: int,
     filing_dates: dict[tuple[int, int], date] | None = None,
-) -> date:
-    """Fecha en que el mercado conoció el EEFF del trimestre.
+    lags: dict[int, int] | None = None,
+) -> tuple[date, bool]:
+    """Fecha en que el mercado conoció el EEFF del trimestre, y si es REAL.
 
-    Usa la FECHA REAL de presentación (BVL, registerDate) si está disponible en
-    `filing_dates`; de lo contrario cae al lag fijo por trimestre (fallback
-    causalmente seguro). Ver riesgos §3(a).
+    Devuelve `(fecha, es_real)`:
+      - `es_real=True`  -> FECHA REAL de presentación (registerDate del hecho de
+        importancia en la BVL). Cobertura ~2018-2025.
+      - `es_real=False` -> FALLBACK por lag, calibrado para ESTE activo con
+        `_calibra_lag` (o el global si no hubo observaciones suficientes).
+
+    POR QUÉ SE DEVUELVE LA BANDERA Y NO SOLO LA FECHA. La cobertura de fecha real
+    NO es aleatoria: es 0% hasta 2017 y ~96% desde 2019, o sea que la variable
+    significa cosas distintas en train (32.5% real) y en test (85.2% real). Sin
+    la bandera ese cambio de régimen es invisible para el panel y para la
+    ablación de R8. Ver riesgos §3(a) y D20.
     """
     if filing_dates:
         real = filing_dates.get((year, q))
         if real is not None:
-            return real
-    return _period_end(year, q) + timedelta(days=_FILING_LAG_DAYS[q])
+            return real, True
+    lag = (lags or _FILING_LAG_DAYS)[q]
+    return _period_end(year, q) + timedelta(days=lag), False
 
 
 def _bvl_fetch_hechos(
@@ -324,11 +390,12 @@ def _normalize_op_rows(
     q: int,
     rows: list[dict],
     filing_dates: dict[tuple[int, int], date] | None = None,
+    lags: dict[int, int] | None = None,
 ) -> list[dict]:
     """Convierte filas crudas de una operación al formato FUNDAMENTALS_SCHEMA."""
     prefix, monto_map = _SMV_OPS[op_name]
     period_dt = _period_end(year, q)
-    known_dt = _known_date(year, q, filing_dates)
+    known_dt, known_real = _known_date(year, q, filing_dates, lags)
     period_str = period_dt.isoformat()
     known_str = known_dt.isoformat()
 
@@ -351,6 +418,7 @@ def _normalize_op_rows(
                 "ticker":     asset.bvl,
                 "period":     period_str,
                 "known_date": known_str,
+                "known_date_real": int(known_real),
                 "account":    acct,
                 "value":      float(val),
                 "currency":   currency,
@@ -365,10 +433,12 @@ def _normalize_info_rows(
     q: int,
     rows: list[dict],
     filing_dates: dict[tuple[int, int], date] | None = None,
+    lags: dict[int, int] | None = None,
 ) -> list[dict]:
     """Convierte filas de obtener_InfoFinanciera al formato FUNDAMENTALS_SCHEMA."""
     period_str = _period_end(year, q).isoformat()
-    known_str = _known_date(year, q, filing_dates).isoformat()
+    known_dt, known_real = _known_date(year, q, filing_dates, lags)
+    known_str = known_dt.isoformat()
     currency_map = {"Soles": "PEN", "D lares": "USD", "Dólares": "USD",
                     "Dolares": "USD", "USD": "USD", "PEN": "PEN"}
     info_fields = ["ActivoTotal", "PatrimonioTotal", "TotalIngreso",
@@ -384,6 +454,7 @@ def _normalize_info_rows(
                 "ticker":     asset.bvl,
                 "period":     period_str,
                 "known_date": known_str,
+                "known_date_real": int(known_real),
                 "account":    f"INFO_{field}",
                 "value":      float(val),
                 "currency":   currency,
@@ -450,7 +521,19 @@ def fetch_smv(
         filing_dates = _load_filing_dates(asset, start, end, cache_dir, tipo=tipo)
         n_real = sum(1 for p in periods if p in filing_dates)
         print(f"[SMV] {asset.bvl}: known_date real (BVL, hecho tipo {tipo}) en "
-              f"{n_real}/{len(periods)} periodos; resto usa lag fijo (40/60d).")
+              f"{n_real}/{len(periods)} periodos.")
+
+    # Lag de fallback CALIBRADO CON ESTE EMISOR (2026-09-01). El global 40/60 se
+    # calibró contra un universo que ya no es el vigente y le mete ~5-7d de
+    # look-ahead a InRetail en todo el tramo sin fecha real. Ver _calibra_lag.
+    lags = _calibra_lag(filing_dates)
+    if lags != _FILING_LAG_DAYS:
+        print(f"[SMV] {asset.bvl}: lag de fallback CALIBRADO "
+              f"Q1-Q3={lags[1]}d Q4={lags[4]}d (global {_FILING_LAG_DAYS[1]}/"
+              f"{_FILING_LAG_DAYS[4]}) — este emisor presenta más tarde que la media.")
+    else:
+        print(f"[SMV] {asset.bvl}: lag de fallback global "
+              f"Q1-Q3={lags[1]}d Q4={lags[4]}d.")
 
     all_rows: list[dict] = []
 
@@ -462,7 +545,7 @@ def fetch_smv(
             raw = _fetch_period_raw(client, "obtener_InfoFinanciera", year, q, tipo, cache_dir)
             asset_rows = _rows_for_asset(raw, asset)
             if asset_rows:
-                all_rows.extend(_normalize_info_rows(asset, year, q, asset_rows, filing_dates))
+                all_rows.extend(_normalize_info_rows(asset, year, q, asset_rows, filing_dates, lags))
             else:
                 print(f"[SMV] {asset.bvl} {period_label}: no encontrado en InfoFinanciera")
         except Exception as exc:
@@ -474,7 +557,7 @@ def fetch_smv(
                 raw = _fetch_period_raw(client, op_name, year, q, tipo, cache_dir)
                 asset_rows = _rows_for_asset(raw, asset)
                 if asset_rows:
-                    all_rows.extend(_normalize_op_rows(asset, op_name, year, q, asset_rows, filing_dates))
+                    all_rows.extend(_normalize_op_rows(asset, op_name, year, q, asset_rows, filing_dates, lags))
             except Exception as exc:
                 print(f"[SMV] {asset.bvl} {period_label} {op_name}: {exc}")
 
@@ -676,8 +759,12 @@ def compute_shares_earnings(fundamentals: pd.DataFrame, asset) -> pd.DataFrame:
     periods = sorted(df["period"].unique())
     if not periods:
         return pd.DataFrame(columns=["ticker", "period", "known_date",
-                                     "shares_outstanding", "net_income_ttm", "eps_ttm"])
-    known = df.drop_duplicates("period").set_index("period")["known_date"]
+                                     "known_date_real", "shares_outstanding",
+                                     "net_income_ttm", "eps_ttm"])
+    porper = df.drop_duplicates("period").set_index("period")
+    known = porper["known_date"]
+    known_real = (porper["known_date_real"] if "known_date_real" in porper
+                  else pd.Series(0, index=porper.index))
 
     # --- acciones en circulación ---
     # Precedencia: calendario por tramos > override constante > capital/nominal.
@@ -735,6 +822,7 @@ def compute_shares_earnings(fundamentals: pd.DataFrame, asset) -> pd.DataFrame:
         "ticker": asset.bvl,
         "period": periods,
         "known_date": known.reindex(periods).to_numpy(),
+        "known_date_real": known_real.reindex(periods).fillna(0).astype(int).to_numpy(),
         "shares_outstanding": shares.reindex(periods).to_numpy(),
         "net_income_ttm": ttm.reindex(periods).to_numpy(),   # PEN, miles
         "eps_ttm": eps_ttm.reindex(periods).to_numpy(),      # PEN por acción
@@ -765,7 +853,7 @@ def compute_ratios(
 
     Returns:
         DataFrame ancho con columnas:
-        [ticker, period, known_date, currency,
+        [ticker, period, known_date, known_date_real, currency,
          roe, roa, net_margin, debt_equity, debt_ratio]
         Una fila por (ticker, periodo). Los ratios sin denominador válido son NaN.
     """
@@ -780,13 +868,15 @@ def compute_ratios(
     info = fundamentals[fundamentals["account"].isin(info_accounts)].copy()
     if info.empty:
         return pd.DataFrame(columns=[
-            "ticker", "period", "known_date", "currency",
+            "ticker", "period", "known_date", "known_date_real", "currency",
             "roe", "roa", "net_margin", "debt_equity", "debt_ratio",
         ])
 
     info["field"] = info["account"].map(info_accounts)
     wide = info.pivot_table(
-        index=["ticker", "period", "known_date", "currency"],
+        # D20:  viaja en la CLAVE del pivot para que llegue al
+        # panel sin un merge extra. Es constante dentro de (ticker, period).
+        index=["ticker", "period", "known_date", "known_date_real", "currency"],
         columns="field",
         values="value",
         aggfunc="first",
@@ -808,7 +898,7 @@ def compute_ratios(
     wide["debt_equity"] = _safe_div(wide["pasivo"],        wide["patrimonio"])
     wide["debt_ratio"]  = _safe_div(wide["pasivo"],        wide["activo"])
 
-    cols = ["ticker", "period", "known_date", "currency",
+    cols = ["ticker", "period", "known_date", "known_date_real", "currency",
             "roe", "roa", "net_margin", "debt_equity", "debt_ratio"]
 
     # Acciones en circulación + EPS TTM (insumos de P/E), si se conoce el activo.
@@ -818,7 +908,8 @@ def compute_ratios(
                               or getattr(asset, "shares_outstanding_schedule", None)):
         se = compute_shares_earnings(fundamentals, asset)
         if not se.empty:
-            wide = wide.merge(se, on=["ticker", "period", "known_date"], how="left")
+            wide = wide.merge(se, on=["ticker", "period", "known_date", "known_date_real"],
+                              how="left")
             cols = cols + ["shares_outstanding", "net_income_ttm", "eps_ttm"]
 
     return wide[cols].sort_values(["ticker", "period"]).reset_index(drop=True)

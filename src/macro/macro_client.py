@@ -8,7 +8,6 @@ BCRP, elegidas y respaldadas en docs/fundamento_macro_riesgo_politico.txt:
   feature            código BCRP   frecuencia   qué capta
   macro_tc_usdpen    PD04640PD     diaria       dolarización (via src.market.fx)
   macro_cobre        PD04701XD     diaria       driver macro maestro del Perú
-  macro_oro          PD04704XD     diaria       minera (oro/plata)
   macro_embi         PD04709XD     diaria       riesgo país / político doméstico
   macro_tasa_ref     PD04722MM     mensual      política monetaria (banca, crédito)
   macro_inflacion    PN01271PM     mensual      IPC Lima (var% mensual)
@@ -41,9 +40,22 @@ _MONTHS = {"Ene": 1, "Feb": 2, "Mar": 3, "Abr": 4, "May": 5, "Jun": 6,
            "Oct": 10, "Nov": 11, "Dic": 12}
 
 # code, frecuencia ('D' diaria / 'M' mensual)
+#
+# ORO ELIMINADO EL 2026-09-01 — aplica el veredicto (1) de
+# docs/fundamento_macro_riesgo_politico.txt §4.4, DECIDIDO en ago-2026 y que
+# nunca se había implementado: la columna seguía entrando al panel.
+# Perdió las dos patas a la vez: su activo justificante (BUENAVC1, minera de oro)
+# salió del universo en jul-2026, y no tiene efecto propio medible en NINGUNO de
+# los 7 vigentes (0 de 7; máximo t=+1.51 en CREDITC1, multifactor Newey-West).
+# CONTROL DE QUE EL MÉTODO FUNCIONA: sobre BUENAVC1 el oro sale con t=+5.57 y
+# beta=+1.20. Si alguna vez vuelve una minera de oro al universo, se reincorpora
+# descomentando la línea.
+# OJO — ESTA ES LA FUENTE DE VERDAD, no config.yaml. El listado de series de
+# config.yaml es informativo y NO se lee desde acá; divergieron durante un mes
+# sin que nada avisara. Al tocar una hay que tocar la otra.
 _SERIES: dict[str, tuple[str, str]] = {
     "macro_cobre":     ("PD04701XD", "D"),
-    "macro_oro":       ("PD04704XD", "D"),
+    # "macro_oro":     ("PD04704XD", "D"),   # eliminado 2026-09-01, ver arriba
     "macro_embi":      ("PD04709XD", "D"),
     "macro_tasa_ref":  ("PD04722MM", "M"),
     "macro_inflacion": ("PN01271PM", "M"),

@@ -111,57 +111,118 @@ def fetch_stories(asset: Asset, collection_id: int, start: str, end: str,
         df = _filter_by_source(df, source_allowlist)
         print(f"    filtro de fuentes: {before} → {len(df)} noticias")
 
+    before = len(df)
+    df = deduplicar(df)
+    print(f"    deduplicación:     {before} → {len(df)} noticias "
+          f"({(before-len(df))/max(before,1):.1%} sindicación)")
+
+    # PROVENANCE: sin esto no hay forma de distinguir un corpus bajado con la
+    # query v1 de uno con la v2 una vez guardado en disco.
+    df["query"] = query
+    df["fetched_at"] = pd.Timestamp.utcnow().isoformat()
+
     raw_dir.mkdir(parents=True, exist_ok=True)
     df.to_parquet(raw_dir / f"news_{asset.bvl}.parquet")
     return df
 
 
 def _build_query(asset: Asset) -> str:
-    """Query booleana por emisor con términos de anclaje financiero.
+    """Query booleana por emisor. SOLO desambigua el NOMBRE, no filtra relevancia.
 
-    Los términos ambiguos (Buenaventura, Falabella) se anclan con AND a
-    vocabulario económico para evitar capturar: la ciudad colombiana de
-    Buenaventura, el jugador de fútbol, la cadena Falabella de Chile, etc.
+    CAMBIO v2 (2026-08-18) — SE ELIMINÓ EL ANCLA `_FINANCIAL`. Estaba MEDIDO que
+    era contraproducente: sus términos (bolsa, BVL, accion, mercado, empresa) son
+    el vocabulario de las CRÓNICAS DE ÍNDICE, así que admitía preferentemente el
+    ruido y rechazaba la señal. Sobre los titulares de CORAREC1 (el único activo
+    descargado sin ancla) dejaba pasar "La bolsa limeña perdió 0,25%" y bloqueaba
+    "Aceros Arequipa adquiere activos en Florida" (M&A, magnitud 1.0) e "Indecopi
+    suprime derechos antidumping contra alambrón chino" (regulatorio, 1.0).
+    Evidencia: docs/taxonomia_eventos_R5.txt §7.2.
+
+    ASIMETRÍA QUE ORDENA EL DISEÑO: un irrelevante que entra cuesta ~12 s de LLM y
+    la taxonomía lo manda a magnitud 0; un relevante que no se descarga se pierde
+    para siempre. La query maximiza RECALL; la precisión la resuelven el prefiltro
+    (costo) y la taxonomía (corrección). Ver §7.5.
+
+    La desambiguación de nombre sí se conserva donde el nombre es ambiguo:
+    Pacasmayo es también provincia y ciudad; BCP es sigla de varias cosas.
     """
-    _FINANCIAL = (
-        "(accion OR acciones OR bolsa OR BVL OR utilidad OR inversion"
-        " OR mercado OR empresa OR minera OR produccion OR resultado OR ganancia)"
-    )
     aliases = {
-        # BCP es sigla común; se ancla con términos bancarios/financieros
-        "CREDITC1": (
-            '(BCP OR Credicorp OR "Banco de Credito del Peru") AND '
-            + _FINANCIAL
-        ),
-        # "Buenaventura" sola captura la ciudad colombiana y jugadores de fútbol
-        "BUENAVC1": (
-            '("Minas Buenaventura" OR "Compañia de Minas Buenaventura") AND '
-            + _FINANCIAL
-        ),
-        # Alicorp es suficientemente específico; ancle suave para evitar notas triviales
-        "ALICORC1": f'Alicorp AND {_FINANCIAL}',
-        # "Falabella" sola captura la cadena chilena; "Saga" la acota a Perú
-        "SAGAC1":   (
-            '"Saga Falabella" AND ' + _FINANCIAL
-        ),
-        "CORAREC1": '"Aceros Arequipa"',
+        "CREDITC1": '"Banco de Credito del Peru" OR Credicorp OR '
+                    '(BCP AND (banco OR financiero))',
+        "MINSURI1": '"Minsur"',
+        "ALICORC1": '"Alicorp"',
+        # Marcas comerciales: es donde vive la noticia real de InRetail. Generan
+        # ruido de marketing, que la categoría `marketing_promocion` absorbe.
+        "INRETC1":  '"InRetail" OR "Supermercados Peruanos" OR "Plaza Vea" '
+                    'OR "InkaFarma"',
+        # "Pacasmayo" solo es también provincia/ciudad -> se acota con contexto.
+        "CPACASC1": '"Cementos Pacasmayo" OR (Pacasmayo AND (cemento OR cementera '
+                    'OR planta))',
+        "FERREYC1": '"Ferreycorp" OR "Ferreyros"',
+        "LUSURC1":  '"Luz del Sur"',
+        # Universo viejo (se conservan para poder reproducir corridas anteriores).
+        "BUENAVC1": '"Minas Buenaventura" OR "Compañia de Minas Buenaventura"',
+        "SAGAC1":   '"Saga Falabella"',
+        "CORAREC1": '"Aceros Arequipa" OR "Corporacion Aceros Arequipa"',
     }
-    return aliases.get(asset.bvl, f'"{asset.name}"')
+    if asset.bvl not in aliases:
+        raise ValueError(
+            f"{asset.bvl} no tiene query definida en _build_query. Antes caía en "
+            f'un default \'"{asset.name}"\' que para razones sociales poco usadas '
+            "en prensa (p. ej. 'InRetail Peru Corp') devolvía casi nada y habría "
+            "invalidado el corpus en silencio. Definir la query explícitamente.")
+    return aliases[asset.bvl]
+
+
+def deduplicar(df: pd.DataFrame, ventana_dias: int = 2) -> pd.DataFrame:
+    """Quita duplicados por sindicación: mismo titular en una ventana de días.
+
+    Medido sobre el corpus actual: 12.2% en CORAREC1, 10.6% en BUENAVC1, 5.0% en
+    ALICORC1. Se usa una VENTANA y no la fecha exacta porque la sindicación cruza
+    días (dup por título 13.5% vs 12.2% por título+fecha en CORAREC1).
+    """
+    if df.empty or "title" not in df.columns:
+        return df
+    d = df.copy()
+    d["_t"] = d["title"].astype(str).str.strip().str.lower()
+    d["_f"] = pd.to_datetime(d["publish_date"]).dt.normalize()
+    d = d.sort_values(["_t", "_f"])
+    # Dentro de cada titular, marca como duplicado si el anterior está a <= ventana
+    delta = d.groupby("_t")["_f"].diff().dt.days
+    d["_dup"] = (delta.notna()) & (delta <= ventana_dias)
+    out = d[~d["_dup"]].drop(columns=["_t", "_f", "_dup"])
+    return out.sort_index()
+
+
+def _quita_www(netloc: str) -> str:
+    """Quita el prefijo 'www.' — con removeprefix, NO con lstrip.
+
+    BUG CORREGIDO (2026-08-18): `lstrip("www.")` quita CARACTERES del conjunto
+    {w, .}, no el prefijo. Un dominio que empiece con 'w' perdía esa letra
+    ('wapa.pe' -> 'apa.pe'). Con el allowlist actual (gestion/elcomercio/
+    larepublica) era latente —verificado: 0 dominios afectados— pero rompería en
+    cuanto se agregue un medio con 'w' inicial.
+    """
+    return netloc.removeprefix("www.")
 
 
 def _filter_by_source(df: pd.DataFrame, allowlist: list[str]) -> pd.DataFrame:
-    """Filtra filas cuyo dominio (extraído de `url`) no está en el allowlist."""
-    allowed = {d.lower().lstrip("www.") for d in allowlist}
+    """Filtra filas cuyo dominio (extraído de `url`) no está en el allowlist.
 
-    def _domain(url: str) -> str:
+    Acepta SUBDOMINIOS del dominio permitido (m.gestion.pe cuenta como
+    gestion.pe): antes se descartaban en silencio, perdiendo las versiones
+    móviles.
+    """
+    allowed = {_quita_www(d.lower()) for d in allowlist}
+
+    def _permitido(url: str) -> bool:
         try:
-            netloc = urlparse(str(url)).netloc.lower()
-            return netloc.lstrip("www.")
+            host = _quita_www(urlparse(str(url)).netloc.lower())
         except Exception:
-            return ""
+            return False
+        return any(host == a or host.endswith("." + a) for a in allowed)
 
-    mask = df["url"].apply(_domain).isin(allowed)
-    return df[mask].reset_index(drop=True)
+    return df[df["url"].apply(_permitido)].reset_index(drop=True)
 
 
 if __name__ == "__main__":

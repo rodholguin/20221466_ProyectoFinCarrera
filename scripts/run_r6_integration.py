@@ -65,7 +65,21 @@ def main() -> None:
 
         sent_path = interim_dir / f"sentiment_{ticker}.parquet"
         if sent_path.exists():
-            sentiment_frames.append(pd.read_parquet(sent_path))
+            sen = pd.read_parquet(sent_path)
+            # GUARDA (2026-09-01): un parquet con el esquema v1 se cargaría en
+            # silencio y el panel saldría con las 9 columnas de D15 en CERO —
+            # indistinguible de "este activo no tuvo noticias". Ya pasó: los
+            # sentiment_*.parquet de jun-2026 eran v1 y dos de ellos
+            # (ALICORC1, CREDITC1) pertenecen al universo VIGENTE. Están
+            # archivados en data/interim/_sentimiento_viejo_v1_20260622/.
+            faltan = [c for c in ("n_alto_pos", "n_relevantes_nom")
+                      if c not in sen.columns]
+            if faltan:
+                raise SystemExit(
+                    f"{sent_path.name} tiene el ESQUEMA VIEJO (le faltan {faltan}). "
+                    f"Es anterior a D15/D17 y el panel saldría mal EN SILENCIO. "
+                    f"Re-correr R5: python scripts/run_r5_news.py --classify-only")
+            sentiment_frames.append(sen)
         else:
             print(f"  AVISO: falta {sent_path.name}, {ticker} sin sentimiento.")
 

@@ -17,8 +17,18 @@ data/interim/*.log
 data/interim/smv_*.json
 data/interim/smv_*.txt
 
-# Cache de sentimiento LLM
+# Cache de respuestas del LLM de sentimiento. NO se versiona: son ~50 MB de
+# respuestas regenerables, y el patron anterior (sentiment_cache*.json) NO cubria
+# el directorio porque `*` no cruza `/`. Reproducir una corrida no necesita el
+# cache: necesita el corpus (data/raw/news_*.parquet) y el prompt versionado.
+data/interim/sentiment_cache/
 data/interim/sentiment_cache*.json
+
+# Artefactos ARCHIVADOS al cambiar de version/universo. Se conservan en disco
+# por trazabilidad local, no en el repo.
+data/interim/_sentimiento_viejo_*/
+data/interim/_macro_bcrp_con_oro_*.parquet
+data/raw/_corpus_viejo_*/
 
 # Python
 __pycache__/

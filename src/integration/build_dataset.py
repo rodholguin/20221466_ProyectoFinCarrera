@@ -42,6 +42,8 @@ import numpy as np
 import pandas as pd
 
 from src.market.technical_indicators import add_indicators
+from src.sentiment.llm_sentiment import TRAMOS
+from src.universe import SENTIMENT_COUNT_COLS, SENTIMENT_HALFLIVES
 
 _PRICE_COLS = ["close", "close_raw", "close_split_adj", "close_total_return"]
 _INDICATOR_COLS = ["ret_1d", "ret_1d_raw", "sma_20", "sma_50", "ema_12", "ema_26",
@@ -122,21 +124,79 @@ def _align_sentiment_to_calendar(sentiment_ticker: pd.DataFrame,
                                   calendar: pd.DatetimeIndex) -> pd.DataFrame:
     """Lleva el sentimiento diario de un activo al calendario bursátil.
 
-    Reasigna noticias de días no bursátiles al siguiente día hábil y
-    reagrega (media ponderada por n_articles) si ese día ya tenía noticias
-    propias. `sentiment_ticker` debe venir ya filtrado a un solo ticker.
+    Reasigna noticias de días no bursátiles al siguiente día hábil y reagrega si
+    ese día ya tenía noticias propias. `sentiment_ticker` debe venir ya filtrado
+    a un solo ticker.
+
+    CÓMO SE REAGREGA, Y POR QUÉ NO ES LO MISMO PARA TODAS LAS COLUMNAS:
+      - `sentiment_score` es una MEDIA de polaridad, así que al fusionar dos días
+        se combina como media ponderada por `n_articles`.
+      - LAS COLUMNAS DE CONTEO SE SUMAN. Un sábado con 2 eventos que cae sobre un
+        lunes con 1 tiene 3 eventos, no 1.5.
+    FIX DE UN BUG LATENTE (2026-09-01): la versión anterior promediaba TODO por
+    n_articles porque solo existían `sentiment_score` y `n_articles`. Al
+    implementar D15 eso habría dividido los conteos de eventos entre el número de
+    días fusionados, EN SILENCIO y solo en fines de semana y feriados — o sea un
+    sesgo sistemático contra los eventos divulgados en día no hábil, que son
+    justamente los que el emisor publica fuera de sesión.
     """
     s = sentiment_ticker.copy()
     s["date"] = pd.to_datetime(s["date"])
     s["date"] = _roll_forward_dates(s["date"], calendar)
 
+    conteos = [c for c in SENTIMENT_COUNT_COLS if c in s.columns]
     weighted = s["sentiment_score"] * s["n_articles"]
     agg = (s.assign(_weighted=weighted)
             .groupby("date", as_index=False)
             .agg(_weighted_sum=("_weighted", "sum"),
-                 n_articles=("n_articles", "sum")))
-    agg["sentiment_score"] = agg["_weighted_sum"] / agg["n_articles"]
+                 **{c: (c, "sum") for c in conteos}))
+    # n_articles ya viene sumado por el bloque de arriba (está en SENTIMENT_COUNT_COLS).
+    agg["sentiment_score"] = agg["_weighted_sum"] / agg["n_articles"].replace(0, np.nan)
+    agg["sentiment_score"] = agg["sentiment_score"].fillna(0.0)
     return agg.drop(columns="_weighted_sum")
+
+
+def _sentiment_ewmas(panel: pd.DataFrame) -> pd.DataFrame:
+    """Construye las columnas EWMA del canal de sentimiento (D15, D17).
+
+    De los conteos diarios salen TRES familias, todas con las mismas vidas
+    medias (SENTIMENT_HALFLIVES = 5, 20, 60):
+      sent_{pos,neu,neg}_ewma_{h}        9 columnas — EL CANAL BASE de D15
+      sent_{alto,resto}_{pos,neu,neg}_ewma_{h}  18 — brazo de ablación por tramo
+      sent_{pos,neu,neg}_nom_ewma_{h}     9 — brazo RESTRINGIDO de D17
+
+    POR QUÉ AQUÍ Y NO EN R5. Recalibrar vidas medias o cambiar de brazo NO exige
+    re-pagar el LLM (D11). Los conteos por artículo son la fuente de verdad; esto
+    es aritmética sobre ellos.
+
+    CAUSALIDAD. `ewm(...).mean()` en t usa información hasta t inclusive, y D13
+    fija ejecución en t+1: el evento de hoy se opera mañana. No hay look-ahead.
+    `adjust=False` da la forma recursiva, que es causal por construcción y no
+    re-pondera el pasado al llegar cada observación nueva.
+
+    `neutral` ENTRA. Es el cambio central de D15: antes la polaridad neutra no
+    aparecía en ninguna columna y se perdía el 23.3% de la masa relevante.
+    """
+    out = panel.copy()
+    for tr in TRAMOS:
+        for pol in ("pos", "neu", "neg"):
+            for suf in ("", "_nom"):
+                col = f"n_{tr}_{pol}{suf}"
+                if col not in out.columns:
+                    out[col] = 0
+                out[col] = out[col].fillna(0.0)
+    for pol in ("pos", "neu", "neg"):
+        for suf in ("", "_nom"):
+            # El brazo base agrega los tramos; el de ablación los deja separados.
+            total = sum(out[f"n_{tr}_{pol}{suf}"] for tr in TRAMOS)
+            for h in SENTIMENT_HALFLIVES:
+                out[f"sent_{pol}{suf}_ewma_{h}"] = (
+                    total.ewm(halflife=h, adjust=False).mean())
+                for tr in TRAMOS:
+                    out[f"sent_{tr}_{pol}{suf}_ewma_{h}"] = (
+                        out[f"n_{tr}_{pol}{suf}"].ewm(halflife=h,
+                                                      adjust=False).mean())
+    return out
 
 
 def _days_since_news(has_news: np.ndarray) -> np.ndarray:
@@ -259,6 +319,14 @@ def build_unified(market: pd.DataFrame, sentiment: pd.DataFrame,
         panel["days_since_news"] = _days_since_news(panel["has_news"].to_numpy())
         panel = panel.drop(columns=["sentiment_score"])
 
+        # D15/D17 — las EWMAs del canal. Van DESPUÉS del reindexado al calendario
+        # completo: un día sin noticias es un 0 real (el evento decae), no un
+        # hueco. Si se calcularan sobre las filas con noticia el decaimiento
+        # dependería de cuándo hubo prensa, que es exactamente lo que no se
+        # quiere. El orden por fecha ya lo garantiza `base`, construido desde
+        # `trading_calendar`.
+        panel = _sentiment_ewmas(panel)
+
         # Fundamentales: forward-fill desde known_date (evita look-ahead)
         fnd = fundamentals_ratios[fundamentals_ratios["ticker"] == ticker].copy()
         if not fnd.empty:
@@ -311,27 +379,63 @@ def feature_views(unified: pd.DataFrame) -> dict[str, list[str]]:
     análoga a `mercado_sentimiento`); las columnas macro también entran en
     `completa`. Las vistas de sentimiento/fundamentales NO llevan macro, para que
     cada canal siga siendo aislable.
+
+    BRAZOS PRE-REGISTRADOS DEL CANAL DE SENTIMIENTO. Se exponen como vistas para
+    que R8 los compare sin re-armar nada. Todos comparten las mismas vidas medias
+    y se calculan de los mismos conteos, así que la única diferencia entre ellos
+    es la que se quiere medir:
+      `mercado_sentimiento`      BASE (D15): 9 columnas pos/neu/neg x 5/20/60.
+      `..._tramos`               ABLACIÓN (D15): 18 columnas, alto vs resto
+                                 separados. Responde si el tramo de magnitud
+                                 aporta sobre la polaridad sola.
+      `..._restringido`          ABLACIÓN (D17): las 9 del base pero contando
+                                 solo artículos cuyo TITULAR nombra a la empresa.
+                                 Responde si vale más 88.6% de precisión que
+                                 19.6% más de eventos.
+    Las 4 columnas crudas (`sentiment_score_last`, `days_since_news`, `has_news`,
+    `n_articles`) van en TODOS los brazos: se conservan por D11 y no son lo que
+    se está comparando.
     """
     technical = [c for c in unified.columns
                  if c in {"open", "high", "low", "close", "volume", "ret_1d",
                           "sma_20", "sma_50", "ema_12", "ema_26", "macd",
                           "macd_signal", "rsi_14", "volatility_20",
                           "is_no_trade", "is_stale"}]
-    sentiment = [c for c in
-                 ["sentiment_score_last", "days_since_news", "has_news", "n_articles"]
-                 if c in unified.columns]
+    crudas = [c for c in
+              ["sentiment_score_last", "days_since_news", "has_news", "n_articles"]
+              if c in unified.columns]
+
+    def _ewmas(prefijos: tuple[str, ...], suf: str) -> list[str]:
+        return [c for p in prefijos for h in SENTIMENT_HALFLIVES
+                for c in [f"sent_{p}{suf}_ewma_{h}"] if c in unified.columns]
+
+    pols = ("pos", "neu", "neg")
+    base = _ewmas(pols, "")
+    tramos = _ewmas(tuple(f"{tr}_{p}" for tr in TRAMOS for p in pols), "")
+    restringido = _ewmas(pols, "_nom")
+
     _fundamental_cols = {
         "roe", "roa", "net_margin", "debt_equity", "debt_ratio",  # derivados SMV
         "pe", "dy", "pe_reliable",                                 # P/E y DY (+ flag)
+        # D20: ¿la fecha en que el agente "se entera" del EEFF es la REAL o el
+        # fallback por lag? No es ruido aleatorio: 0% real hasta 2017 y ~96%
+        # desde 2019, así que train queda 32.5% real y test 85.2%. Entra como
+        # FEATURE para que el agente pueda condicionar, y como llave del brazo
+        # de ablación que propuso el asesor (fundamentales solo donde la fecha
+        # es real), que en R8 es un NaN-eo de las demás columnas donde vale 0.
+        "known_date_real",
     }
     fundamental = [c for c in unified.columns if c in _fundamental_cols]
     macro = [c for c in unified.columns if c.startswith(_MACRO_PREFIX)]
+    sentiment = crudas + base
     return {
-        "solo_mercado":          technical,
-        "mercado_sentimiento":   technical + sentiment,
-        "mercado_fundamentales": technical + fundamental,
-        "mercado_macro":         technical + macro,
-        "completa":              technical + sentiment + fundamental + macro,
+        "solo_mercado":                      technical,
+        "mercado_sentimiento":               technical + sentiment,
+        "mercado_sentimiento_tramos":        technical + crudas + tramos,
+        "mercado_sentimiento_restringido":   technical + crudas + restringido,
+        "mercado_fundamentales":             technical + fundamental,
+        "mercado_macro":                     technical + macro,
+        "completa":                          technical + sentiment + fundamental + macro,
     }
 
 
