@@ -1,0 +1,188 @@
+DESFASE DE UN DIA EN EL ENDPOINT share-values DE LA BVL
+Detectado: 2026-09-05 (contra Bloomberg) · Causa raiz aislada: 2026-09-12
+Tesis: Aprendizaje por refuerzo profundo aplicado a la Bolsa de Valores de Lima
+========================================================================
+
+RESUMEN EN UNA LINEA
+------------------------------------------------------------------------
+El endpoint /v1/stock-quote/share-values de la BVL etiqueta cada cierre con
+el SIGUIENTE DIA DE NEGOCIACION. No es un error de parseo nuestro: es la
+semantica de la API. Todo el panel de mercado 2012-2025 iba un dia rancio.
+
+
+========================================================================
+1. LA EVIDENCIA
+========================================================================
+
+1.1 LA API CRUDA, CONSULTADA EL 2026-09-12
+  GET /v1/stock-quote/share-values/ALICORC1
+      ?startDate=2021-06-01&endDate=2021-06-11
+
+  respuesta literal:
+    ["2021-06-02","6.35"] ["2021-06-03","6.41"] ["2021-06-04","6.5"]
+    ["2021-06-07","6.82"] ["2021-06-08","5.79"] ["2021-06-09","5.88"]
+    ["2021-06-10","6.05"] ["2021-06-11","6.5"]
+
+  Las fechas son cadenas ISO SIN AMBIGUEDAD. No hay dayfirst, ni zona
+  horaria, ni epoch que malinterpretar. Lo que llega mal etiquetado ya
+  viene mal etiquetado.
+
+1.2 LA MISMA SERIE EN BLOOMBERG (PX_LAST, grid_ul1wocu2.xlsx, hoja BASE)
+    2021-06-02  6.41     2021-06-07  5.79
+    2021-06-03  6.50     2021-06-08  5.88
+    2021-06-04  6.82     2021-06-09  6.05
+                         2021-06-10  6.50
+
+  Son LA MISMA SERIE, desplazada exactamente una fila de negociacion:
+    bloomberg[2021-06-04] = 6.82 = bvl_api[2021-06-07]
+    bloomberg[2021-06-07] = 5.79 = bvl_api[2021-06-08]
+
+1.3 LA PRUEBA ECONOMICA
+  La segunda vuelta electoral fue el DOMINGO 2021-06-06. El mercado
+  reacciona el primer dia habil siguiente: LUNES 07. Bloomberg pone el
+  desplome de Alicorp (-15.1%) el lunes 07; el panel lo ponia el martes 08.
+  Lo mismo con la primera vuelta del 10-abr-2016: el rally es el lunes 11
+  en Bloomberg y el martes 12 en el panel.
+
+1.4 EL BARRIDO COMPLETO, 2013-2025, LOS 7 ACTIVOS
+  Correlacion de retornos del panel contra el PX_LAST de Bloomberg:
+
+    activo      sin corregir    corrigiendo
+    ALICORC1        0.112          0.939
+    CPACASC1        0.079          0.927
+    CREDITC1       -0.020          0.877
+    FERREYC1        0.096          0.916
+    INRETC1         0.065          0.943
+    LUSURC1         0.019          0.980
+    MINSURI1        0.134          0.930
+
+  Coincidencia EXACTA de niveles (rtol 1e-3), ALICORC1: 24.6% -> 99.6%.
+  No hay ninguna lectura razonable de esto que no sea el desplazamiento.
+
+
+========================================================================
+2. POR QUE IMPORTA, Y NO ES "UN DIA DE NADA"
+========================================================================
+
+  (a) NO ES LOOK-AHEAD: ES LO CONTRARIO. El panel iba RANCIO. Sumado a la
+      ejecucion en t+1 de D13, el rezago efectivo de decision era de DOS
+      dias. El agente estaba resolviendo un problema mas dificil que el
+      real, no uno mas facil. Eso es tranquilizador para la validez de los
+      resultados (no estan inflados) pero igual los invalida como medicion.
+
+  (b) CONTAMINA TODO JOIN ENTRE FUENTES, y es lo mas grave. Macro (BCRP),
+      sentimiento (R5) y fundamentales (known_date) se unen por `date`. Si
+      mercado va corrido un dia y las otras tres no, TODAS las alineaciones
+      cruzadas estaban mal por un dia. El canal de sentimiento y el macro
+      se estaban evaluando contra el retorno del dia equivocado.
+
+  (c) PROBABLEMENTE INVALIDA UN HALLAZGO YA DOCUMENTADO. "La BVL reacciona
+      con UN DIA de rezago" (memoria project_macro_factores_validacion,
+      ago-2026) y el R2 rezagado 11.9% > contemporaneo 3.5% del ACTA §C.
+      Si el panel va un dia tarde, un factor macro en t-1 que "explica" el
+      retorno del panel en t esta explicando el retorno verdadero de t-1:
+      o sea es CONTEMPORANEO, no rezagado. Hay que RE-MEDIRLO.
+      OJO: ese hallazgo se uso para respaldar D13.
+
+  (d) is_stale / is_no_trade describen el dia anterior al que etiquetan.
+
+  (e) CUARENTENA. Cualquier resultado de OE1 obtenido con este panel queda
+      en cuarentena: el piloto de D21, las cifras de D22, los baselines del
+      notebook y las mediciones de regimen de 6.2. NO estan "mal" en el
+      sentido de tener un sesgo optimista —ver (a)— pero no son la
+      medicion que dicen ser.
+
+
+========================================================================
+3. POR QUE SOBREVIVIO A R3-R6 COMPLETOS
+========================================================================
+Es el caso mas grave del patron ya registrado en
+feedback_deriva_decidido_implementado, y la leccion es concreta:
+
+  * TODAS las validaciones de R3 fueron INTERNAS: rectangularidad, ausencia
+    de huecos, continuidad, no-negatividad, reconciliacion BVL vs Yahoo.
+    Ninguna podia detectar un desplazamiento uniforme, porque un panel
+    corrido un dia es perfectamente consistente CONSIGO MISMO.
+  * La reconciliacion contra Yahoo no lo atrapo porque se comparaban
+    NIVELES en fechas coincidentes y Yahoo tiene sus propios problemas de
+    volumen ya documentados; el desplazamiento se disuelve en el ruido si
+    uno no mira la correlacion de RETORNOS.
+  * Hizo falta una fuente EXTERNA con fechas confiables. Esa es la leccion:
+    ninguna cantidad de auto-consistencia sustituye un contraste externo.
+
+REGLA QUE SE ADOPTA: toda serie temporal que entre al panel desde una API
+sin documentacion de su convencion de fechas se contrasta contra una
+segunda fuente POR CORRELACION DE RETORNOS y con una PRUEBA DE EVENTO
+(una fecha donde se sabe que paso algo grande), no solo por niveles.
+
+
+========================================================================
+4. LA CORRECCION
+========================================================================
+IMPLEMENTADA el 2026-09-12 en src/market/market_client.py:
+
+  * `corrige_etiqueta_bvl(df)`: la fecha verdadera de la fila i es la
+    etiqueta de la fila i-1 en la serie ordenada. Se pierde la primera
+    fila (pertenece a un dia anterior al rango pedido).
+  * `fetch_bvl` pide un colchon de 10 dias calendario hacia atras y recorta
+    DESPUES de corregir, para no perder el primer dia real del rango.
+
+VERIFICACION DE PUNTA A PUNTA contra la API real (2026-09-12):
+  fetch_bvl(ALICORC1, 2021-06-02, 2021-06-11) devuelve
+    06-02 6.41 · 06-03 6.50 · 06-04 6.82 · 06-07 5.79 · 06-08 5.88
+    06-09 6.05 · 06-10 6.50
+  identico a Bloomberg, incluido el 06-02 recuperado por el colchon.
+
+TESTS: tests/test_desfase_fecha_bvl.py (5). Usan datos REALES (la respuesta
+literal de la API y el PX_LAST de Bloomberg), no un caso sintetico, porque
+el valor probatorio esta en que dos fuentes independientes coincidan tras
+corregir. Incluye una guarda (`test_sin_corregir_NO_coincide`) para que el
+test principal no pueda volverse trivialmente cierto si alguien deshace la
+correccion.
+
+
+========================================================================
+5. LO QUE FALTA — EN ORDEN
+========================================================================
+
+  [ ] 1. REGENERAR R3 -> R6 con la ingesta corregida. Es la unica forma de
+         sacar el panel de cuarentena. Nada mas deberia correrse antes.
+
+  [ ] 2. RE-VALIDAR el panel regenerado contra Bloomberg con el mismo
+         barrido de §1.4. Criterio pre-registrado: correlacion de retornos
+         > 0.85 en los 7 activos, y el desplome de Castillo el 2021-06-07.
+
+  [ ] 3. RE-MEDIR el "rezago de un dia de la BVL" (punto 2.c). Es un
+         hallazgo publicado en el registro que puede darse vuelta. Si
+         resulta CONTEMPORANEO, D13 pierde uno de sus respaldos —aunque no
+         su argumento principal, que es la ejecutabilidad, no el rezago.
+
+  [ ] 4. RE-CORRER el piloto de OE1 y actualizar el notebook y
+         docs/resultados_entorno_OE1.txt. Las conclusiones CUALITATIVAS de
+         D22 (la exploracion mal parametrizada) y de D2 (la accion
+         relativa) no dependen del alineamiento y deberian sobrevivir; las
+         CIFRAS hay que rehacerlas todas.
+
+  [ ] 5. FERREYC1 2012-2013 da 0% de coincidencia incluso corrigiendo
+         (2014: 42%). Es OTRO problema, probablemente el ajuste por
+         acciones liberadas. Sigue abierto.
+
+  [ ] 6. DIAS FANTASMA DE BLOOMBERG: 142 dias (3.9%) en 2012-2025 repiten
+         la fila previa (feriados peruanos rellenados hacia adelante). Se
+         eliminan con un reindex al calendario de la BVL. Afecta a la
+         VALIDACION, no al panel.
+
+
+========================================================================
+6. NOTA SOBRE LA FUENTE
+========================================================================
+Esto NO degrada a la BVL como fuente autoritativa ni cambia el encuadre del
+acta §E (Bloomberg es un volcado unico, capa congelada, jamas dependencia
+viva). Al contrario: la BVL sigue siendo el cierre autoritativo y lo unico
+que cambia es la ETIQUETA con que se lo indexa. Bloomberg hizo aqui el
+trabajo para el que se lo bajo: arbitrar.
+
+Citar: "Bloomberg L.P., consultado el 2026-09-05 y el 2026-09-07."
+
+FIN DEL DOCUMENTO
+========================================================================

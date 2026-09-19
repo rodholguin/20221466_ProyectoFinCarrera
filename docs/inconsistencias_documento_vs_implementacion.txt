@@ -1,0 +1,306 @@
+INCONSISTENCIAS ENTRE EL DOCUMENTO DE TESIS (E3) Y LO IMPLEMENTADO
+Fuente del documento: 20221466_RodrigoHolguin_EdwinVillanueva_E3.pdf (127 págs.)
+Barrido completo: 2026-09-03
+========================================================================
+
+POR QUÉ ESTE DOCUMENTO
+------------------------------------------------------------------------
+El proyecto ya tiene registrado como riesgo transversal PROPIO el patrón
+"decisión tomada, código no actualizado" (riesgos §Tier 1 punto 0, tres casos el
+2026-09-01). Este archivo es su versión hacia afuera: lo que el DOCUMENTO
+promete y ya no coincide con lo que el registro de decisiones decidió o con lo
+que el código hace.
+
+CONVENCIÓN: cada entrada dice qué promete el documento, qué existe hoy, por qué
+divergen y CUÁL DE LOS DOS SE CORRIGE. Ninguna se resuelve acá: se anotan para
+decidir. Nada se borra.
+
+REGLA DE LECTURA: una divergencia NO significa que el documento esté mal. En
+varios casos el documento se escribió antes de tener la evidencia, y lo correcto
+es corregir el documento. En otros el código se apartó sin justificar.
+
+
+========================================================================
+0. LA BUENA NOTICIA, PARA DIMENSIONAR
+========================================================================
+El E3 NO fija: el universo concreto de activos, el período de estudio, la
+función de recompensa, la tasa libre de riesgo, la frecuencia de rebalanceo ni
+cifras de costos. Todo eso quedó abierto en el documento y decidido después en
+`docs/decisiones_pendientes_OE1.txt`. Es decir: en esos frentes el registro
+AMPLÍA el documento, no lo contradice, y el cambio de universo de 5 a 7 activos
+(jul-2026) no obliga a corregir nada del E3.
+Las divergencias reales son las nueve de abajo.
+
+
+========================================================================
+1. FinRL COMO BASE DEL ENTORNO — CORREGIR EL DOCUMENTO
+========================================================================
+DICE:   §1.3.7. "En el proyecto, FinRL se utilizará como base del entorno de
+        simulación para la BVL, adaptando..." y lo lista como herramienta de R7.
+HAY:    entorno propio, `src/env/portfolio_env.py`, sobre la API de Gymnasium y
+        entrenado con Stable-Baselines3 (que sí está en el documento).
+POR QUÉ: FinRL no parametriza nada de lo que hace específico a este trabajo —
+        la máscara dura de días sin negociación (D8), el costo POR ACTIVO con
+        spread observado y mínimo por orden (D7), la caja remunerada a la tasa
+        del BCRP (D9), la ejecución en t+1 (D13) y la banda derivada del
+        tarifario. Adaptarlo habría sido reescribirlo por dentro.
+        Nota: el propio documento argumenta en §1.1 que los entornos existentes
+        "no parametrizan" las condiciones de la BVL. O sea que construir uno
+        propio es coherente con su propio diagnóstico; lo que falta es decirlo.
+ACCIÓN: corregir el E3. FinRL pasa de "base del entorno" a antecedente de
+        literatura, y se agrega el párrafo de por qué no se adoptó.
+
+
+========================================================================
+2. TRES ALGORITMOS (PPO, DDPG, SAC) — DECIDIR CUÁL DE LOS DOS MANDA
+========================================================================
+DICE:   O3, R7 y el cuadro de resultados esperados comprometen los TRES:
+        "Agentes DRL entrenados con los algoritmos PPO, DDPG y SAC", con
+        indicador "convergencia estable de las curvas de recompensa en al menos
+        3 semillas por algoritmo".
+HAY:    D3 (cerrada 2026-09-03) decidió PPO PRIMARIO y SAC como UNA verificación
+        de robustez, no como brazo de la grilla. DDPG no se menciona.
+TENSIÓN REAL, no formal: cada algoritmo multiplica el contador de
+        configuraciones de D10 y por lo tanto degrada el Sharpe deflactado.
+        Tres algoritmos x cuatro o cinco vistas son 12-15 configuraciones
+        distintas antes de contar recompensas.
+        Argumento técnico adicional: DDPG está superado en la práctica por TD3 y
+        SAC; sostenerlo solo porque está escrito es una mala razón.
+ACCIÓN: alinear en una de dos direcciones, y quede escrito cuál:
+        (a) el documento baja a PPO + SAC, justificando la exclusión de DDPG; o
+        (b) D3 se enmienda a los tres, aceptando el costo en la deflación.
+
+
+========================================================================
+3. LAS CUATRO CONFIGURACIONES DE SEÑALES — Y UN DEFECTO DE DISEÑO PROPIO
+========================================================================
+Esta es la única entrada que NO es de documentación. Es un error en el código.
+
+DICE:   R8. "bajo cuatro configuraciones de señales de entrada (solo mercado;
+        mercado + sentimiento; mercado + fundamentales; combinación completa)".
+        El canal MACRO no aparece en ninguna de las cuatro: el E3 se escribió
+        antes de que macro existiera.
+HAY:    `src/env/features.py` define CINCO vistas, y —acá está el problema—
+        mete `macro` DENTRO de tres de las cuatro:
+            solo_mercado          = [mercado]
+            mercado_macro         = [mercado, macro]
+            mercado_sentimiento   = [mercado, MACRO, sentimiento]
+            mercado_fundamentales = [mercado, MACRO, fundamentales]
+            completa              = [mercado, MACRO, sentimiento, fundamentales]
+EL DEFECTO: con esas definiciones, la ablación "solo_mercado vs
+        mercado_sentimiento" NO mide el aporte del sentimiento: mide el aporte
+        de MACRO MÁS SENTIMIENTO JUNTOS, y le atribuye al canal de prensa lo que
+        aportan el cobre, el tipo de cambio y el EMBI. Dado que el criterio de
+        abandono de D11 dice textualmente que si el canal de sentimiento no
+        supera al baseline en la ablación EL CANAL NO SE TOMA, una ablación
+        confundida puede SALVAR un canal que no aporta, que es peor que matarlo.
+        Es el mismo error que la taxonomía de R5 evitó con las categorías de
+        magnitud cero: no dejar que un efecto se cuele atribuido a otro.
+ACCIÓN: decidir la base de comparación y hacer que las vistas la respeten.
+        (a) MACRO EN LA BASE: la vista de referencia pasa a ser
+            `mercado_macro`, y las otras se comparan contra ella. Coherente con
+            lo medido (macro es el canal con evidencia más sólida después de
+            mercado) y con la reunión del especialista, donde los factores
+            externos son el eje. Cuesta: el E3 dice "solo mercado" y habría que
+            corregirlo.
+        (b) CUATRO VISTAS LITERALES: se saca macro de las tres compuestas y se
+            reporta como un quinto brazo aislado. Respeta el documento pero deja
+            fuera de la vista "completa" un canal que sí importa.
+        RECOMENDACIÓN: (a), con corrección del documento. Pero es decisión.
+NOTA: mientras no se resuelva, la corrida de ablación NO debe ejecutarse; sus
+        resultados serían inatribuibles.
+
+
+========================================================================
+4. gemma3:4b vs gemma3:12b — CORREGIR EL DOCUMENTO
+========================================================================
+DICE:   §1.3.11 y §1.3 nombran dos veces "gemma3:4b" servido con Ollama, y
+        argumentan su elección por desempeño-tamaño.
+HAY:    la selección de modelo de R5 (docs/seleccion_modelo_R5.txt, ago-2026)
+        terminó con **gemma3:12b**, con el ranking INVERTIDO respecto de lo
+        esperado y contrastado contra 550 anotaciones manuales del autor.
+ACCIÓN: corregir el E3 y, mejor aún, reemplazar el argumento a priori por la
+        evidencia: se eligió por medición contra anotación humana, no por
+        tamaño. Es un upgrade del documento, no un parche.
+
+
+========================================================================
+5. "SCORES DE SENTIMIENTO DIARIOS" — CORREGIR EL DOCUMENTO
+========================================================================
+DICE:   O2, R5 y R6 hablan de "scores de sentimiento diarios".
+HAY:    D11 (cerrada 2026-08-17) ABANDONÓ el score continuo. El canal es
+        polaridad CATEGÓRICA {positivo, neutral, negativo} + magnitud ex-ante
+        por taxonomía de eventos + EWMAs separadas por signo y escala temporal
+        (9 columnas categóricas tras D15).
+POR QUÉ IMPORTA: no es un cambio de palabra. La razón del abandono está medida
+        (con kappa 0.32-0.46 un score continuo es falsa precisión), y es uno de
+        los argumentos metodológicos más fuertes del trabajo. Dejar escrito
+        "score" desperdicia el hallazgo y expone a la pregunta obvia en la
+        sustentación.
+ACCIÓN: corregir el E3 en O2, R5 y R6.
+
+
+========================================================================
+6. "MEDIANTE API DE MODELO DE LENGUAJE DE GRAN ESCALA" — CORREGIR EL DOCUMENTO
+========================================================================
+DICE:   R5. "generación de scores de sentimiento diarios mediante API de modelo
+        de lenguaje de gran escala".
+HAY:    modelo LOCAL servido con Ollama sobre un servidor GPU propio. No hay API
+        de LLM.
+NOTA:   el documento se contradice A SÍ MISMO: §1.3 ya dice "localmente
+        (Ollama, gemma3:4b)". O sea la corrección es interna, no un cambio de
+        alcance.
+ACCIÓN: corregir la redacción de R5.
+
+
+========================================================================
+7. BASELINE MARKOWITZ — FALTANTE, NO DIVERGENCIA
+========================================================================
+DICE:   O3, R7, R8 y §2.2.4 lo comprometen, y §2.2.4 hasta fija la
+        implementación: "formulación clásica con estimación de retornos
+        esperados y matriz de covarianza por ventana móvil".
+HAY:    `src/env/policies.py` tiene EqualWeight, CashOnly, FixedWeights y
+        RandomDirichlet. Comprar y mantener sale de EqualWeight con
+        `rebalance_every` mayor que el episodio. **Markowitz no está.**
+ACCIÓN: implementarlo como `Policy` (~40 líneas). Es de los tres baselines del
+        documento el único ausente, y sin él R8 no se puede acreditar.
+        NOTA: D10 agregó encogimiento Ledoit-Wolf; el E3 lo menciona en §2.2.4
+        como mitigación conocida pero NO lo adopta en su formulación. Conviene
+        reportar las dos versiones o justificar por qué se usa la encogida.
+
+  >> RESUELTO EL 2026-09-18. `src/env/policies.py::Markowitz`, con 14 tests en
+     `tests/test_markowitz.py`. Se anota, no se poda.
+     QUÉ SE IMPLEMENTÓ, y lo que NO era obvio de antemano:
+     * TANGENCIA long-only por la vía convexa: en vez de maximizar el cociente
+       de Sharpe (que no es convexo) se resuelve  min y'Sy  s.a.  mu_ex'y = 1,
+       y >= 0,  y se normaliza w = y/sum(y). Equivalente y estable.
+     * LAS DOS VERSIONES que pedía la NOTA: sin encogimiento (la formulación
+       literal del E3, por defecto) y con Ledoit-Wolf (la mitigación de D10).
+       El encogimiento se implementó en casa —15 líneas— en vez de añadir
+       scikit-learn a requirements por una matriz de 7x7; el test lo contrasta
+       contra `sklearn.covariance.ledoit_wolf` cuando está instalado.
+     * `objetivo="min_var"` como TERCER brazo. No lo pide el documento (no usa
+       retornos esperados), pero la media muestral es el estimador inestable
+       del par y conviene tener el contraste.
+     * CAUSALIDAD PROBADA, no argumentada: la ventana termina en `e-1`, igual
+       que la observación del agente, y hay test de venda en los ojos CON
+       CONTROL (corromper el pasado SÍ tiene que mover el peso; si no, el test
+       pasaría por no estar mirando nada).
+
+     TRES COSAS QUE SALIERON AL CORRERLO Y HAY QUE DECIR EN LA TESIS:
+
+     (a) EL CASO DEGENERADO ES FRECUENTE, NO PATOLÓGICO. Si ningún activo
+         supera a la tasa libre de riesgo, la tangente long-only NO EXISTE.
+         Regla adoptada: IR A CAJA (ver D26). Sobre 2013-2025 con rebalanceo
+         mensual pasó 12 veces de 156 (7.7% del horizonte). O sea la teoría
+         clásica también recomienda salirse del mercado en este universo, lo
+         que refuerza D9 y el punto de que la evaluación debe poder premiarlo.
+
+     (b) SE CONCENTRA BRUTALMENTE. En la validación del pliegue 0 estuvo 100%
+         en INRETC1 durante meses y luego rotó a LUSURC1. Es una propiedad
+         real de la media-varianza long-only sin restricción de concentración,
+         no un defecto: conviene declararla en vez de taparla con un tope de
+         peso elegido a mano.
+
+     (c) EL RESULTADO DEPENDE DEL TRAMO, MUCHO MÁS QUE EL 1/N:
+           pliegue0 val 2018-11..2019-11   tangencia +45.0%  vs 1/N +11.7%
+           horizonte 2013-2025             tangencia +14.8%  vs 1/N mensual
+                                           +17.2% y caja +40.5%, con el PEOR
+                                           drawdown de la tabla (-55.1%) y
+                                           rotación 5.37/año
+         El +45% del pliegue 0 es una apuesta a un activo: InRetail (+26.3% en
+         el tramo) y después Luz del Sur (+113.8%, la OPA de China Yangtze).
+         Se verificó que NO es fuga: las carteras de septiembre ya pesaban
+         LUSURC1 antes del salto del 2019-09-30, o sea es impulso sobre la
+         corrida previa a la OPA, no conocimiento del evento.
+
+     SESGO DE ESTIMACIÓN MEDIDO, y afecta a cualquiera que estime con estos
+     precios: los días con precio arrastrado producen retornos cero exactos y
+     DEFLACTAN la volatilidad. Medido sobre 2013-2025, vol anualizada con todo
+     el calendario vs. solo días con precio propio:
+         MINSURI1  36.5% vs 45.7%  (36.4% stale)
+         CREDITC1  27.6% vs 35.5%  (39.5% stale)
+         LUSURC1   27.1% vs 36.2%  (44.1% stale)
+         INRETC1   21.1% vs 21.5%  ( 3.1% stale)
+     El optimizador cree que el universo es menos riesgoso de lo que es, y el
+     sesgo es MAYOR en los activos ilíquidos — justo los caros de operar.
+
+
+========================================================================
+8. SORTINO Y RETORNO ANUALIZADO — FALTANTES EN EL CÓDIGO
+========================================================================
+DICE:   §2.2.6 fija el conjunto de métricas de la investigación: Sharpe
+        (indicador PRINCIPAL), Sortino, MDD, retorno acumulado, retorno
+        anualizado y volatilidad anualizada. Y da las fórmulas exactas
+        (R_anual = (V_final/V_inicial)^(252/n) − 1).
+HAY:    `PortfolioEnv.summary()` calcula retorno total, volatilidad anualizada,
+        Sharpe, MDD, rotación y costo total. **Faltan Sortino y retorno
+        anualizado.**
+ACCIÓN: agregarlos con las fórmulas del documento (~15 líneas). Trivial, pero
+        sin ellos las tablas de R8 no cumplen el indicador.
+
+  >> RESUELTO EL 2026-09-18. `PortfolioEnv.summary()` devuelve ahora
+     `retorno_anualizado`, `sortino` y `downside_dev_anual` además de lo que ya
+     tenía. "Trivial" resultó ser falso, y por eso se anota:
+
+     DOS CONVENCIONES QUE HAY QUE DECLARAR EN LA TESIS, porque cambian el
+     número y el documento no las fija:
+       * EL UMBRAL DEL SORTINO ES LA TASA LIBRE DE RIESGO DEL DÍA, no cero y
+         no su promedio. Con umbral cero el Sortino de cualquier estrategia
+         defensiva queda inflado y el de la caja sería infinito; con el
+         promedio se mediría contra una tasa que no existió, y el BCRP se mueve
+         de 0.25% a 7.75% en el horizonte.
+       * DESVIACIÓN A LA BAJA SOBRE TODOS LOS DÍAS (Sortino-Satchell), no solo
+         los días malos. Dividir entre el número de días negativos premiaría a
+         quien pierde poco seguido.
+
+     UN DEFECTO PROPIO, ENCONTRADO AL CORRERLO Y CORREGIDO. La primera versión
+     devolvía **Sortino = -14.99 para una cartera 100% en caja**, que debe ser
+     0.00 por construcción. Causa: `CashOnly` gana EXACTAMENTE la tasa libre de
+     riesgo, así que su exceso y su desviación a la baja son cero en álgebra
+     pero ~1e-17 en coma flotante — el retorno del paso sale de dividir dos
+     patrimonios de ~1e6, no de leer la tasa. Era un 0/0 disfrazado que
+     devolvía basura con pinta de resultado. Corregido con un piso de ruido
+     (`_RUIDO_RETORNO = 1e-12`) y con el exceso calculado a partir de las
+     MISMAS desviaciones que el denominador. Hay test con tasa VARIABLE, que es
+     el caso que lo destapó: con tasa constante el error no aparece.
+     LECCIÓN, y es la de siempre en este proyecto: una métrica nueva se mira
+     primero sobre el caso cuyo valor se conoce de antemano.
+
+
+========================================================================
+9. INTERVALOS DE CONFIANZA — EL REGISTRO PIDE MÁS QUE EL DOCUMENTO
+========================================================================
+DICE:   §2.2.6. "intervalos de confianza derivados de la repetición sobre
+        múltiples semillas aleatorias".
+HAY:    D10 exige además bootstrap por bloques sobre los retornos del test (para
+        respetar la autocorrelación) y SHARPE DEFLACTADO de Bailey y López de
+        Prado (para corregir por el número de configuraciones probadas).
+NO SE CONTRADICEN: el registro pide MÁS. Pero el documento promete menos de lo
+        que el trabajo va a hacer, y el Sharpe deflactado es probablemente la
+        pieza estadística más defendible de toda la evaluación.
+ACCIÓN: subir el documento al nivel del registro, no al revés.
+
+
+========================================================================
+RESUMEN OPERATIVO
+========================================================================
+  CORREGIR EL DOCUMENTO (5): FinRL, gemma3:4b, "scores", "API de LLM",
+                             intervalos de confianza.
+  DECIDIR CUÁL MANDA (2):    algoritmos (PPO/DDPG/SAC vs D3);
+                             configuraciones de señales (ver punto 3).
+  IMPLEMENTAR (2):           baseline Markowitz; Sortino y retorno anualizado.
+                             >> LOS DOS RESUELTOS EL 2026-09-18. Ver las
+                                entradas 7 y 8. La suite pasó de 46 a 60 tests.
+
+  BLOQUEANTE PARA R8: el punto 3. Mientras las vistas mezclen macro con los
+  otros canales, la ablación es INATRIBUIBLE y no debe correrse.
+  >> LEVANTADO EL 2026-09-12 (vistas separadas en src/env/features.py).
+
+  ESTADO AL 2026-09-18: de las nueve entradas, 3 están RESUELTAS (3, 7, 8) y
+  las 6 restantes son de DOCUMENTO o de DECISIÓN, ninguna de código. Para
+  acreditar R8 ya no falta implementación: falta pre-registrar y correr.
+
+========================================================================
+FIN DEL DOCUMENTO
+========================================================================

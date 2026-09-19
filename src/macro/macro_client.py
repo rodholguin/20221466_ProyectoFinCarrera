@@ -61,7 +61,78 @@ _SERIES: dict[str, tuple[str, str]] = {
     "macro_inflacion": ("PN01271PM", "M"),
 }
 
+# ── Índices externos (acta 2026-09-02 §B2) ───────────────────────────────────
+# NO REQUIEREN BLOOMBERG: son gratis y el proyecto ya usa yfinance. El acta lo
+# dice explícitamente ("LOS ÍNDICES EXTERNOS NO REQUIEREN BLOOMBERG").
+#
+# POR QUÉ ENTRAN. El factor común medido del universo es ~30% diario y ~45%
+# mensual (PCA, scripts/mide_comovimiento_oe1.py), y las cinco series BCRP
+# explican como mucho ~12%. Ese hueco es donde vivirían estos índices — o es
+# flujo local que ninguna fuente pública muestra. Las dos respuestas son
+# publicables, y por eso se MIDEN en vez de suponerse: pasan por el mismo tamiz
+# que descartó al oro y al estaño (Newey-West, aporte incremental).
+#
+# LA CAUSALIDAD, Y ES EL PUNTO DELICADO. El NYSE cierra DESPUÉS que la BVL
+# (BVL ~15:00 Lima; NYSE 16:00 ET). Entonces el cierre del S&P del día d NO está
+# disponible cuando cierra la BVL el día d.
+#   * Usar SPX(d) para explicar el retorno de la BVL en d sería FUGA.
+#   * Pero por D13 la observación de d se EJECUTA al cierre de d+1, y para
+#     entonces SPX(d) lleva ~18 horas siendo público. Por eso la columna entra
+#     SIN rezago adicional y sigue siendo causal: el rezago ya está en el reloj
+#     del entorno, no hace falta duplicarlo.
+# Este argumento NO depende del hallazgo "la BVL reacciona con un día de rezago",
+# que quedó en revisión por el desfase de fechas (ver
+# docs/hallazgos_desfase_fecha_bvl.txt §2.c). Depende solo del horario de cierre.
+#
+# DXY NO SE INCLUYE: es casi colineal con macro_tc_usdpen, que ya está. Si algún
+# día entra, se mide el aporte INCREMENTAL, no se agrega a ciegas.
+_INDICES: dict[str, str] = {
+    "macro_spx":     "^GSPC",   # S&P 500
+    "macro_msci_em": "EEM",     # iShares MSCI Emerging Markets (proxy líquido)
+}
+
+_CACHE_IDX = Path("data/interim/macro_indices.parquet")
+
 _cache_df: pd.DataFrame | None = None
+_cache_idx: pd.DataFrame | None = None
+
+
+def load_indices(start: str = "2011-01-01", end: str = "2025-12-31",
+                 cache: Path = _CACHE_IDX, refresh: bool = False) -> pd.DataFrame:
+    """Descarga (o lee de caché) los índices externos. NIVELES CRUDOS.
+
+    Mismo contrato que `load_macro`: niveles, tz-naive, indexado por fecha. La
+    transformación (retorno log, razón contra media móvil) va en OE1, igual que
+    con el resto del canal — R6 entrega crudo.
+    """
+    global _cache_idx
+    if _cache_idx is not None and not refresh:
+        return _cache_idx
+    if cache.exists() and not refresh:
+        _cache_idx = pd.read_parquet(cache)
+        return _cache_idx
+
+    import yfinance as yf
+
+    cols = {}
+    for feat, ticker in _INDICES.items():
+        h = yf.Ticker(ticker).history(start=start, end=end, auto_adjust=True)
+        if h.empty:
+            print(f"[macro] {feat} ({ticker}): sin datos; se omite la columna.")
+            continue
+        s = h["Close"].copy()
+        s.index = pd.to_datetime(s.index).tz_localize(None).normalize()
+        cols[feat] = s[~s.index.duplicated(keep="last")]
+
+    if not cols:
+        raise RuntimeError("no se pudo descargar ningún índice externo")
+
+    df = pd.DataFrame(cols).sort_index()
+    df.index.name = "date"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(cache)
+    _cache_idx = df
+    return df
 
 
 def _parse_daily(name: str) -> pd.Timestamp:
@@ -147,6 +218,15 @@ def macro_features(dates) -> pd.DataFrame:
     (NIVELES CRUDOS; la transformación va en OE1).
     """
     macro = load_macro()
+    # Los índices externos se concatenan y se alinean con el MISMO `asof`: un
+    # feriado de la BVL que no lo es en Nueva York deja el dato disponible, y un
+    # feriado de Nueva York arrastra el último cierre conocido. Es el
+    # comportamiento correcto en los dos sentidos.
+    try:
+        macro = pd.concat([macro, load_indices()], axis=1).sort_index()
+    except Exception as exc:  # noqa: BLE001 - el canal externo es opcional
+        print(f"[macro] índices externos no disponibles ({exc}); se sigue sin ellos.")
+
     idx = pd.DatetimeIndex(dates)
     out = {}
     for col in macro.columns:

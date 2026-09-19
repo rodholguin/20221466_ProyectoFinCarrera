@@ -1,0 +1,369 @@
+PROPUESTA INICIAL — FUNCIÓN DE RIESGO, RECOMPENSA Y EVALUACIÓN (OE1)
+Tesis: Aprendizaje por refuerzo profundo aplicado a la BVL
+Autor: Rodrigo Holguín — Asesor: Dr. E. Villanueva
+Fecha: 2 de septiembre de 2026
+Estado: BORRADOR para la reunión con el especialista. Nada de esto cierra D4-D10;
+        es la propuesta que se lleva a la mesa para que la ataquen.
+========================================================================
+
+0. RESUMEN EN CINCO LÍNEAS
+------------------------------------------------------------------------
+  - "Riesgo" no es UNA cosa: vive en tres lugares distintos del diseño
+    (recompensa, restricciones, evaluación) y hay que decidirlos por separado.
+  - Recompensa primaria propuesta: retorno log NETO de costos con penalización
+    de SEMIVARIANZA incremental (razón de downside diferencial, Moody-Saffell).
+  - Los límites duros (long-only, tope por emisor, no operar sin cotización) van
+    como RESTRICCIÓN (máscara de acción), NO como penalización.
+  - La métrica principal de la tesis no es el Sharpe: es el COSTO DE EQUILIBRIO
+    (a qué costo por ida y vuelta el agente deja de superar al 1/N).
+  - Todo el protocolo se PRE-REGISTRA antes de entrenar, y el Sharpe reportado se
+    DEFLACTA por el número de configuraciones probadas.
+
+
+========================================================================
+1. LO QUE DICE LA LITERATURA (y lo que NO dice)
+========================================================================
+Revisión rápida hecha el 2026-09-02. Fuentes al final (§8).
+
+1.1 Hay cuatro familias de recompensa, y el orden histórico es claro
+  (a) RETORNO PURO (log-retorno o P&L). Es el default de la mayoría de los
+      trabajos aplicados. Problema documentado: señal ruidosa, alta varianza del
+      gradiente, aprendizaje inestable en mercados volátiles.
+  (b) SHARPE DIFERENCIAL (DSR). Moody, Wu, Liao y Saffell (1998); Moody y
+      Saffell (2001). Es la respuesta canónica al problema de que el Sharpe se
+      define sobre un periodo T y el RL necesita una recompensa POR PASO: el DSR
+      es la derivada del Sharpe respecto al peso del último dato, calculada con
+      estimadores exponenciales de media y varianza. Sumar los incrementos
+      aproxima el Sharpe total del periodo. Resultado reportado desde 1998 y
+      replicado después: maximizar DSR da retornos más consistentes que
+      maximizar el beneficio directo.
+  (c) RAZÓN DE DOWNSIDE DIFERENCIAL (DDR). Los mismos autores, misma mecánica,
+      pero la varianza se reemplaza por la SEMIVARIANZA (solo desviaciones
+      negativas). Es el análogo incremental del Sortino.
+  (d) MEDIDAS DE COLA Y DE TRAYECTORIA: CVaR, drawdown esperado, RL
+      distribucional. Es la frontera activa 2024-2026. Los trabajos que la usan
+      reportan menor CVaR y menor drawdown máximo que el RL neutral al riesgo y
+      que la optimización clásica, típicamente a costa de algo de retorno.
+
+1.2 Lo que la evidencia SÍ sostiene
+  - Que un término de riesgo dentro de la recompensa reduce la volatilidad y el
+    drawdown frente a maximizar retorno puro. Esto es consistente entre trabajos.
+  - Que penalizar el TURNOVER (o equivalentemente cobrar el costo dentro de la
+    recompensa) es lo que produce comportamiento estable y realista; sin costo,
+    el agente sobre-opera de forma irreal. Las bandas de no-operación y los
+    penalizadores de rotación son práctica estándar de la industria.
+  - Que en mercados frontera y emergentes el enfoque RL ha superado a
+    media-varianza y a modelos de aprendizaje profundo supervisado con los
+    mismos insumos (evidencia sobre el grupo CIVETS, con Vietnam como caso).
+    OJO: es un antecedente favorable, NO una garantía; Perú no está en esa
+    muestra y esos trabajos rara vez cargan spreads de 220 pbs.
+
+1.3 Lo que la evidencia NO sostiene (y conviene decirlo en la sustentación)
+  - NO hay una recompensa ganadora universal. Los estudios comparativos recientes
+    (cinco variantes de recompensa x PPO/SAC/TD3 sobre acciones, cripto y macro)
+    encuentran que la mejor depende del activo y del régimen, y que las variantes
+    más agresivas son las más sensibles al régimen. Elegir "la mejor" DESPUÉS de
+    ver los resultados es exactamente el sobreajuste que la tesis debe evitar.
+  - Los Sharpe publicados (2.9, 3.0) son casi siempre brutos de costo, sobre una
+    ventana favorable y sin corrección por selección. No son la vara.
+  - Muy pocos trabajos reportan el costo al que su ventaja desaparece. Ese hueco
+    es precisamente donde esta tesis puede aportar algo verificable.
+
+
+========================================================================
+2. LA DISTINCIÓN QUE ORDENA TODO: EL RIESGO VIVE EN TRES LUGARES
+========================================================================
+El error frecuente es meter todo en la recompensa. Propuesta:
+
+  (A) RECOMPENSA (qué maximiza el agente)      -> aversión al riesgo SUAVE
+      Un término continuo que hace preferible el retorno estable al retorno
+      igual pero convulso. Es una PREFERENCIA, no un límite.
+
+  (B) RESTRICCIONES (qué le está prohibido)    -> límites DUROS
+      Long-only, sin apalancamiento, tope de concentración por emisor, prohibido
+      operar un activo el día que no cotizó, tope de posición por capacidad.
+      Un mandato real dice "máximo 25% por emisor", no "te penalizo si te pasas".
+      Implementación: máscara/proyección sobre el vector de pesos, no castigo.
+      Ventaja: la restricción se cumple SIEMPRE, incluso fuera de muestra;
+      una penalización solo se cumple "en promedio y si entrenó bien".
+
+  (C) EVALUACIÓN (con qué se juzga)            -> medición EX POST
+      Sharpe, Sortino, drawdown máximo, Calmar, CVaR 95%, rotación, y el costo
+      de equilibrio. NO tiene por qué coincidir con (A). De hecho es más honesto
+      que no coincida del todo: si el agente maximiza Sharpe y se lo evalúa por
+      Sharpe, el resultado es tautológico.
+
+
+========================================================================
+3. PROPUESTA CONCRETA — D4 (RECOMPENSA)
+========================================================================
+3.1 Forma propuesta (PRIMARIA, una sola, pre-registrada)
+
+    r_t  =  log( V_t^neto / V_{t-1}^neto )  -  lambda * DD_t
+
+  donde:
+    V^neto  = valor del portafolio DESPUÉS de descontar el costo de rebalanceo
+              del día (§4) y CON la caja rindiendo la tasa libre de riesgo (§5).
+              El retorno usa `close_total_return`, que ya incluye dividendos.
+    DD_t    = incremento de la semidesviación (desviación estándar de los
+              retornos NEGATIVOS) estimada con media móvil exponencial. Es la
+              variante DDR de Moody-Saffell: penaliza la caída, no el rebote.
+    lambda  = intensidad de aversión, fijada por ESCALA y no por desempeño (§3.4).
+
+3.2 Por qué semivarianza y no varianza (ni Sharpe)
+  - En este universo el retorno bueno viene a saltos (ciclo del cobre y del
+    estaño para Minsur, resultados para BCP). El Sharpe castiga la volatilidad
+    al alza igual que a la baja: le enseñaría al agente a evitar justamente lo
+    que se quiere capturar.
+  - Los retornos de siete acciones peruanas no son normales (asimetría y colas).
+    El Sharpe supone lo contrario; el Sortino/DDR no depende de esa simetría.
+  - Un director de portafolio local no describe su riesgo como "varianza": lo
+    describe como cuánto puede perder. La semivarianza está más cerca de eso.
+  RECONOCIMIENTO EXPLÍCITO: el DSR (varianza) sigue siendo el estándar de la
+  literatura y un revisor lo va a pedir. Por eso entra como variante (§3.3).
+
+3.3 Variantes de sensibilidad — EXACTAMENTE DOS, no más
+    V0. lambda = 0 (retorno neto puro). Aísla el efecto del término de riesgo.
+        Es el control del experimento: sin él no se puede afirmar que el término
+        de riesgo aportó algo.
+    V1. DSR clásico (varianza en vez de semivarianza). Es el puente con la
+        literatura y contesta "¿y si hubieras usado lo estándar?".
+  Se descarta ampliar a 5 o 6 recompensas: cada variante adicional multiplica el
+  número de pruebas y degrada el Sharpe deflactado (§6.4). Con 4 vistas de
+  features (la ablación de R8) x 3 recompensas x semillas ya se está en el
+  límite de lo defendible.
+
+3.4 Cómo se fija lambda SIN mirar el resultado (esto es lo delicado)
+  Ajustar lambda hasta que el desempeño se vea bien es sobreajuste con nombre
+  técnico. Propuesta de calibración por escala, decidida ANTES de entrenar:
+    Se corre el baseline 1/N sobre el tramo de ENTRENAMIENTO y se elige lambda
+    tal que el término de riesgo represente aproximadamente el 25% de la
+    magnitud media de la recompensa de ese baseline. Es decir: lambda no se
+    optimiza, se DERIVA de la escala de los datos de entrenamiento.
+  Luego se reporta la sensibilidad en {0.5x, 1x, 2x} de ese valor, como robustez,
+  no como búsqueda.
+
+3.5 Detalle técnico que hay que resolver sí o sí (no es cosmético)
+  Cualquier término de riesgo que dependa de la historia — varianza, Sharpe,
+  drawdown — rompe la propiedad de Markov: la recompensa deja de ser función
+  solo del estado y la acción actuales, y el agente optimiza una señal que no
+  puede explicar con lo que observa. Dos consecuencias prácticas:
+    - Los estadísticos que definen el término (media y semivarianza exponenciales
+      A_t, B_t; y el pico de patrimonio si se usara drawdown) DEBEN formar parte
+      del VECTOR DE OBSERVACIÓN. Con eso el problema vuelve a ser markoviano.
+      Es justamente lo que hace la formulación diferencial de Moody-Saffell, y es
+      la razón por la que se prefiere a "calcular el Sharpe al final del episodio".
+    - Se descarta por ahora la recompensa de drawdown máximo directa: es
+      path-dependent, se activa muy pocas veces (señal escasísima en 14 años) y
+      obliga a meter más estado. El drawdown entra en la EVALUACIÓN (§6), y como
+      restricción dura si el especialista dice que un mandato lo exigiría.
+
+3.6 Lo que se DESCARTA para esta tesis, y por qué (por si lo preguntan)
+  - RL distribucional / optimización directa de CVaR. Es la frontera y funciona,
+    pero estima una distribución completa de retornos con ~3,400 días de una
+    sola trayectoria histórica y 7 activos. La muestra no da. Se menciona en
+    trabajo futuro; el CVaR se REPORTA como métrica aunque no se optimice.
+  - Recompensas compuestas de cuatro términos con pesos w1..w4 (hay propuestas
+    2025 en esa línea). Cada peso es un grado de libertad más que no se puede
+    calibrar honestamente con esta muestra.
+
+
+========================================================================
+4. PROPUESTA CONCRETA — D7 (COSTOS): EL VERDADERO TÉRMINO DE RIESGO
+========================================================================
+Tesis de esta sección: en la BVL el costo NO es un detalle de implementación,
+es el término dominante. Con Luz del Sur a ~110 pbs por cruce, un agente que
+rebalancea a diario necesita acertar sobrehumanamente para no perder por peaje.
+
+4.1 Costo POR ACTIVO, no único
+    c_i = comisión SAB + tarifas BVL/Cavali/SMV (tarifario publicado, citado)
+          + 0.5 * spread_i observado  [x2 si es ida y vuelta]
+          + impacto de mercado ~ 0, POR CONSTRUCCIÓN (el tope de capacidad de
+            §4.3 mantiene la participación baja; se declara, no se estima)
+  El spread observado difiere en un ORDEN DE MAGNITUD dentro del universo
+  (Alicorp 0.08% vs Luz del Sur 2.20%). Un costo único para los siete sería una
+  simplificación que cambia el resultado: haría que el agente no distinga entre
+  rotar Alicorp y rotar Luz del Sur, que es precisamente la decisión que importa.
+  LIMITACIÓN DECLARADA: el spread es un SNAPSHOT (2026-07-27), no una serie
+  2012-2025. Se usa como nivel constante por activo y se declara como supuesto.
+
+4.2 Cómo entra el costo: descontado del valor del portafolio, no como multa
+    costo_t = SUM_i c_i * |w_{i,t} - w_{i,t-1}| * V_t
+  Va dentro de V^neto (§3.1). NO se agrega además un penalizador de rotación
+  separado: sería cobrar dos veces por lo mismo. La rotación se REPORTA como
+  métrica de diagnóstico.
+
+4.3 Banda de no-operación (la pieza que hace viable el problema)
+  El agente propone pesos objetivo w*; el rebalanceo se EJECUTA solo si la
+  distancia al portafolio actual supera un umbral (p. ej. L1 > delta). Debajo del
+  umbral, se deja correr. Es práctica estándar de construcción de portafolios y
+  resuelve el churn sin cambiar la recompensa. delta se pre-registra y se prueba
+  en {0, 2%, 5%}. Con delta=0 se recupera el caso sin banda.
+
+4.4 LA MÉTRICA PRINCIPAL: EL COSTO DE EQUILIBRIO (break-even)
+  Se evalúa el desempeño sobre una grilla de costos de ida y vuelta
+  {0, 25, 50, 100, 150, 250} pbs y se reporta A QUÉ COSTO el agente deja de
+  superar al 1/N. La grilla original del plan (0/25/50/100) se queda corta: el
+  peor activo del universo ya cuesta 220 pbs de ida y vuelta.
+  Esto convierte un parámetro incierto en un UMBRAL DE ROBUSTEZ evaluable, y es
+  lo que hace publicable el resultado aunque sea negativo.
+  Protocolo: se ENTRENA con el costo central por activo (§4.1) y se evalúa sobre
+  toda la grilla; adicionalmente se re-entrena en los dos extremos (0 y 250 pbs)
+  para separar "el agente no aguanta el costo" de "el agente no aprendió a
+  aguantarlo porque no lo sintió durante el entrenamiento".
+
+4.5 EL AGUIJÓN, dicho antes de tener resultados
+  El tratamiento honesto del costo PUEDE BORRAR LA VENTAJA. Si el edge solo
+  aparece a costo ~0, el hallazgo es "no hay ventaja económicamente explotable
+  en la BVL con estas señales y este universo" — legítimo, reportable y más
+  valioso que un Sharpe de 2.9 bruto de costos. Conviene decirlo en la reunión.
+
+
+========================================================================
+5. PROPUESTAS BREVES — D8, D9, D13 Y FRECUENCIA
+========================================================================
+5.1 D8 — días sin negociación
+  RESTRICCIÓN DURA para is_no_trade (cero cotización): la acción sobre ese
+  activo se enmascara, el peso se arrastra. No se penaliza un intento imposible;
+  se impide.
+  is_stale (precio repetido) NO se prohíbe: se trata como señal de baja liquidez
+  vía COSTO (recargo sobre c_i). Medido: el proxy 1-is_stale subestima la
+  ejecutabilidad entre 23 y 34 pp contra la frecuencia oficial de la BVL; el piso
+  real del universo es 90.5% de las sesiones, no 56.5%. Prohibir por is_stale le
+  quitaría al agente ~1/3 de días genuinamente operables.
+
+5.2 D9 — tasa libre de riesgo y la caja
+  La caja DEBE rendir. Si la caja rinde 0 mientras la inflación y la tasa de
+  referencia no lo son, el entorno castiga estructuralmente al agente por
+  defenderse, y eso sesga la política hacia estar siempre invertido.
+  Propuesta: rf = tasa de referencia del BCRP (ya está en el panel como
+  `macro_tasa_ref`, serie causal), aplicada a la caja y usada como sustraendo en
+  Sharpe/Sortino. Alternativa a consultar con el especialista: una tasa pasiva de
+  depósito a plazo en soles, que es lo que un inversionista de esta escala
+  realmente obtendría. La diferencia entre ambas es material y es una pregunta
+  genuina de mercado, no de programación.
+
+5.3 D13 — ejecución (ya cerrada, se declara)
+  Observa el cierre de t, ejecuta al cierre de t+1. Sin esto el backtest usa
+  información que no existía al decidir.
+
+5.4 FRECUENCIA DE REBALANCEO
+  Propuesta: decisión DIARIA con banda de no-operación (§4.3), y evaluación
+  comparada contra rebalanceo semanal y mensual como robustez. Razón para no
+  fijar semanal de entrada: con la banda, la frecuencia efectiva la elige el
+  agente en función del costo, que es más informativo que imponerla. Pero si el
+  especialista dice que en la BVL nadie rota una cartera de siete nombres a
+  diario, esa restricción es más creíble que cualquier optimización.
+
+
+========================================================================
+6. PROPUESTA CONCRETA — D10 (EVALUACIÓN), A FIJAR ANTES DE ENTRENAR
+========================================================================
+6.1 Partición
+  Walk-forward estrictamente temporal (train -> val -> test), sin barajar, con
+  purga y embargo entre tramos para que las ventanas móviles de features no
+  filtren información a través del corte.
+
+6.2 Baselines obligatorios (el agente "vale" solo si los supera neto de costos)
+    - Comprar y mantener equiponderado.
+    - 1/N con rebalanceo periódico (el rival difícil de verdad; la literatura de
+      portafolios lleva veinte años mostrando que le gana a casi todo).
+    - Momentum 12-1.
+    - Media-varianza (Markowitz) con encogimiento de covarianza (Ledoit-Wolf);
+      sin encogimiento, con 7 activos, es un hombre de paja.
+    - Paridad de riesgo / inversa a la volatilidad.
+    - Índice del mercado local (S&P/BVL Perú General; verificar disponibilidad de
+      la serie y si existe versión de retorno total). Si no se consigue con
+      calidad point-in-time, se declara y el 1/N del universo hace de referencia.
+    - BANDA NULA DE CARTERAS ALEATORIAS: 1,000 portafolios de pesos aleatorios
+      (Dirichlet) con la misma restricción y los mismos costos. Da la
+      distribución de lo que consigue el azar en este universo. Si el agente cae
+      dentro de esa banda, no hay hallazgo. Es la comparación más honesta y la
+      que casi nadie reporta.
+
+6.3 Métricas (se reportan TODAS, siempre netas de costos)
+  Retorno acumulado y anualizado | Sharpe | Sortino | drawdown máximo | Calmar |
+  CVaR 95% | volatilidad | rotación anual | nº de días operados | peso medio en
+  caja | costo de equilibrio (§4.4) | concentración media.
+
+6.4 Significancia — la parte que evita el autoengaño
+  - Múltiples semillas (>=10). Se reporta la DISTRIBUCIÓN, no la mejor corrida.
+    Regla pre-registrada: se reporta la mediana y el rango intercuartil; la mejor
+    semilla no se reporta sola nunca.
+  - Bootstrap por bloques sobre la serie de retornos del test, para intervalos de
+    confianza que respeten la autocorrelación.
+  - SHARPE DEFLACTADO (Bailey y López de Prado): corrige el Sharpe por el número
+    de configuraciones probadas y por la no normalidad de los retornos. Es
+    exactamente el remedio al problema de esta tesis: 4 vistas de features x 3
+    recompensas x 3 lambdas x semillas son muchas pruebas, y el máximo de muchas
+    pruebas ruidosas se ve bien por construcción.
+    COMPROMISO OPERATIVO: llevar un contador explícito de configuraciones
+    entrenadas desde el inicio. Si se cuenta al final, ya no es honesto.
+
+6.5 Criterio de éxito pre-registrado (escrito ANTES de ver resultados)
+  El agente supera al 1/N en Sharpe out-of-sample, neto de costos al nivel
+  central por activo, con Sharpe deflactado > 0 y mediana sobre semillas por
+  encima del baseline. Si no lo logra, se reporta como resultado negativo y la
+  contribución de la tesis pasa a ser el costo de equilibrio y la ablación por
+  canal (mercado / +sentimiento / +fundamentales / completa), que siguen siendo
+  hallazgos válidos.
+
+
+========================================================================
+7. PREGUNTAS PARA EL ESPECIALISTA, ORDENADAS POR RIESGO
+========================================================================
+  R1. ¿Un gestor local piensa en Sharpe, o piensa en drawdown y en no quedar
+      detrás del índice? Si es lo segundo, la recompensa debería llevar un
+      término de tracking error y no de volatilidad absoluta. Es la pregunta que
+      más cambia el diseño.
+  R2. ¿Semivarianza o varianza? ¿Le parece razonable no castigar la volatilidad
+      al alza en un mercado donde el retorno viene del ciclo de metales?
+  R3. Con spreads de 8 a 220 pbs, ¿a qué frecuencia rebalancea una cartera de
+      siete nombres? ¿Diaria es directamente inviable? ¿Usaría bandas de
+      no-operación y de qué ancho?
+  R4. ¿Qué tasa usaría para la caja: referencia BCRP, depósito a plazo, o
+      simplemente cero porque nadie remunera saldos de esa escala?
+  R5. ¿Qué límites impondría un mandato real: tope por emisor, mínimo de caja,
+      exposición máxima a minería? Los pondría como restricción dura.
+  R6. ¿Contra qué se compara honestamente esta cartera? ¿S&P/BVL Perú General,
+      un fondo mutuo de renta variable local, o nada porque no hay comparable?
+  R7. ¿Le parece defendible una cartera de ~S/1.8 MM acotada por la liquidez de
+      BCP, o el tamaño hace que el ejercicio pierda interés práctico?
+  R8. ¿Excluiría algún subperíodo de 2012-2025 (pandemia, 2021) o los trataría
+      aparte en la evaluación?
+  R9. La pregunta más valiosa: con todo lo anterior, ¿cuál le parece el supuesto
+      más frágil?
+
+
+========================================================================
+8. FUENTES CONSULTADAS (2026-09-02)
+========================================================================
+  Moody & Saffell — Learning to trade via direct reinforcement (DSR y DDR):
+    https://www.semanticscholar.org/paper/93b817deef9dd5afc66ccf43174a07ddaa49854f
+  A Risk-Aware Reinforcement Learning Reward for Financial Trading (2025),
+  recompensa compuesta de cuatro términos:
+    https://arxiv.org/abs/2506.04358
+  Risk-Sensitive Deep Reinforcement Learning for Portfolio Optimization (MDPI
+  JRFM 2025), objetivo basado en CVaR:
+    https://www.mdpi.com/1911-8074/18/7/347
+  Risk-Sensitive RL for Portfolio Optimization Under Stochastic Market Dynamics
+  (Mathematics 2026):
+    https://doi.org/10.3390/math14081334
+  Deep Reinforcement Learning for Trading (Zhang, Zohren & Roberts):
+    https://arxiv.org/abs/1911.10107
+  Cost-Sensitive Portfolio Selection via Deep RL:
+    https://arxiv.org/pdf/2003.03051
+  Memory-augmented DRL con costos path-dependent y penalización de rotación:
+    https://www.sciencedirect.com/science/article/pii/S2590005626003140
+  ¿Supera el RL a los modelos tradicionales en mercados frontera y desarrollados?
+  (Research in International Business and Finance):
+    https://www.sciencedirect.com/science/article/abs/pii/S0275531923000624
+  Factor-based DRL: análisis comparativo de diseños de recompensa (5 variantes x
+  PPO/SAC/TD3):
+    https://www.ncbi.nlm.nih.gov/pmc/articles/PMC12753089/
+  Bailey & López de Prado — The Deflated Sharpe Ratio:
+    https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2460551
+
+========================================================================
+FIN DEL DOCUMENTO
+========================================================================

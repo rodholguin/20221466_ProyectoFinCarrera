@@ -47,6 +47,43 @@ _BVL_HEADERS = {
     "Accept": "application/json, text/plain, */*",
 }
 
+#: Días de calendario que se piden ANTES del inicio solicitado. Al corregir la
+#: etiqueta de fecha (ver `corrige_etiqueta_bvl`) se pierde la primera fila, así
+#: que se pide un colchón para no perder el primer día real del rango.
+_COLCHON_DIAS = 10
+
+
+def corrige_etiqueta_bvl(df: pd.DataFrame) -> pd.DataFrame:
+    """Corrige el desfase de UN DÍA DE NEGOCIACIÓN del endpoint share-values.
+
+    EL HALLAZGO (2026-09-12, verificado contra Bloomberg y contra la API cruda).
+    El endpoint etiqueta cada cierre con el **siguiente día de negociación**, no
+    con el día en que se negoció. No es un error de parseo nuestro: la API
+    devuelve cadenas ISO sin ambigüedad.
+
+        segunda vuelta de 2021 — Alicorp, precio idéntico, etiqueta distinta
+            Bloomberg     2021-06-04  6.82      2021-06-07  5.79  (−15.1%)
+            share-values  2021-06-07  6.82      2021-06-08  5.79
+
+    Medido sobre 2013-2025 contra el PX_LAST de Bloomberg, la correlación de
+    retornos pasa de 0.02-0.13 (sin corregir) a 0.88-0.98 (corrigiendo), en los
+    siete activos.
+
+    POR QUÉ IMPORTA, y no es "un día de nada": no es look-ahead sino lo
+    contrario —el panel iba RANCIO—, y como macro, sentimiento y fundamentales
+    se unen por `date`, TODAS las alineaciones cruzadas quedaban corridas.
+    Ver docs/hallazgos_desfase_fecha_bvl.txt.
+
+    LA CORRECCIÓN: la fecha verdadera de la fila i es la etiqueta de la fila
+    i−1 dentro de la serie ordenada. Se pierde la primera fila, que corresponde
+    a un día anterior al rango pedido (de ahí `_COLCHON_DIAS`).
+    """
+    if df.empty:
+        return df
+    out = df.sort_values("date").reset_index(drop=True).copy()
+    out["date"] = out["date"].shift(1)
+    return out.dropna(subset=["date"]).reset_index(drop=True)
+
 
 def fetch_bvl(asset: Asset, start: str, end: str) -> pd.DataFrame:
     """Descarga precios de cierre diarios desde la BVL (share-values).
@@ -58,10 +95,13 @@ def fetch_bvl(asset: Asset, start: str, end: str) -> pd.DataFrame:
     """
     import requests
 
+    # Se pide antes del inicio real porque la corrección de etiqueta consume la
+    # primera fila (ver corrige_etiqueta_bvl).
+    start_pedido = (pd.Timestamp(start) - pd.Timedelta(days=_COLCHON_DIAS)).strftime("%Y-%m-%d")
     try:
         resp = requests.get(
             f"{_BVL_SHAREVALUES_URL}/{asset.bvl}",
-            params={"startDate": start, "endDate": end},
+            params={"startDate": start_pedido, "endDate": end},
             headers=_BVL_HEADERS,
             timeout=30,
         )
@@ -80,6 +120,10 @@ def fetch_bvl(asset: Asset, start: str, end: str) -> pd.DataFrame:
     df["date"] = pd.to_datetime(df["date"])
     df["close"] = pd.to_numeric(df["close"], errors="coerce")
     df = df[df["close"] > 0].copy()   # filtrar cierres 0 (días sin referencia)
+    # El endpoint etiqueta con el SIGUIENTE día de negociación: se corrige ANTES
+    # de recortar al rango pedido, o el recorte dejaría fuera el primer día real.
+    df = corrige_etiqueta_bvl(df)
+    df = df[df["date"] >= pd.Timestamp(start)].copy()
     df["open"] = df["close"]
     df["high"] = df["close"]
     df["low"] = df["close"]

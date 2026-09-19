@@ -38,10 +38,13 @@ __pycache__/
 .Python
 
 # Entornos virtuales
-.venv/
-venv/
-env/
-ENV/
+# Anclados a la RAÍZ a propósito: sin la barra inicial, `env/` también se traga
+# `src/env/` (el entorno de RL de OE1) y el paquete desaparece del repo sin que
+# nada falle. Pasó el 2026-09-03.
+/.venv/
+/venv/
+/env/
+/ENV/
 
 # Variables de entorno / secretos
 .env
@@ -70,3 +73,26 @@ Thumbs.db
 
 # Artefactos de caché creados al ejecutar notebooks con otro cwd
 notebooks/data/
+
+# Extracciones del terminal Bloomberg (data licenciada, NO redistribuible).
+# Anclado con `data/raw/` explícito, no con un patrón suelto: ver la nota de
+# los entornos virtuales más arriba. Citar como "Bloomberg L.P., consultado el
+# 2026-09-05 y 2026-09-07". Ver docs/estado_extraccion_bloomberg.txt
+data/raw/bloomberg/
+
+# Artefactos precalculados que alimentan notebooks/OE1_entorno_y_agente.ipynb.
+# Son regenerables con scripts/genera_artefactos_oe1.py (~10 min) y pesan ~1 MB
+# entre el .npz de curvas y los .json. El notebook SI se versiona con sus
+# salidas: es el entregable. OJO: data/interim/registro_configuraciones.jsonl NO
+# entra aca — es la bitacora append-only de D10 y tiene que ser versionable.
+data/interim/artefactos_oe1/
+
+# Respaldo del panel ANTERIOR al fix de fecha del 2026-09-12 (~15 MB de parquets).
+# Se conserva en disco por trazabilidad —la convencion del proyecto es que nada
+# se borra— pero no entra al repo: es data derivada y regenerable. El hallazgo y
+# su validacion viven en docs/hallazgos_desfase_fecha_bvl.txt.
+data/interim/_respaldo_pre_fix_fecha/
+
+# Archivos de bloqueo de Office (se crean al abrir un .pptx/.docx y desaparecen
+# al cerrarlo). Nunca deben commitearse.
+~$*

@@ -1,0 +1,1412 @@
+RESULTADOS Y CONSIDERACIONES DEL ENTORNO DE OE1
+Y DE LA PRIMERA CORRIDA DEL AGENTE
+Tesis: Aprendizaje por refuerzo profundo aplicado a la Bolsa de Valores de Lima
+Autor: Rodrigo Holguin — Asesor: Dr. E. Villanueva
+Fecha de corte: 2026-09-18 (Markowitz, metricas §2.2.6, ablacion R8 y D25 medida)
+Panel: el regenerado el 2026-09-12 tras el fix de fecha — sin cambios
+========================================================================
+
+PARA QUE SIRVE ESTE DOCUMENTO
+------------------------------------------------------------------------
+Es el resumen escrito de lo que hoy esta construido y medido en OE1: el
+entorno de portafolio, su economia (costos, caja, restricciones), el
+protocolo de evaluacion y el piloto del agente. Esta pensado para una
+reunion de avance.
+
+La version con graficos es **notebooks/OE1_entorno_y_agente.ipynb**. No
+entrena nada: lee los artefactos precalculados y dibuja, asi que corre
+entero en segundos y se puede ejecutar en vivo.
+
+    python scripts/genera_artefactos_oe1.py    # una sola vez, ~10 min
+    jupyter lab notebooks/OE1_entorno_y_agente.ipynb
+
+Las decisiones y su porque viven en docs/decisiones_pendientes_OE1.txt.
+
+
+========================================================================
+AVISO DE VERSION — TODAS LAS CIFRAS SON POST-CORRECCION (2026-09-12)
+------------------------------------------------------------------------
+El 2026-09-12 se descubrio que el endpoint share-values de la BVL etiqueta
+cada cierre con el SIGUIENTE dia de negociacion: el panel iba UN DIA RANCIO.
+Se corrigio en la ingesta, se regeneraron R3 y R6, y se revalido contra
+Bloomberg. Detalle completo en docs/hallazgos_desfase_fecha_bvl.txt.
+
+  VALIDACION DEL PANEL REGENERADO — criterio pre-registrado corr > 0.85:
+    activo      corr ANTES   corr AHORA
+    ALICORC1       0.112       0.961
+    CPACASC1       0.079       0.937
+    CREDITC1      -0.020       0.885
+    FERREYC1       0.096       0.942
+    INRETC1        0.065       0.961
+    LUSURC1        0.019       0.986
+    MINSURI1       0.134       0.952
+                              7/7 PASAN
+  Prueba de evento: el desplome de la 2a vuelta (Alicorp -15.1%, BCP -9.8%,
+  Ferreycorp -15.3%) cae ahora el LUNES 2021-06-07, que es la fecha
+  economicamente correcta.
+
+TODAS LAS CIFRAS DE ESTE DOCUMENTO SON DE LA CORRIDA POST-CORRECCION. Las
+anteriores quedaron en cuarentena; el registro de configuraciones las
+distingue con el campo `panel` dentro de cada resultado.
+
+QUE CAMBIO Y QUE NO, en una linea: las conclusiones CUALITATIVAS
+sobrevivieron todas (el costo domina, la frecuencia optima es interior, la
+caja gana, la exploracion estaba mal parametrizada, la accion tenia que ser
+relativa). Las CIFRAS cambiaron, y el agente MEJORO — que es exactamente lo
+que predecia el diagnostico: con el panel rancio estaba resolviendo un
+problema mas dificil que el real.
+
+
+========================================================================
+0. LA ADVERTENCIA QUE VA PRIMERO
+------------------------------------------------------------------------
+**Los numeros del agente NO son hallazgos.** Son el piloto de D21: una
+vista (solo_mercado), una recompensa (DSR), un pliegue (el 0), tres
+semillas, y evaluado sobre VALIDACION.
+
+**EL TRAMO DE PRUEBA NO SE HA TOCADO NUNCA.** El registro de
+configuraciones marca con_test = 0, y ese es el argumento que sostiene el
+Sharpe deflactado de la evaluacion final. Si el piloto se usara para tomar
+decisiones de diseno y esas decisiones se validaran sobre el test, ese
+argumento se cae.
+
+Lo que SI es solido y se puede defender hoy:
+  * el entorno, cuya contabilidad es exacta y esta verificada con tests;
+  * los costos, medidos por activo y no supuestos;
+  * los baselines, que corren DENTRO del mismo simulador;
+  * el protocolo: walk-forward con embargo, banda nula y contador de
+    configuraciones llevado desde la primera corrida.
+
+
+========================================================================
+1. QUE SE CONSTRUYO
+------------------------------------------------------------------------
+Un entorno estilo Gymnasium (reset/step) de asignacion de PORTAFOLIO sobre
+7 activos de la BVL mas caja, long-only, sin apalancamiento (D1).
+
+  src/env/panel.py         lee el panel de R6 y lo vuelve arrays
+  src/env/features.py      vistas de senales (R8) y normalizacion causal (D6)
+  src/env/costs.py         costo por activo (D7), listo para spread temporal
+  src/env/rewards.py       DSR primaria, DDR y log-retorno neto (D4)
+  src/env/portfolio_env.py reloj, contabilidad, mascara y caja (D2/D8/D9/D13)
+  src/env/policies.py      baselines DENTRO del mismo simulador (D10)
+  src/env/folds.py         walk-forward con purga y embargo (D10)
+  src/env/registro.py      contador append-only de configuraciones (D10)
+
+EL RELOJ ES LO UNICO QUE HAY QUE TENER CLARO (D13):
+
+    paso k:  observacion construida con datos hasta el cierre de  e-1
+             ejecucion del rebalanceo al cierre de                e
+             el portafolio gana el retorno de                     e -> e+1
+             recompensa a partir de ese retorno NETO
+
+Por construccion no existe forma de que una decision use informacion de su
+propio dia de ejecucion.
+
+CUATRO PIEZAS QUE HACEN QUE EL SIMULADOR SEA ECONOMICAMENTE HONESTO:
+
+  D2 (enmendada)  ACCION RELATIVA. La accion AJUSTA los pesos actuales en
+      vez de redefinirlos:  w_obj = normaliza(max(w_actual + s*tanh(a), 0)).
+      Con eso a = 0 devuelve EXACTAMENTE la cartera actual: "no operar" es
+      un estado alcanzable y barato, no un accidente. Ver seccion 7.3.
+
+  D8  MASCARA DURA. `is_no_trade` PROHIBE operar ("si nadie quiere jugar,
+      no juega"): el activo conserva su peso y el agente reparte solo el
+      presupuesto remanente. `is_stale` NO prohibe: ENCARECE, via recargo
+      en el modelo de costos. Son cosas opuestas y se confunden facil.
+
+  D9  LA CAJA RINDE, a la tasa del BCRP / 365. Si rindiera cero, el entorno
+      castigaria estructuralmente al agente por defenderse. Ver seccion 7.4:
+      esta decision resulto ser mucho mas que contable.
+
+  D7  COSTO POR ACTIVO, nunca unico. El spread va de 8 pbs en Alicorp a 220
+      en Luz del Sur: un orden de magnitud.
+
+RECOMPENSA (D4): Sharpe diferencial (DSR, Moody-Saffell). Da senal POR PASO
+en vez de una metrica de fin de episodio, y elimina el lambda que habria que
+calibrar. Como depende de la historia, sus estadisticos suficientes SE
+CONCATENAN AL VECTOR DE OBSERVACION: sin eso el problema no seria markoviano
+y el agente optimizaria una senal que no puede explicar con lo que observa.
+
+
+========================================================================
+2. EL PANEL QUE CONSUME EL ENTORNO
+------------------------------------------------------------------------
+Salida de R6 (OE2), ya limpio, causal y alineado. OE1 NO re-reconcilia
+datos: les da forma.
+
+  fechas del panel                3,512   (2012-01-02 -> 2025-12-30)
+  activos                             7   ALICORC1 CPACASC1 CREDITC1
+                                          FERREYC1 INRETC1 LUSURC1 MINSURI1
+  primer dia con los 7 listados  2012-10-05   (IPO de InRetail)
+  primer dia OPERABLE            2013-01-02   (tras 250d de calentamiento D6)
+  dias evaluables                 3,260
+  tasa BCRP media anual            3.84%  (rango 0.25% - 7.75%)
+
+DIMENSION DE LA OBSERVACION, por vista de la ablacion de R8:
+
+  vista                    features/activo   dim. observacion
+  solo_mercado                    11                77 + 8 + 2 =  87
+  mercado_macro                   18               126 + 8 + 2 = 136
+  mercado_sentimiento             24               168 + 8 + 2 = 178
+  mercado_fundamentales           33               231 + 8 + 2 = 241
+  completa                        53               371 + 8 + 2 = 381
+
+  (7 x features + 8 pesos actuales + 2 estadisticos del DSR)
+
+  OJO CON ESTA TABLA, CAMBIO EL 2026-09-12 Y NO SOLO POR LAS COLUMNAS NUEVAS:
+  las vistas se REDEFINIERON para que la ablacion de R8 sea atribuible. Antes
+  `mercado_sentimiento` y `mercado_fundamentales` llevaban macro ADENTRO, asi
+  que comparar contra `solo_mercado` media el aporte de DOS canales y lo
+  atribuia a uno. Ahora cada brazo agrega UN SOLO canal. Ademas entraron
+  macro_spx y macro_msci_em (macro: 16 -> 18) y las 13 columnas de forma
+  fundamental (fundamentales: 20 -> 33). Las vistas combinadas
+  (mercado_macro_sentimiento, etc.) existen aparte, para medir interaccion.
+
+NORMALIZACION CAUSAL (D6): media y desviacion EXPANDING, calculadas POR
+ACTIVO, solo con informacion hasta t; winsorizacion a +-5 sigma;
+calentamiento de 250 dias. Es causal aunque se aplique dentro del tramo de
+prueba — nunca mira hacia adelante. Lo prohibido es el z-score sobre toda
+la muestra. El "por activo" no es un detalle: convierte intensidad absoluta
+en intensidad RELATIVA A LA PROPIA HISTORIA del activo, que es lo que hace
+tratable la heterogeneidad de cobertura de prensa entre BCP y Minsur con
+una sola red de pesos compartidos.
+
+COBERTURA REAL DE LA BVL — `is_stale` vs `is_no_trade`:
+
+  activo      is_stale (precio arrastrado)   is_no_trade (prohibido)
+  INRETC1                 3.0%                      5.5%
+  ALICORC1               24.0%                      0.0%
+  FERREYC1               26.5%                      0.0%
+  CPACASC1               27.9%                      0.0%
+  MINSURI1               35.1%                      0.0%
+  CREDITC1               41.4%                      0.1%
+  LUSURC1                43.5%                      0.0%
+
+  dias en que los 7 son OPERABLES:              94.5%
+  dias en que los 7 tienen PRECIO PROPIO:       10.1%
+
+LOS DOS SALTOS VERTICALES DEL GRAFICO (notebook, seccion 2.2) SON REALES,
+NO ERRORES DE DATOS. Se verificaron uno por uno; son los unicos movimientos
+diarios mayores a 25% en todo el panel:
+
+  LUSURC1  2019-09-30   +41.1%  (16.30 -> 23.00)   OPA de China Yangtze
+           2020-04-13   +24.4%  (21.31 -> 26.50)   cierre de la operacion
+           2021-03-10/11  -15.0% y -13.0%          colapso del float residual
+  CPACASC1 2025-12-16   +61.1%  ( 4.50 ->  7.25)   repricing PERSISTENTE
+                                 (se mantiene ~7.00 hasta fin de ano, no es
+                                  un pico de un dia)
+
+  LAS FECHAS DE ARRIBA SE CORRIERON UN DIA HACIA ATRAS respecto de la version
+  anterior de este documento: es la correccion del 2026-09-12 funcionando. El
+  pipeline las vuelve a detectar solo, y ahora en la fecha correcta.
+
+DOS CONSECUENCIAS QUE CONVIENE DECIR EN LA REUNION:
+
+ (a) La caida de Luz del Sur en 2021 es la contraparte cuantitativa del
+     "esta casi muerto" del especialista: tras la OPA queda un float
+     minimo. El activo se mantiene en el universo por ser historia
+     academica, y su costo de 323 pbs es la penalidad correspondiente.
+
+ (b) EL SALTO DE PACASMAYO CAE DENTRO DEL TRAMO DE PRUEBA DEL PLIEGUE 2
+     (2023-12-22 .. 2025-12-31). Un evento de +61% en un dia, en un tramo
+     que aun no se toca, puede dominar por si solo el resultado final de
+     ese pliegue. Hay que decidirlo ANTES de mirar el test —si se trata
+     como evento normal o se declara— porque decidirlo despues es elegir
+     el resultado.
+
+CONSIDERACION, Y ES DE LAS MAS IMPORTANTES DEL DOCUMENTO: la iliquidez de
+la BVL casi no aparece como prohibicion —solo 0.8% de las celdas tienen
+is_no_trade— sino como PRECIO ARRASTRADO. Los siete activos tienen precio
+propio el MISMO dia apenas el 10.1% de las fechas. Si `is_stale` no
+encareciera, el entorno estaria regalando una liquidez que el mercado no
+tiene entre el 24% y el 44% de los dias, segun el activo.
+(Consistente con el 9.3% que midio scripts/mide_comovimiento_oe1.py por
+otra via, en el ACTA del 2026-09-02.)
+
+
+========================================================================
+3. EL MODELO DE COSTOS (D7) — EL TERMINO DOMINANTE, NO UN DETALLE
+------------------------------------------------------------------------
+  costo_i = max(S/40, 0.43% * N_i) * (1 + IGV)     <- comision SAB
+          + 0.00755% * N_i                          <- BVL + Cavali + SMV
+          + (spread_i / 2) * N_i                    <- cruzar la punta
+          (+ recargo si is_stale)
+
+COSTO DE IDA Y VUELTA POR ACTIVO (ordenes de S/250k):
+
+  activo      spread snapshot (pbs)   costo ida y vuelta (pbs)
+  ALICORC1              8.0                    111.0
+  INRETC1              13.0                    116.0
+  MINSURI1             14.0                    117.0
+  CPACASC1             63.0                    166.0
+  FERREYC1             70.0                    173.0
+  CREDITC1            165.0                    268.0
+  LUSURC1             220.0                    323.0
+
+LA BANDA DE NO-OPERACION NO ES UN PARAMETRO ELEGIDO A MANO. La comision
+minima de S/40 crea un piso economico por orden: debajo de
+S/9,302 = min_fee / comision, la tarifa fija domina y mover S/2,000
+costaria ~200 pbs sobre lo transado. La banda SE DERIVA de ahi.
+
+PENDIENTES DECLARADOS, y hay que decirlos en voz alta:
+  * Las cifras salen de la web de Renta 4 Peru, NO del tarifario primario.
+    Falta confirmar si el IGV se suma sobre la comision, si "por operacion"
+    es por lado o ida y vuelta, y —lo que mas mueve el resultado— si una
+    cuenta de S/1.8 MM negocia por debajo del retail. Esa ultima cambia el
+    resultado mas que cualquier decision de arquitectura, y no esta
+    publicada.
+  * El spread es UN SNAPSHOT del 2026-07-27, no una serie historica. Un
+    spread constante subestima el costo justo en el estres (2020, 2021),
+    que es cuando el agente quiere operar. ESE, y no "dos vectores de
+    precio", es el argumento para ir a Bloomberg.
+  * El impacto de mercado se asume ~0 POR CONSTRUCCION: el tope de
+    capacidad (~S/1.8 MM, acotado por BCP) mantiene baja la participacion.
+    Es un supuesto DECLARADO, no una estimacion.
+
+COSTURA YA LISTA: `half_spread_bps` acepta indistintamente un escalar por
+activo o una matriz (T, n_activos). Cuando entre la serie historica de
+puntas, se cambia el argumento y NADA MAS.
+
+
+========================================================================
+4. LOS BASELINES, DENTRO DEL MISMO SIMULADOR
+------------------------------------------------------------------------
+Decision de diseno y no es cosmetica: las politicas de referencia NO se
+calculan aparte con pandas. Corren en el mismo entorno, con el mismo modelo
+de costos, la misma mascara y la misma caja remunerada. La comparacion es
+exacta POR CONSTRUCCION y no por revision: si el entorno tiene un sesgo, lo
+tienen los dos lados.
+
+Requisito de equidad: cada baseline corre con SU PROPIA frecuencia de
+rebalanceo. Compararse contra un 1/N rebalanceado a diario bajo 0.43% +
+spread seria ganarle a un rival mal implementado.
+
+HORIZONTE COMPLETO, 2013-01-02 a 2025-12-30 (3,260 dias, S/1.8 MM):
+
+  estrategia              ret.total  sharpe   maxDD  rot/ano    costo S/
+  1/N diario sin costo       32.8%    0.05  -44.9%     2.50           0
+  1/N diario                  8.5%   -0.06  -46.4%     1.17     355,331
+  1/N semanal                15.1%   -0.03  -45.6%     0.88     232,113
+  1/N mensual                17.2%   -0.02  -45.5%     0.56     131,683
+  1/N trimestral             21.0%   -0.00  -45.0%     0.38      86,857
+  comprar y mantener          0.7%   -0.11  -44.2%     0.08      16,230
+  solo caja                  40.5%    0.00    0.0%     0.00           0
+  markowitz tangencia        14.8%    0.04  -55.1%     5.37   1,175,776
+  markowitz tangencia-LW     31.0%    0.08  -53.9%     5.18   1,209,164
+  markowitz min-var         -11.7%   -0.18  -50.5%     1.75     427,460
+
+  LOS TRES MARKOWITZ SON NUEVOS (2026-09-18) y son el tercer baseline que
+  compromete el documento de tesis (§2.2.4), el único de los tres que faltaba.
+  Media-varianza long-only con ventana móvil de 252 días, rebalanceo MENSUAL
+  por el requisito de equidad de frecuencias. Los parámetros están abiertos y
+  hay que pre-registrarlos: ver D26. Detalle en la sección 4.1.
+
+CUATRO LECTURAS, Y NINGUNA ES COSMETICA:
+
+  1. EL COSTO SE COME 24 PUNTOS. El 1/N diario pasa de 32.8% a 8.5%:
+     S/355,331 sobre S/1.8 MM, o sea 20% del capital inicial en peaje a lo
+     largo de 13 anos. El aguijon deja de ser una advertencia y pasa a ser
+     una medicion.
+
+  2. LA FRECUENCIA OPTIMA ES INTERIOR, y eso contesta con datos la pregunta
+     del especialista: diario 8.5% < semanal 15.1% < mensual 17.2% <
+     trimestral 21.0%, PERO comprar y mantener cae a 0.7%. O sea SI hay
+     prima por rebalancear —el trimestral le saca 20 puntos a no hacer
+     nada— y el costo se la come entera si se rebalancea a diario.
+     La prediccion pre-registrada del especialista el 2026-09-02 ("bajo
+     estos costos el comportamiento optimo sera de horizonte largo y baja
+     rotacion") YA SE CUMPLE para los baselines.
+
+  3. LA CAJA LE GANA A TODO. 40.5% contra 21.0% del mejor baseline de renta
+     variable, con drawdown 0% contra -45%. En 2013-2025, este universo
+     rindio menos que la tasa de referencia. Consecuencia de diseno: D9 no
+     era un detalle contable — si la caja no rindiera, el entorno le
+     estaria escondiendo al agente la unica estrategia que gano. Y LA VARA
+     DEL AGENTE NO ES EL 1/N: ES "LE GANA A ESTAR EN EL BANCO?".
+
+  4. LA BANDA NULA CAZO ALGO QUE EL 1/N SOLO NO MUESTRA (seccion 5).
+
+
+------------------------------------------------------------------------
+4.1 MARKOWITZ (D26) — EL TERCER BASELINE, Y LO QUE ENSENIA
+------------------------------------------------------------------------
+Implementado el 2026-09-18 en src/env/policies.py, con 14 tests propios. Tres
+variantes: tangencia (la formulacion literal del documento), tangencia con
+encogimiento de Ledoit-Wolf (la mitigacion que agrego D10) y varianza minima
+(no la pide el documento; contraste, porque la media muestral es el estimador
+inestable del par).
+
+CUATRO COSAS QUE SALIERON AL CORRERLO, Y LAS CUATRO SON REPORTABLES:
+
+ 1. NO ES UN RIVAL DE PAJA NI UN CAMPEON. Sobre el horizonte completo la
+    tangencia le gana al 1/N diario (14.8% contra 8.5%) y pierde contra el 1/N
+    trimestral (21.0%) y contra la caja (40.5%), con el PEOR drawdown de toda
+    la tabla (-55.1%). Es exactamente lo que se quiere de un baseline: creible
+    y batible.
+
+ 2. **PAGA S/1.18 MM DE PEAJE**, o sea 65% del capital inicial en comisiones a
+    lo largo de 13 anios, contra S/355k del 1/N diario. Su rotacion es 5.37 al
+    anio. ES EL ARGUMENTO CENTRAL DE LA TESIS MEDIDO SOBRE OTRO SUJETO: la
+    media-varianza clasica GENERA retorno bruto en la BVL y el costo se lo come
+    entero. No es una afirmacion sobre el agente: es sobre el mercado.
+
+ 3. LA TEORIA CLASICA TAMBIEN RECOMIENDA SALIRSE. Cuando ningun activo supera a
+    la tasa libre de riesgo, la cartera tangente long-only NO EXISTE y la regla
+    pre-registrada la manda a caja (D26.b). Pasa 12 veces de 156 (8% del
+    horizonte). Refuerza 7.4(c) —la evaluacion tiene que poder premiar estar
+    afuera— con un argumento que no depende del agente.
+
+ 4. SE CONCENTRA BRUTALMENTE. En la validacion del pliegue 0 estuvo 100% en
+    INRETC1 durante meses y despues roto a LUSURC1, y de ahi sale su +46.4%
+    contra +11.8% del 1/N. ESO NO ES UNA VIRTUD DEL METODO: es una apuesta a un
+    activo (InRetail +26.3% en el tramo, Luz del Sur +113.8% por la OPA de
+    China Yangtze). SE VERIFICO QUE NO ES FUGA —ya pesaba LUSURC1 antes del
+    salto del 2019-09-30, o sea es impulso sobre la corrida previa al anuncio—
+    y es un recordatorio mas de que un solo pliegue mide el REGIMEN.
+
+SESGO DE ESTIMACION QUE HAY QUE DECLARAR, y no es del codigo: los dias con
+precio arrastrado dan retornos CERO EXACTOS y DEFLACTAN la volatilidad
+estimada. Medido, vol anualizada 2013-2025 con todo el calendario contra solo
+los dias con precio propio:
+
+  MINSURI1   36.5%  vs  45.7%   (36.4% stale)
+  CREDITC1   27.6%  vs  35.5%   (39.5% stale)
+  LUSURC1    27.1%  vs  36.2%   (44.1% stale)
+  INRETC1    21.1%  vs  21.5%   ( 3.1% stale)
+
+O sea el optimizador cree que el universo es menos riesgoso de lo que es, y MAS
+en los activos iliquidos — que son justo los caros de operar. Afecta a
+cualquiera que estime con estos precios, el agente incluido.
+
+------------------------------------------------------------------------
+4.2 SORTINO Y RETORNO ANUALIZADO — Y UN DEFECTO PROPIO
+------------------------------------------------------------------------
+`PortfolioEnv.summary()` completa el conjunto de metricas que fija §2.2.6:
+ahora devuelve tambien `retorno_anualizado`, `sortino` y `downside_dev_anual`.
+
+DOS CONVENCIONES QUE CAMBIAN EL NUMERO Y EL DOCUMENTO NO FIJA:
+  * el UMBRAL del Sortino es la tasa libre de riesgo DEL DIA, no cero y no su
+    promedio. Con cero, cualquier estrategia defensiva queda inflada; con el
+    promedio se mediria contra una tasa que no existio, y el BCRP va de 0.25% a
+    7.75% en el horizonte.
+  * la desviacion a la baja se promedia sobre TODOS los dias (Sortino-Satchell),
+    no solo los negativos.
+
+DEFECTO PROPIO, ENCONTRADO AL CORRERLO Y CORREGIDO — se anota, no se poda: la
+primera version devolvia SORTINO = -14.99 PARA UNA CARTERA 100% EN CAJA, que
+vale 0.00 por construccion. `CashOnly` gana exactamente la tasa libre de riesgo,
+asi que su exceso y su desviacion a la baja son cero en algebra pero ~1e-17 en
+coma flotante: el retorno del paso sale de dividir dos patrimonios de ~1e6, no
+de leer la tasa. Era un 0/0 disfrazado devolviendo basura con pinta de
+resultado. Corregido con piso de ruido y con el exceso calculado desde las
+MISMAS desviaciones que el denominador; hay test con tasa VARIABLE, que es el
+caso que lo destapa (con tasa constante el error no aparece).
+
+LA LECCION ES LA DE SIEMPRE EN ESTE PROYECTO: una metrica nueva se mira primero
+sobre el caso cuyo valor se conoce de antemano.
+
+
+========================================================================
+5. LA BANDA NULA (D10) — QUE CONSIGUE EL AZAR
+------------------------------------------------------------------------
+200 carteras Dirichlet con las mismas restricciones y los mismos costos.
+Si el agente cae dentro de esta banda, no hay hallazgo.
+
+  rebalanceo mensual   p5  -4.1%  | mediana  21.3%  | p95  50.2%
+  sin rebalanceo       p5 -18.4%  | mediana   3.7%  | p95  36.9%
+
+EL 1/N MENSUAL (17.2%) ESTA POR DEBAJO DE LA MEDIANA DE LAS CARTERAS
+ALEATORIAS (21.3%). El "rival casi invencible" ni siquiera es mediano en este
+universo, porque las carteras Dirichlet reparten sobre 8 casillas e
+INCLUYEN CAJA — y la caja fue lo que gano. Justifica por si sola haber
+puesto la banda nula en D10.
+
+DEFECTO PROPIO CORREGIDO EN EL CAMINO (se anota, no se poda): la primera
+version de la banda nula re-sorteaba los pesos cada 21 dias y daba una
+mediana de -60%. Eso no medía la suerte de la ASIGNACION: medía el costo de
+rotar la cartera entera doce veces al ano. Un null mal armado es un rival de
+paja al reves —hace ver bien a cualquier cosa—. El sorteo va ahora en la
+ASIGNACION y la frecuencia la fija el entorno, igual que para todo baseline.
+
+
+========================================================================
+6. LA PARTICION (D10): WALK-FORWARD CON PURGA Y EMBARGO
+------------------------------------------------------------------------
+Por que walk-forward y no un corte unico: con 2013-2025 el corte obvio
+(train 2013-2019, val 2020-2021, test 2022-2025) mete la pandemia y
+Castillo ENTEROS en validacion, que es el regimen mas raro de los catorce
+anos. Con pliegues, cada uno ES un regimen distinto y se reportan todos —
+lo que ademas contesta gratis la pregunta sobre quiebres de regimen, en vez
+de discutir que subperiodo excluir.
+
+  pliegue 0: train 2013-01-02..2018-10-23 (1457d)
+             val   2018-11-22..2019-11-21 ( 252d)
+             test  2019-12-20..2021-12-21 ( 504d)
+  pliegue 1: train 2013-01-02..2020-10-21 (1961d)
+             val   2020-11-19..2021-11-22 ( 252d)
+             test  2021-12-22..2023-12-20 ( 504d)
+  pliegue 2: train 2013-01-02..2022-10-21 (2465d)
+             val   2022-11-22..2023-11-21 ( 252d)
+             test  2023-12-21..2025-12-30 ( 504d)
+
+Entrenamiento EXPANDIENDO (arranca siempre al principio del historial): es
+como se usaria el modelo en la practica —reentrenar con todo lo conocido
+hasta la fecha— y evita el sesgo de una ventana de entrenamiento
+arbitrariamente corta al final.
+
+EL EMBARGO DE 20 DIAS NO ES ADORNO. Las features llevan ventanas moviles
+(medias de 20/50, EWMAs de 60, volatilidad de 20) y los fundamentales son
+escalones trimestrales. Sin un hueco entre tramos, la ultima observacion de
+entrenamiento y la primera de validacion comparten insumos, y el modelo ve
+por la ventana. Si algun dia entra una feature con ventana mayor, hay que
+subirlo.
+
+------------------------------------------------------------------------
+6.1 POR QUE REPORTAR UN SOLO PLIEGUE SERIA ENGANOSO
+------------------------------------------------------------------------
+Los mismos baselines por tramo, ANUALIZADOS:
+
+  tramo                 1/N diario   1/N trim.   solo caja   maxDD del 1/N
+  pliegue0 train             1.45%       2.64%       2.63%       -46.4%
+  pliegue0 val              11.89%      13.08%       1.88%       -10.2%
+  pliegue1 train             1.49%       2.67%       2.30%       -46.4%
+  pliegue1 val              -8.74%      -6.51%       0.28%       -42.6%
+  pliegue2 train            -0.47%       0.73%       2.15%       -46.4%
+  pliegue2 val              -7.55%      -7.83%       5.40%       -11.3%
+
+La validacion del pliegue 0 resulto ser EL MEJOR ANO DE LA DECADA para la
+BVL (+11.9%); las de los pliegues 1 y 2 fueron anos de caida (-8%). Con
+estos datos, cualquier conclusion sacada de un pliegue unico MIDE EL
+REGIMEN, NO AL AGENTE.
+
+------------------------------------------------------------------------
+6.2 VENTANA QUE CRECE O VENTANA QUE SE DESPLAZA (PREGUNTA DEL ASESOR,
+    2026-09-11)
+------------------------------------------------------------------------
+LA OBSERVACION ES CORRECTA Y APUNTA AL CORAZON DEL PROBLEMA: si el mercado
+cambia de regimen, la data vieja deja de describir el presente.
+
+LO PRIMERO, PARA DESPEJARLO: LA ESTRUCTURA POR PLIEGUES YA ESTABA
+CONTEMPLADA E IMPLEMENTADA (D10, src/env/folds.py, desde el 2026-09-03). El
+esquema actual ES exactamente train -> val -> train -> val -> train -> val
+deslizandose hacia adelante, y el primer entrenamiento ya ocupa 44.7% del
+periodo utilizable — muy cerca del ~50% que propone el asesor. O sea: su
+sugerencia ya esta adoptada.
+
+LO QUE SI QUEDA ABIERTO ES OTRA COSA, MAS FINA, y es probablemente lo que
+el asesor esta senalando de verdad:
+
+  EXPANDING (lo implementado): el entrenamiento SIEMPRE arranca en 2013 y
+      crece. El pliegue 2 entrena con 2,466 dias, incluyendo 2013-2016.
+  ROLLING  (la alternativa):  el entrenamiento es una ventana de largo FIJO
+      que se desplaza y DESCARTA lo viejo.
+
+El argumento del cambio de regimen es, literalmente, el argumento a favor
+de rolling. Y hoy esta implementado expanding.
+
+VIABILIDAD: TRIVIAL. Implementado el 2026-09-11 como
+`walk_forward(..., train_len=N)`, con 4 tests nuevos y SIN cambiar el
+comportamiento por defecto (uno de los tests es precisamente una guarda
+contra esa deriva). Lo que cuesta no es el codigo: es la data.
+
+  pliegue   train EXPANDING          train ROLLING      dias DESCARTADOS
+  0         1,457d (44.7% periodo)   1,457d             0   ( 0.0%)
+  1         1,961d (60.1% periodo)   1,457d           504   (25.7%)
+  2         2,465d (75.6% periodo)   1,457d         1,008   (40.9%)
+
+En el pliegue 2 el rolling TIRA EL 41% DE SU ENTRENAMIENTO, y ~3,260 dias
+utilizables es el recurso escaso de este problema.
+
+LA PREGUNTA CONVERTIDA EN MEDICION. Si la data vieja realmente estorba, el
+tramo de entrenamiento ROLLING deberia PARECERSE MAS a su validacion que el
+EXPANDING. Se mide en volatilidad y co-movimiento, que es lo que gobierna a
+un agente de portafolio. NO CUESTA NADA EN EL CONTADOR DE D10: son
+estadisticos del panel, no estrategias entrenadas.
+
+  pliegue   vol VAL   vol exp   vol rol   corr VAL  corr exp  corr rol   mas cerca
+  0          0.238     0.243     0.243      0.066     0.170     0.170    identico*
+  1          0.439     0.252     0.264      0.255     0.148     0.151    rolling
+  2          0.225     0.286     0.304      0.018     0.181     0.182    expanding
+
+  * el pliegue 0 es EMPATE POR CONSTRUCCION: la ventana movil se define con
+    el largo de su propio entrenamiento, asi que ambos esquemas miran
+    exactamente el mismo tramo.
+
+LA LECTURA, Y ES LA RESPUESTA:
+
+  * Pliegue 1: gana rolling, pero por poco. Y el dato que importa es otro:
+    la validacion tiene vol 0.439 contra 0.252-0.264 de CUALQUIERA de las
+    dos ventanas. Es el ano de la pandemia y Castillo. NINGUN TRAMO PASADO
+    SE LE PARECE, asi que recortar no lo arregla.
+  * Pliegue 2: gana expanding. La ventana movil (2018-2022, con la pandemia
+    adentro) se parece MENOS a su validacion que el historial completo.
+
+  >> NO HAY EVIDENCIA DE QUE LA VENTANA MOVIL AYUDE EN ESTE PANEL. El
+     argumento del asesor es teoricamente correcto, pero aca el cambio de
+     regimen es tan grande que descartar datos no acerca el entrenamiento
+     al objetivo: solo lo empobrece.
+
+RECOMENDACION:
+
+ 1. MANTENER `expanding` COMO ESQUEMA PRIMARIO. Es lo que se haria en la
+    practica (reentrenar con todo lo conocido hasta la fecha) y no tira
+    data que ya es escasa.
+ 2. DEJAR `rolling` COMO BRAZO DE ROBUSTEZ. Ya esta implementado y
+    testeado; no cambia el default.
+ 3. PRE-REGISTRAR LA ELECCION ANTES DE CORRER. Elegir entre las dos mirando
+    cual da mejor validacion seria SELECCION ENCUBIERTA —exactamente la
+    leccion de D22— y tendria que entrar al contador del Sharpe deflactado.
+ 4. ATACAR EL REGIMEN DONDE SI SE PUEDE. El problema real que destapo el
+    piloto no es la ventana: es que train y val son regimenes opuestos
+    (seccion 6). Eso se ataca reportando LOS TRES PLIEGUES y con features
+    que describan el regimen, no recortando historia.
+
+COSTO SI SE QUISIERA EVIDENCIA EMPIRICA (no solo estructural): entrenar el
+agente bajo los dos esquemas en los 3 pliegues son 18 corridas (~25 min de
+computo) y 6 configuraciones distintas mas en el contador de D10. Es
+decision del autor; no se corrio.
+
+UN DETALLE DE LA ESTRUCTURA QUE CONVIENE TENER PRESENTE. En cualquier
+walk-forward con entrenamiento que avanza, el TEST de un pliegue termina
+siendo TRAIN de los siguientes. Medido:
+
+  el train del pliegue 1 incluye 212d del test del pliegue 0  ( 42%)
+  el train del pliegue 2 incluye 504d del test del pliegue 0  (100%)
+  el train del pliegue 2 incluye 212d del test del pliegue 1  ( 42%)
+
+ESTO NO ES UNA FUGA HACIA EL FUTURO: que el pliegue 2 entrene con 2019-2021
+para predecir 2023-2025 es legitimo —esos datos ya son pasado— y es lo que
+uno haria en la practica. Pero tiene DOS CONSECUENCIAS QUE HAY QUE DECLARAR:
+
+ (1) LOS TRES RESULTADOS DE PRUEBA NO SON INDEPENDIENTES. No se pueden
+     juntar como tres observaciones independientes para un intervalo de
+     confianza; los IC salen de las SEMILLAS, no de los pliegues.
+ (2) EL ORDEN IMPORTA. Una vez que se mira el test del pliegue 0, cualquier
+     cambio de diseno posterior contamina los pliegues 1 y 2. En la
+     practica: se congela el pre-registro UNA VEZ y se corren los tres
+     seguidos.
+
+La ventana movil tampoco arregla esto: con 1,457 dias, el train rolling del
+pliegue 2 sigue conteniendo el test completo del pliegue 0.
+
+
+
+========================================================================
+7. EL AGENTE — PILOTO DE D21
+------------------------------------------------------------------------
+PPO, red 64x64, vista solo_mercado, recompensa DSR, 150k pasos, 3 semillas,
+pliegue 0, evaluado sobre VALIDACION. La red es chica A PROPOSITO: son
+~3,300 dias de UNA SOLA trayectoria historica, y la nota de riesgo pide
+arquitecturas simples y desconfiar de cualquier resultado que dependa de
+una sola corrida.
+
+No se usa VecNormalize: normalizar observaciones con estadisticas del
+rollout mezclaria episodios y ventanas y romperia la causalidad que D6
+garantiza. Las features ya llegan normalizadas y causales del panel.
+
+------------------------------------------------------------------------
+7.1 CURVAS DE ENTRENAMIENTO Y MODELOS GUARDADOS — ACREDITACION DE R7
+------------------------------------------------------------------------
+El documento de tesis pide para R7 "curvas de entrenamiento; modelos
+almacenados" y "convergencia estable de las curvas de recompensa en al
+menos 3 semillas por algoritmo".
+
+HASTA EL 2026-09-11 ESTO NO SE PRODUCIA. Se entrenaba con verbose=0 y sin
+model.save(): el agente existia y sus metricas tambien, pero R7 NO SE
+ACREDITABA porque faltaba su medio de verificacion. Se anota como lo que
+es —un hueco propio detectado tarde—, no se poda.
+
+YA CORREGIDO. Cada corrida ahora deja:
+  * la curva de recompensa de entrenamiento, en curvas.npz
+    (claves agente_<modo>_s<semilla>__tr_*);
+  * el modelo entrenado, en artefactos_oe1/modelos/ppo_<modo>_f<pliegue>_s<semilla>.zip
+
+OJO CON COMO SE LEE LA CURVA, y no es un detalle: con `random_start` los
+episodios tienen largo VARIABLE, asi que la recompensa ACUMULADA por
+episodio mezcla "lo bien que le fue" con "cuan largo fue". Se guardan las
+dos series, pero la comparable entre puntos de la curva es la RECOMPENSA
+POR PASO, y es la que se grafica en el notebook (seccion 7.1).
+
+LO QUE DICEN LAS CURVAS, Y NO SE VEIA EN LAS METRICAS FINALES:
+
+  modo     semilla   1er 20%   ult 20%    mejora   ult 10% vs 10% previo
+  logits      0       0.0088   -0.0039   -0.0128        +0.0046
+  logits      1       0.0239   -0.0114   -0.0352        +0.0018
+  logits      2       0.0022    0.0011   -0.0011        -0.0109
+  delta       0      -0.0019    0.0026   +0.0045        +0.0029
+  delta       1      -0.0218   -0.0057   +0.0161        -0.0006
+  delta       2      -0.0132   -0.0202   -0.0071        -0.0012
+
+ 1. CON ACCION ABSOLUTA, ENTRENAR EMPEORA LA POLITICA: las tres semillas
+    caen. Es la misma conclusion de D22, pero ahora vista DURANTE el
+    entrenamiento y no inferida del resultado en validacion.
+ 2. Con accion relativa, dos de tres semillas mejoran y una empeora,
+    coherente con la dispersion de 7.5.
+ 3. LAS CURVAS NO HAN LLEGADO A MESETA A LOS 150k PASOS, aunque la evidencia
+    se ablando con el panel corregido: ahora son 3 de 6 corridas las que
+    siguen subiendo al final (antes 5 de 6), y tres ya se dan vuelta. El
+    indicador que pide el documento para R7 es "convergencia estable de las
+    curvas de recompensa": LOS ARTEFACTOS DE R7 YA EXISTEN, SU INDICADOR NO.
+
+    >> ACTUALIZADO EL 2026-09-18, Y ESTO CIERRA LA ACREDITACION DE R7. Con
+       1,000,000 de pasos y 10 semillas, **9 de 10 curvas hacen meseta** (la
+       mediana, en ~750k pasos) y la recompensa por paso sube en LAS DIEZ. El
+       documento de tesis pide "convergencia estable de las curvas de
+       recompensa en al menos 3 semillas por algoritmo": con 9 de 10, el
+       indicador de R7 QUEDA CUMPLIDO. Lo que faltaba no era el agente ni los
+       artefactos: era presupuesto. Ver §7.9.
+       Y ahi aparece el problema, que es otro y mas interesante: la curva sube,
+       la validacion baja.
+
+CONSECUENCIA, Y EL CRITERIO ES LIMPIO: el presupuesto de 150k pasos parece
+corto. Subirlo se decide mirando LA MESETA DE LA CURVA DE ENTRENAMIENTO, que
+es un criterio de comportamiento — nunca mirando el Sharpe en validacion,
+que seria seleccion encubierta y entraria al contador de D10 (misma logica
+que D22).
+
+ADVERTENCIA AL LEER EL EJE: el DSR es una recompensa AUTO-REFERENCIAL
+(depende de la propia historia de retornos del agente), asi que su nivel
+absoluto no es comparable entre configuraciones; solo su TENDENCIA dentro
+de una corrida.
+
+------------------------------------------------------------------------
+7.2 D22 — EL HALLAZGO QUE CASI ARRUINA LA CORRIDA
+------------------------------------------------------------------------
+La primera corrida EMPEORO al entrenar: la politica determinista pasaba de
+rotacion 1.57 a 43.5 al ano, con -19.7% de retorno mediano en validacion
+contra +11.9% del 1/N. Parecia evidencia sobre la BVL. NO LO ERA.
+
+En un espacio de accion de SIMPLEX el ruido gaussiano de PPO se aplica a
+los logits, y con el defecto de SB3 (log_std_init = 0, sigma = 1) eso
+RE-SORTEA LA ASIGNACION COMPLETA EN CADA PASO. Medido sobre una red SIN
+ENTRENAR (asi que toda la rotacion que se ve es peaje del ruido):
+
+  politica determinista, sin entrenar    rotacion   1.60 / ano
+  estocastica, log_std_init =  0                  206.07 / ano
+  estocastica, log_std_init = -1                   85.70 / ano
+  estocastica, log_std_init = -2                   31.51 / ano
+  estocastica, log_std_init = -3                   10.80 / ano
+  (referencia: 1/N diario = 1.97 / ano)
+
+  ESTA TABLA ES LA QUE MENOS CAMBIO CON LA CORRECCION DEL PANEL, y tiene
+  sentido: mide el PEAJE DEL RUIDO de una red sin entrenar, que no depende
+  de si las fechas estan bien alineadas. La conclusion de D22 queda intacta.
+
+O sea: el agente pasa el entrenamiento pagando un peaje gigantesco que NO
+produce su accion media sino el ruido. El gradiente no puede atribuirlo a
+mu, asi que no hay por donde aprender a no rotar. No era un defecto del
+entorno (los tests de conservacion siguen exactos) ni evidencia sobre la
+BVL: era la parametrizacion de la exploracion.
+
+Se probo gSDE y FALLO: su ruido dependiente del estado resulta de MAYOR
+magnitud efectiva aca (63 contra 31), no menor. Se anota porque la
+hipotesis era razonable y la medicion la contradijo.
+
+EL CRITERIO DE CALIBRACION, Y ES LA PARTE QUE IMPORTA PARA LA HONESTIDAD:
+la escala de exploracion se elige por la ROTACION de la politica
+estocastica frente a la determinista, NUNCA por el retorno o el Sharpe. Un
+hiperparametro elegido mirando el desempeno en validacion es seleccion
+encubierta y tendria que entrar al contador de D10. Elegido por un criterio
+de comportamiento que no mira el resultado, no lo es.
+
+RESIDUO DECLARADO: con log_std = -2 la politica estocastica todavia rota 31
+veces al ano contra 1.96 del 1/N. Esta en el orden correcto pero no
+resuelto.
+
+------------------------------------------------------------------------
+7.3 D2 ENMENDADA — QUE "NO OPERAR" SEA ALCANZABLE
+------------------------------------------------------------------------
+Resuelta la exploracion, quedo un problema ESTRUCTURAL. Con accion absoluta
+(w = softmax(a)) cada paso produce un vector de pesos objetivo nuevo, y
+quedarse quieto exige que la red reproduzca EXACTAMENTE su salida anterior:
+un accidente, no un estado alcanzable. El agente seguia rotando 9 veces al
+ano y el diagnostico fue claro:
+
+  EL AGENTE NO ENCUENTRA PEORES SENALES: PAGA MAS PEAJE POR LAS MISMAS.
+  Descomposicion aproximada, lineal en la rotacion:
+     1/N diario   neto 11.9% + costo 2.2%  => bruto ~14.1%
+     agente       neto  4.5% + costo ~10.0% => bruto ~14.5%
+  El bruto es practicamente el mismo. TODA la diferencia esta en el peaje.
+  CAVEAT: la descomposicion usa un costo por unidad de rotacion medido
+  sobre el 1/N; si el agente concentra su rotacion en los nombres caros
+  (Luz del Sur 323 pbs, BCP 268) su costo real es MAYOR y su bruto tambien.
+  Se declara como aproximacion, no como medicion del bruto.
+
+La accion paso a ser un AJUSTE sobre los pesos actuales:
+
+     antes:  a -> w_obj = softmax(a)
+     ahora:  a -> w_obj = normaliza( max(w_actual + s*tanh(a), 0) )
+
+Con eso a = 0 devuelve EXACTAMENTE la cartera actual (la suma ya vale 1, la
+renormalizacion es la identidad): no operar es el punto natural de la
+politica, el ruido perturba el CAMBIO y no la POSICION, y la
+parametrizacion queda alineada con la economia ya decidida (la banda de D7
+y la prediccion pre-registrada del especialista sobre baja rotacion).
+
+RESULTADO (mediana de 3 semillas, pliegue 0, VALIDACION):
+
+  configuracion de la accion   rot/ano   retorno   sharpe   maxDD    caja
+  absoluta (softmax)              9.18     +3.8%     0.23   -11.5%   12.8%
+  RELATIVA (delta)                1.97     +2.6%     0.18    -4.2%   62.2%
+  1/N diario (referencia)         1.97    +11.9%     0.90   -10.2%      -
+  1/N trimestral (referencia)     1.19    +13.1%     0.96    -9.7%      -
+  solo caja (referencia)          0.00     +1.9%     0.00     0.0%     100%
+
+  (el Sharpe de la caja es 0.00 por construccion: es la tasa libre de
+   riesgo contra si misma, con volatilidad cero.)
+
+  EL CAMBIO MAS GRANDE DE TODA LA REGENERACION ESTA EN ESTA TABLA:
+
+    accion RELATIVA     cuarentena   corregido    cambio
+      retorno              -2.2%       +2.6%      +4.8 pp
+      sharpe               -0.53       +0.18      +0.70
+      maxDD                -7.0%       -4.2%      +2.8 pp
+      rotacion              2.01        1.97      -0.04
+      caja media           65.0%       62.2%      -2.7 pp
+
+  El agente paso de retorno y Sharpe NEGATIVOS a POSITIVOS, y su drawdown
+  (-4.2%) es ahora el MEJOR de la tabla, menos de la mitad que el del 1/N.
+  Esto es exactamente lo que predecia el diagnostico del desfase: con el
+  panel rancio el agente decidia con informacion de dos dias antes, o sea
+  resolvia un problema mas dificil que el real. Corregirlo lo ayudo.
+  La accion ABSOLUTA, en cambio, casi no se movio (+4.5% -> +3.8%).
+
+  LO QUE NO CAMBIO: el agente SIGUE SIN GANARLE AL 1/N en este tramo
+  (+2.6% contra +11.9%). La mejora es real pero no da vuelta el resultado.
+
+LA ENMIENDA FUNCIONO EN LO QUE APUNTABA. La rotacion cae de 9.18 a 1.97, o
+sea exactamente la del 1/N diario: el agente dejo de quemar el bruto en
+peaje. Y el drawdown mejora mucho: -4.2% contra -10.2% del 1/N, menos de la
+mitad.
+
+------------------------------------------------------------------------
+7.4 APARECIO UN COMPORTAMIENTO NUEVO: EL AGENTE SE VA A LA CAJA
+------------------------------------------------------------------------
+Con la accion relativa el agente se pone ~65% en caja (mediana; las
+semillas van de 39.8% a 67.3%). NO es el artefacto de arranque declarado en
+D2 —ese explicaria ~4% de caja media, no 65%—: EL AGENTE ELIGE LA CAJA.
+
+Y ELIGE BIEN. Los baselines sobre los DOS tramos del pliegue 0:
+
+  tramo                      1/N diario   solo caja   maxDD del 1/N
+  train 2013-01..2018-10        1.45%/ano   2.63%/ano     -46.4%
+  val   2018-11..2019-11       11.89%/ano   1.88%/ano     -10.2%
+
+En su tramo de ENTRENAMIENTO la caja le gano a la renta variable en retorno
+Y en drawdown. Con una recompensa que penaliza volatilidad, quedarse en
+caja es la RESPUESTA CORRECTA a lo que el agente vio. Que la validacion
+resultara el mejor ano de la decada es una propiedad del corte.
+
+  >> EL AGENTE NO FALLO: TRAIN Y VAL SON REGIMENES OPUESTOS.
+
+CONSECUENCIAS QUE SI SON DECISIONES:
+
+ (a) REPORTAR UN SOLO PLIEGUE SERIA ENGANOSO. Los tres pliegues de D10
+     dejan de ser una mejora metodologica y pasan a ser un REQUISITO.
+
+ (b) D9 QUEDA VALIDADA POR LA VIA INCOMODA. Como la caja rinde, el agente
+     encontro la estrategia que de hecho gano en su tramo. Si la caja
+     rindiera cero, el entorno le habria ESCONDIDO la respuesta correcta y
+     lo habria forzado a la renta variable. Era exactamente el argumento
+     de D9.
+
+ (c) LA EVALUACION TIENE QUE PODER PREMIAR "SALIRSE DEL MERCADO". Si el
+     criterio de exito es solo "supera al 1/N", un agente que acierta al no
+     invertir durante 2013-2018 se registra como fracaso. En este universo,
+     estar afuera es una posicion legitima y en buena parte del horizonte
+     fue la ganadora.
+
+ (d) VARIANZA ENTRE SEMILLAS. El peso FINAL en caja va de 24.5% a 35.5%
+     (con el panel en cuarentena iba de 1.1% a 47.8%: la correccion redujo
+     la dispersion a la cuarta parte, pero NO la elimina).
+     Cuando la politica decide algo casi binario (dentro o fuera del
+     mercado), la dispersion entre semillas se traduce en dispersion de
+     retorno. Refuerza el minimo de 10 semillas y el reporte por MEDIANA E
+     INTERCUARTIL, nunca por la mejor semilla.
+
+ (e) OJO: LA MEDIA DE CAJA NO ES LO QUE PARECE. Ver 7.5 — la trayectoria
+     matiza esta seccion de forma importante.
+
+------------------------------------------------------------------------
+7.5 CUIDADO: LA MEDIA DE CAJA MIDE SOBRE TODO LA VELOCIDAD DE ENTRADA
+------------------------------------------------------------------------
+ESTO MATIZA LA LECTURA ANTERIOR Y SALIO AL GRAFICAR LA TRAYECTORIA, NO AL
+MIRAR LA MEDIA. El portafolio ARRANCA 100% EN CAJA y, con la accion
+relativa, el agente solo puede moverse 5 pp por paso. La serie empieza en
+~95% y baja MONOTONAMENTE durante todo el ano:
+
+  modo      semilla  caja MEDIA  primer mes  ultimo mes  ultimo dia
+  delta        0        62.2%       96.2%       27.8%       24.5%
+  delta        1        70.6%       98.8%       33.6%       32.8%
+  delta        2        58.5%       89.4%       37.4%       35.5%
+  logits       0        13.5%       ~18%        ~13%        ~13%
+  logits       1        12.8%       ~17%        ~13%        ~13%
+  logits       2        12.8%       ~17%        ~13%        ~13%
+
+QUE DICE REALMENTE LA TABLA, Y HAY QUE DECIRLO ASI:
+
+  * Con accion RELATIVA las tres semillas arrancan en ~90-99% de caja y
+    terminan en 24.5%, 32.8% y 35.5%. EL AGENTE ESTA ENTRANDO AL MERCADO,
+    despacio. No se queda en caja: TARDA en salir de ella.
+    CON EL PANEL CORREGIDO LAS TRES SEMILLAS CONVERGEN MUCHO MAS: antes
+    terminaban entre 1.1% y 47.8% (un rango de 47 puntos), ahora entre
+    24.5% y 35.5% (11 puntos). La politica se volvio mas estable, que es
+    otra senal de que el panel anterior estaba metiendo ruido.
+  * Con accion ABSOLUTA el agente salta a ~12% de caja en los primeros dias
+    y se queda ahi. No hay camino de entrada porque el softmax fija el
+    objetivo directo.
+  * POR LO TANTO LA COMPARACION "12.6% vs 64.9% DE CAJA" ENTRE LOS DOS
+    MODOS NO ES LIMPIA: mezcla la velocidad de entrada con la preferencia
+    de estado estacionario.
+
+Esto NO REFUTA la lectura de 7.4 —en el tramo de entrenamiento la caja
+efectivamente le gano a la renta variable (2.63%/ano contra 1.45%/ano del
+1/N, con drawdown 0% contra -46.4%)— pero SI obliga a MEDIRLA DE OTRA
+FORMA. Dos opciones, y es decision del autor:
+   (i)  comparar el ESTADO ESTACIONARIO (ultimo tercio del tramo) en vez
+        de la media del episodio; o
+   (ii) arrancar el episodio ya invertido en 1/N, para que la caja sea una
+        DECISION y no una CONDICION INICIAL.
+La (ii) es mas limpia conceptualmente pero cambia el entorno, asi que es
+enmienda de D2 y no implementacion.
+
+  >> ES UNA DECISION DE DISENO PENDIENTE, NO UN RESULTADO.
+
+------------------------------------------------------------------------
+7.6 VERIFICACION A5 — LA QUE PROPUSO EL ESPECIALISTA
+------------------------------------------------------------------------
+El especialista senalo que Luz del Sur "esta casi muerto". Se convirtio esa
+limitacion en una PRUEBA de que el entorno no esta roto: LUSURC1 es el
+activo mas caro de operar (323 pbs ida y vuelta), asi que si el modelo de
+costos funciona, el peso medio del agente ahi debe tender a cero.
+
+  PESO MEDIO POR CASILLA (accion relativa, promedio de las 3 semillas):
+      caja        63.78%
+      INRETC1     13.21%
+      CREDITC1    11.01%
+      FERREYC1     3.29%
+      ALICORC1     2.90%
+      CPACASC1     2.23%
+      LUSURC1      2.04%   <- el 1/N pondria 14.3%
+      MINSURI1     1.55%
+
+  LA VERIFICACION PASA, pero MAS JUSTO QUE ANTES Y HAY QUE DECIRLO: 2.04%
+  contra el 14.3% que le daria un 1/N. Sigue siendo el segundo peso mas
+  bajo de la cartera y una septima parte de lo que le tocaria por reparto
+  parejo, asi que la lectura se mantiene. Pero CON EL PANEL EN CUARENTENA
+  daba 0.21%, y esa cifra era diez veces mas contundente. Se corrige el
+  registro: la evidencia es buena, no espectacular.
+
+  MATIZ HONESTO, QUE SIGUE EN PIE: CREDITC1 es el SEGUNDO mas caro (268
+  pbs) y se queda con 11.01%. O sea el agente no esta simplemente ordenando
+  por costo — algo mas esta pesando (BCP es el nombre mas grande y mas
+  liquido del universo). No se sobreinterpreta: es un piloto de una vista y
+  un pliegue.
+
+
+========================================================================
+7.7 R8 — PRIMERA ABLACION DE CANALES (2026-09-18)
+------------------------------------------------------------------------
+36 corridas: 4 vistas x 3 pliegues x 3 semillas, 150k pasos, sobre
+VALIDACION. `scripts/ablacion_r8.py`. EL TRAMO DE PRUEBA SIGUE VIRGEN.
+
+DOS COSAS QUE HUBO QUE ARREGLAR ANTES DE PODER CORRERLA, y las dos eran
+defectos propios: las vistas mezclaban macro (resuelto el 12-sep) y la
+sorpresa fundamental entraba sin winsorizar (D27, resuelto el 18-sep).
+
+VERIFICACION DE REPRODUCCION: el brazo `solo_mercado` del pliegue 0
+reproduce CIFRA POR CIFRA las corridas que ya estaban en el registro
+(+2.6% / -0.9% / +5.4%). Confirma que D27 no tocó nada fuera del canal
+fundamental y que la tubería es determinista dada la semilla.
+
+MEDIANA DE 3 SEMILLAS, POR PLIEGUE:
+
+  pliegue 0 · val 2018-11 .. 2019-11   (el MEJOR año de la década)
+    brazo                     ret    sharpe   sortino    maxDD   rot
+    solo_mercado            +2.6%     0.18      0.25     -4.2%   1.97
+    mercado_macro           +4.4%     0.40      0.63     -5.2%   1.48
+    mercado_sentimiento     +9.7%     0.74      1.11     -8.3%   2.89
+    mercado_fundamentales   +5.2%     0.44      0.72     -7.4%   1.46
+    1/N diario             +11.8%     0.90      1.38    -10.2%   1.97
+    solo caja               +1.9%     0.00      0.00     +0.0%   0.00
+
+  pliegue 1 · val 2020-11 .. 2021-11   (pandemia + Castillo)
+    solo_mercado            -7.3%    -0.81     -1.06    -21.0%   1.68
+    mercado_macro           -7.6%    -0.23     -0.33    -23.8%   1.87
+    mercado_sentimiento    -11.9%    -0.41     -0.52    -32.7%   3.07
+    mercado_fundamentales   -6.7%    -0.43     -0.56    -17.6%   1.86
+    1/N diario              -8.7%    -0.22     -0.29    -42.6%   2.84
+    solo caja               +0.3%     0.00      0.00     +0.0%   0.00
+
+  pliegue 2 · val 2022-11 .. 2023-11
+    solo_mercado            -0.9%    -1.03     -1.50     -7.6%   2.35
+    mercado_macro           +0.5%    -0.83     -1.19     -5.4%   1.16
+    mercado_sentimiento     +2.4%    -0.59     -1.01     -6.1%   2.74
+    mercado_fundamentales   -3.4%    -1.06     -1.33     -9.7%   1.68
+    1/N diario              -7.5%    -1.35     -1.72    -11.3%   1.83
+    solo caja               +5.4%     0.00      0.00     +0.0%   0.00
+
+APORTE POR CANAL — diferencia PAREADA por semilla contra solo_mercado
+(mediana de las 9, y cuántas de las 9 son positivas):
+
+  canal                  ret     sharpe   sortino    maxDD   signos+ (sharpe)
+  mercado_macro        +1.4pp    +0.384    +0.415   -0.010        7/9
+  mercado_sentimiento  +1.8pp    +0.452    +0.653   -0.020        7/9
+  mercado_fundamentales+0.6pp    +0.136    +0.273   -0.016        6/9
+
+CINCO LECTURAS, Y LA PRIMERA MANDA:
+
+ 1. **LA DISPERSION ENTRE SEMILLAS SE COME LAS DIFERENCIAS.** El brazo de
+    sentimiento en el pliegue 0 da [-2.0%, +9.7%, +22.8%]: 25 puntos de
+    rango dentro de UNA celda, contra una mejora mediana de 1.8 puntos.
+    El ruido es un orden de magnitud mayor que la señal. CON TRES SEMILLAS
+    NO SE PUEDE CONCLUIR NADA, y 7 de 9 signos positivos bajo un test de
+    signos da p~0.09 — que además no aplica limpio, porque los pliegues
+    comparten entrenamiento y las 9 observaciones no son independientes.
+
+ 2. **EL SHARPE Y EL RETORNO SE CONTRADICEN, y no en teoría.** Pliegue 1:
+      brazo                  ret      vol    sharpe
+      solo_mercado         -7.3%    12.0%    -0.81
+      mercado_macro        -7.6%    18.2%    -0.23
+      mercado_sentimiento -11.9%    20.6%    -0.41
+    El sentimiento pierde 4.6 puntos MAS que la base y su Sharpe sale 0.40
+    MEJOR. La causa es aritmética: con exceso NEGATIVO, dividir entre una
+    volatilidad mayor acerca el Sharpe a cero. Medido sobre las 27
+    diferencias pareadas, de las 21 veces que un canal subió la
+    volatilidad, el Sharpe "mejoró" 15.
+    >> SI EL VEREDICTO DE R8 SE LEE DEL SHARPE SOLO, PREMIA AL CANAL QUE
+       AGREGA RIESGO EN LOS TRAMOS PERDEDORES. Hay que pre-registrar la
+       regla de lectura ANTES de la corrida definitiva; decidirla después
+       es elegir el resultado. Ver 7.8.
+
+ 3. **NINGUN CANAL MUEVE LA VARA DE D9.** Contra la CAJA, los cuatro
+    brazos van 1 de 3, y el pliegue que ganan es el 0 — el mejor año de la
+    década. Contra el 1/N, la base va 2/3 y el sentimiento EMPEORA a 1/3.
+    Agregar señales no convirtió al agente en ganador: lo movió de lugar.
+
+ 4. **LOS TRES CANALES EMPEORAN EL DRAWDOWN.** Sentimiento 2/9 positivos
+    (o sea 7 de 9 peor, y 0/3 en los pliegues 0 y 1), fundamentales 2/9,
+    macro 4/9. Lo que las señales le compran al agente es actividad, no
+    prudencia — y la prudencia era su única ventaja clara sobre el 1/N.
+
+ 5. **CADA CANAL CAMBIA EL COMPORTAMIENTO DE FORMA DISTINTA** (mediana
+    sobre los 3 pliegues):
+      brazo                  rotación   caja     vol    maxDD   costo S/
+      solo_mercado             1.97    62.8%    5.8%    -7.6%    30,859
+      mercado_macro            1.50    58.2%    6.7%    -6.7%    27,690
+      mercado_sentimiento      2.76    56.2%   10.8%    -8.3%    42,248
+      mercado_fundamentales    1.71    50.7%    8.9%   -13.0%    27,023
+    MACRO CALMA al agente (rotación 1.50, el más barato, el mejor
+    drawdown). SENTIMIENTO LO AGITA: +40% de rotación y +37% de costo,
+    casi el doble de volatilidad. FUNDAMENTALES lo saca de la caja
+    (50.7%) y le da el peor drawdown de los cuatro.
+
+UNA REGULARIDAD QUE VALE LA PENA MIRAR DE NUEVO CON MAS SEMILLAS: el brazo
+FUNDAMENTAL es el de menor dispersión entre semillas y el de mayor
+dispersión entre regímenes. Pliegue 0: [+5.2%, +5.2%, +5.6%]. Pliegue 2:
+[-4.4%, -3.4%, -3.3%]. Las semillas casi coinciden y el signo se da vuelta
+entero con el tramo. Si se confirma, dice que el canal fundamental produce
+una política ESTABLE pero atada al régimen, que es un hallazgo distinto de
+"aporta" o "no aporta".
+
+QUE NO SE PUEDE CONCLUIR HOY, y conviene decirlo antes de que alguien lo
+cite: NO se cierra D11 (el criterio de abandono del canal de sentimiento).
+El sentimiento tiene la mayor mejora de Sharpe Y el peor drawdown Y el
+mayor costo Y es el único que empeora contra el 1/N. A tres semillas eso
+no es un veredicto, es un empate ruidoso.
+
+------------------------------------------------------------------------
+7.8 LO QUE HAY QUE PRE-REGISTRAR ANTES DE LA CORRIDA DEFINITIVA
+------------------------------------------------------------------------
+Sale directo de 7.7 y es decisión del autor:
+
+  (a) LA REGLA DE LECTURA DE LA METRICA. El Sharpe es primario por D4 y
+      por pedido del especialista (acta A4), pero con exceso negativo
+      premia la volatilidad. Opciones: declararlo y reportar Sharpe +
+      retorno + maxDD con una regla escrita de desempate; usar el Sharpe
+      solo cuando el exceso es positivo; o hacer que el criterio primario
+      sea contra la CAJA y no contra el 1/N, que es a donde apuntan D9 y
+      7.4(c). La primera es la más barata y no obliga a reescribir el
+      documento de tesis.
+  (b) EL NUMERO DE SEMILLAS. Diez es el mínimo de D10 y la sección 7.7
+      muestra por qué no es negociable: con tres, la dispersión dentro de
+      una celda es 10x la diferencia entre brazos.
+  (c) D25, EL PRESUPUESTO DE PASOS. Estos 36 agentes están subentrenados
+      por igual. Comparables entre sí, pero ninguno está en su techo.
+
+
+------------------------------------------------------------------------
+7.9 D25 — EL PRESUPUESTO DE PASOS, MEDIDO. ENTRENAR MAS LO EMPEORA
+------------------------------------------------------------------------
+10 semillas x 1,000,000 de pasos sobre el pliegue 0, con evaluacion en
+validacion a los 150k / 300k / 600k / 1M. `scripts/d25_presupuesto.py`,
+117 minutos. Es el resultado mas informativo que dio el proyecto, y es
+NEGATIVO.
+
+TRES HECHOS, Y JUNTOS DICEN ALGO QUE POR SEPARADO NO SE VE:
+
+ (1) LA CURVA DE ENTRENAMIENTO SUBE EN LAS DIEZ SEMILLAS. La recompensa DSR
+     por paso pasa de negativa en el primer tramo a claramente positiva al
+     final (la semilla 7, de -0.005 a +0.249). 9 de 10 hacen meseta, con
+     mediana en ~750k pasos. El agente aprende su objetivo, y cada vez
+     mejor. ESO ACREDITA EL INDICADOR DE R7 (ver §7.1).
+
+ (2) Y LA VALIDACION EMPEORA EN NUEVE DE DIEZ SEMILLAS:
+
+       pasos        ret     vol   sharpe    maxDD    rot    caja   costo S/
+       150,000    +3.0%    4.8%     0.30    -3.5%   1.91   68.0%    31,066
+       300,000    +1.0%    5.6%    -0.05    -5.6%   2.95   60.1%    47,352
+       600,000    +1.9%    7.5%     0.04    -6.0%   4.46   48.4%    72,112
+     1,000,000    +1.4%    6.8%    -0.01    -6.4%   5.18   53.6%    82,699
+
+     Diferencia de cada semilla entre 150k y 1M:
+       +0.0  -0.9  -4.9  -0.7  -1.4  -1.1  -6.5  -0.0  -0.2  -0.7  (en pp)
+     UNA SOLA no empeora, y esa empata.
+
+ (3) EL MECANISMO NO ES MISTERIOSO: **LA ROTACION CASI SE TRIPLICA**, de
+     1.91 a 5.18 al anio, y el costo con ella (S/31,066 -> S/82,699, +166%).
+     El drawdown empeora MONOTONAMENTE: -3.5% -> -6.4%.
+
+LA LECTURA, Y ES LO PUBLICABLE: cuanto mas optimiza el DSR sobre 2013-2018,
+mas patrones de corto plazo encuentra, y para explotarlos tiene que OPERAR.
+Los patrones no sobreviven a 2018-2019; el peaje si se paga.
+
+  >> EN ESTE PROBLEMA EL SOBREAJUSTE NO SE MANIFIESTA COMO UNA CURVA DE
+     VALIDACION QUE SE DESPEGA DESPACIO: SE MANIFIESTA COMO ROTACION.
+
+  >> ES D22 OTRA VEZ, POR EL OTRO LADO. En D22 la rotacion venia del RUIDO
+     DE EXPLORACION y se arreglo con log_std. Aca viene de la POLITICA
+     APRENDIDA, y no hay hiperparametro que la arregle: es lo que el
+     objetivo pide.
+
+LA DISPERSION ENTRE SEMILLAS NO ERA RUIDO. Rango 8.4% -> 7.9%, desviacion
+estandar 2.4% -> 2.4%, CON 6.7 VECES MAS COMPUTO. Y la correlacion de rangos
+entre checkpoints consecutivos es +0.64 / +0.75 / +0.41: cada semilla
+conserva su lugar. Cada una converge a SU politica y se queda ahi. No es
+ruido que se promedia con mas corridas — es caracter persistente. Refuerza
+el minimo de 10 semillas de D10 y el reporte por mediana e intercuartil,
+NUNCA por la mejor semilla.
+
+LA TENSION QUE ESTO CREA, Y HAY QUE RESOLVERLA ANTES DE LA CORRIDA FINAL:
+el criterio pre-registrado de D25 —la meseta— elige ~750k pasos, y a 750k el
+agente es PEOR fuera de muestra que a 150k. Los dos hechos son ciertos y
+apuntan al reves.
+
+  LO QUE **NO** SE PUEDE HACER: elegir 150k porque valida mejor. Eso es
+  entrenar cuatro configuraciones y quedarse con la que gusto, sin pagarlo en
+  el contador de D10. Es exactamente la leccion de D22.
+
+  LO QUE SI, Y ES LA PROPUESTA (pre-registrable, no adoptada): PARADA
+  TEMPRANA POR ROTACION MEDIDA SOBRE TRAIN. Se corta cuando la rotacion anual
+  de la politica DETERMINISTA sobre el TRAMO DE ENTRENAMIENTO supera un techo
+  fijado de antemano — candidato natural, la rotacion del 1/N diario (~1.97),
+  que es el rival de referencia y no un numero inventado. Criterio de
+  comportamiento, medido sobre train, ciego a validacion: la misma logica con
+  que D22 calibro la exploracion.
+
+CONSECUENCIA PARA EL PLAN, Y ES LA QUE IMPORTA: **SUBIR EL PRESUPUESTO NO ES
+UNA VIA DE MEJORA.** Esta medido. La via que queda abierta y sin explorar es
+la RECOMPENSA: D4 tiene los brazos DDR (semivarianza) y log-retorno neto
+decididos desde el 03-sep y nunca corridos. Y hay una hipotesis concreta: la
+ventaja MEDIDA del agente es el DRAWDOWN (mejor que el 1/N en los tres
+pliegues, la mitad en el de pandemia), no el retorno — y la DDR penaliza
+exactamente semivarianza. Costo de probarlo: 3 recompensas x 10 semillas =
+30 corridas, ~2 h.
+
+TAMBIEN OBLIGA A REABRIR D7. Esa decision dice que no se pone penalizador de
+rotacion aparte del costo, porque "seria cobrar dos veces". Con este
+resultado el argumento se debilita: el costo esta en el retorno NETO, pero el
+DSR parece premiar la volatilidad que la operacion genera, asi que objetivo y
+costo no estan hablando el mismo idioma. No es cobrar dos veces; es que el
+termino de riesgo y el termino de costo se cancelan mal.
+
+
+========================================================================
+8. POR QUE CREERLE AL SIMULADOR
+------------------------------------------------------------------------
+La contabilidad es donde se meten los bugs silenciosos, y un bug silencioso
+aca contamina TODOS los resultados de la tesis sin hacer fallar nada.
+
+46 tests pasan (15 del entorno, 10 de pliegues, 16 de forma fundamental y
+5 del desfase de fecha de la BVL). Los cuatro que valen:
+
+  1. con costo cero, "comprar y no tocar" replica EXACTAMENTE comprar y
+     mantener;
+  2. con costo cero, 1/N diario replica EXACTAMENTE el 1/N calculado aparte;
+  3. todo en caja crece EXACTAMENTE a la tasa libre de riesgo compuesta (D9);
+  4. los pesos suman 1 y son no negativos en todo paso, tambien con la
+     mascara activa, y las unidades de un activo enmascarado NO cambian (D8).
+
+Mas: que la accion cero NO opere nunca (D2), que el delta se mueva en la
+direccion pedida y acotado, que la observacion use el dia ANTERIOR a la
+ejecucion (D13), que la banda se derive del minimo por orden, y el
+comportamiento del DSR y la DDR.
+
+Se corren en vivo en la seccion 8 del notebook. Tambien:
+    python tests/test_portfolio_env.py
+    python tests/test_folds.py
+    python tests/test_fundamental_shape.py
+    python tests/test_desfase_fecha_bvl.py
+
+CONTADOR DE CONFIGURACIONES (D10). El Sharpe deflactado de Bailey y Lopez
+de Prado corrige por el NUMERO DE CONFIGURACIONES PROBADAS, y el compromiso
+es llevar ese contador DESDE LA PRIMERA CORRIDA: contarlas al final no es
+honesto, porque nadie recuerda los intentos que salieron mal.
+data/interim/registro_configuraciones.jsonl es APPEND-ONLY: no se edita, no
+se compacta, no se limpia. Si una corrida se abandona a los dos minutos,
+igual cuenta — el sesgo de seleccion lo produce HABERLA MIRADO, no haberla
+terminado.
+
+ESTADO DEL CONTADOR AL 2026-09-11:
+
+  corridas                       28
+  configuraciones_distintas       4   <- lo que entra al Sharpe deflactado
+  hashes_distintos               10
+  con_test                        0   <- EL TRAMO DE PRUEBA SIGUE VIRGEN
+
+  De las 28 corridas, 16 son del panel EN CUARENTENA (previas al
+  2026-09-12) y 12 del panel corregido. Se distinguen por el campo `panel`
+  dentro de cada `resultado`; ver la nota de mas abajo sobre por que no
+  cuentan como configuraciones nuevas.
+
+NOTA SOBRE LAS REPLICAS: las corridas que genero el script de artefactos
+para dibujar las figuras se anotan con `replica_para_figuras: True` DENTRO
+DEL RESULTADO, no de la configuracion. Asi no cambian el hash y el contador
+de `configuraciones_distintas` —que es el que alimenta el Sharpe
+deflactado— no se mueve: volver a correr una configuracion YA probada para
+dibujarla no es una prueba nueva de estrategia. El contador de `corridas`
+si sube, que es lo honesto.
+
+
+========================================================================
+9. QUE FALTA, Y QUE BLOQUEA QUE
+------------------------------------------------------------------------
+BLOQUEANTES DE LA CORRIDA DEFINITIVA (no del codigo ni del MVP):
+
+  [RESUELTO 2026-09-12] SEPARAR `macro` DE LAS VISTAS. Estaba bloqueando
+      R8: `mercado_sentimiento` y `mercado_fundamentales` llevaban macro
+      adentro, asi que la ablacion habria sido INATRIBUIBLE. Corregido en
+      src/env/features.py: cada brazo agrega UN SOLO canal sobre la misma
+      base, y las vistas combinadas quedan aparte para medir interaccion.
+      Se anota como resuelto, no se poda (ver
+      docs/inconsistencias_documento_vs_implementacion.txt, entrada #3).
+
+  SERIE HISTORICA DE PUNTAS (PX_BID / PX_ASK, Bloomberg). Es lo unico
+      irreemplazable y lo que cambia el resultado central: un spread
+      constante subestima el costo en el estres. YA BAJADA (2011-2026,
+      puntas + volumen + OHLC al 100%); falta engancharla al CostModel,
+      que ya acepta una matriz (T, n) — se cambia el argumento y nada mas.
+      >> ES AHORA EL PENDIENTE MAS IMPORTANTE: con el desfase de fechas
+         resuelto, este es el unico insumo que queda capaz de mover el
+         resultado central de D7.
+
+  TARIFARIO PRIMARIO DE LA SAB. Si una cuenta de S/1.8 MM negocia por
+      debajo del retail, cambia el resultado mas que cualquier decision de
+      arquitectura. No esta publicado.
+
+  INDICE LOCAL CON RETORNO TOTAL (SPBLPGPT). Es el baseline de mercado de
+      D10, que hoy no existe. OJO: MSCI reemplazo a S&P el 2025-09-01 y los
+      indices nuam arrancan en 2025, asi que son inservibles para 2012-2025.
+
+  [RESUELTO 2026-09-18] BASELINE MARKOWITZ, SORTINO Y RETORNO ANUALIZADO.
+      Eran los dos unicos FALTANTES DE CODIGO que registraba
+      docs/inconsistencias_documento_vs_implementacion.txt (entradas 7 y 8) y
+      sin ellos R8 no se podia acreditar. Implementados, con 14 tests nuevos
+      (la suite pasa de 46 a 60) y ya enganchados a los artefactos, al notebook
+      y a la tabla de referencia del piloto. Ver 4.1 y 4.2, y D26 para los
+      parametros que quedan por PRE-REGISTRAR.
+      >> PARA ACREDITAR R8 YA NO FALTA IMPLEMENTACION: falta pre-registrar y
+         correr. De las nueve inconsistencias con el documento, las tres de
+         CODIGO estan cerradas; las seis restantes son de documento o de
+         decision.
+
+TRABAJO DE PANEL YA DECIDIDO Y NO IMPLEMENTADO:
+
+  [IMPLEMENTADO 2026-09-12] SORPRESA DE FUNDAMENTALES (SUE) y medias
+      moviles. src/env/fundamental_shape.py, 16 tests. 13 columnas nuevas:
+      sue_* (camino aleatorio estacional con deriva, rezago 4 para series
+      trimestrales y 1 para TTM), fund_dist_ma4_* (distancia a la media de
+      los 4 trimestres ANTERIORES) y pico_sue_* (la sorpresa solo el primer
+      dia bursatil desde la publicacion, que es el "pico fechado" del acta).
+      FALTA TODAVIA el P/B, que necesita `patrimonio` desde R4.
+
+  INDICES EXTERNOS: PARCIALMENTE HECHO (2026-09-12). Entraron macro_spx
+      (S&P 500) y macro_msci_em, gratis via yfinance, cobertura 100% en
+      2011-2025. FALTA MEDIR SU APORTE con el mismo tamiz que descarto al
+      oro y al estano (Newey-West, aporte incremental). Quedan fuera MSCI
+      China (probable colinealidad con macro_cobre) y DXY (casi colineal
+      con macro_tc_usdpen).
+
+  INDICES EXTERNOS (S&P 500, MSCI EM/China) como factores macro. Cierran —
+      o no— el hueco entre el factor comun medido en el panel (PC1 ~30%
+      diario, ~45% mensual) y lo que explican las series BCRP actuales
+      (~12%). Las dos respuestas son publicables. Entran como `macro_*` y
+      la vista los recoge por prefijo sin tocar codigo.
+
+  ADR (BAP, CPAC) como FEATURE, no como activo transable: cotiza despues
+      del cierre de la BVL, asi que su retorno del dia t es publico antes
+      de la apertura de t+1 — causal por construccion.
+
+DECISIONES PENDIENTES DEL AUTOR:
+
+  PLIEGUES 1 Y 2 PARA EL AGENTE. Hoy el piloto es solo el pliegue 0, y la
+      seccion 6 muestra que eso mide el regimen. Extenderlo cuesta 6
+      entradas nuevas en el contador de D10 (2 pliegues x 3 semillas) y es
+      una decision metodologica, no una corrida mas.
+
+  D19 (eje de novedad / etapa del evento en la taxonomia de sentimiento):
+      ABIERTA, diferida a la ablacion de R8.
+
+  SUBIR A 10 SEMILLAS antes de cualquier numero que se reporte como
+      resultado, por la varianza de la seccion 7.4(d).
+
+  CONDICION INICIAL DEL EPISODIO (seccion 7.5). Hoy el portafolio arranca
+      100% en caja y eso contamina la media de caja del episodio. Decidir
+      entre medir el estado estacionario o arrancar invertido en 1/N. Lo
+      segundo es enmienda de D2, no implementacion.
+
+  TRATAMIENTO DEL SALTO DE PACASMAYO del 2025-12-17 (+61%), que cae en el
+      test del pliegue 2. Decidir ANTES de mirar ese tramo.
+
+  ESQUEMA DE VENTANA: expanding (adoptado) o rolling (implementado, sin
+      adoptar). Ver 6.2 — la medicion NO respalda el rolling, pero la
+      eleccion hay que PRE-REGISTRARLA, no decidirla mirando validacion.
+
+  [MEDIDO 2026-09-18] PRESUPUESTO DE PASOS. Ya no es una incognita: se
+      midieron 10 semillas x 1M de pasos. La meseta esta en ~750k y 9 de 10
+      curvas la alcanzan (lo que ACREDITA el indicador de R7), pero **la
+      validacion empeora en 9 de 10 semillas** porque la rotacion casi se
+      triplica. SUBIR EL PRESUPUESTO NO ES UNA VIA DE MEJORA. Ver 7.9.
+      Lo que queda ABIERTO es COMO ELEGIRLO: la meseta dice 750k y la
+      evidencia fuera de muestra dice lo contrario. Propuesta pre-registrable
+      en 7.9: parada temprana por ROTACION medida sobre train.
+
+  [ABIERTA, Y ES LA VIA CON MARGEN] LOS BRAZOS DE RECOMPENSA DE D4. DDR
+      (semivarianza) y log-retorno neto estan decididos desde el 2026-09-03 y
+      NUNCA SE CORRIERON. Con lo de 7.9, son la unica palanca de diseno que
+      queda sin explorar, y hay hipotesis: la ventaja medida del agente es el
+      DRAWDOWN, no el retorno, y la DDR penaliza exactamente semivarianza.
+      Costo: 3 recompensas x 10 semillas = 30 corridas, ~2 h.
+
+  [REABRIR] D7 Y EL PENALIZADOR DE ROTACION. D7 decidio no ponerlo porque
+      "seria cobrar dos veces". 7.9 debilita ese argumento: el costo esta en
+      el retorno neto, pero el DSR premia la volatilidad que la operacion
+      genera. No es cobrar dos veces — es que el termino de riesgo y el de
+      costo se cancelan mal.
+
+  [PENDIENTE PROPIO, SIN RESOLVER] EL RECARGO POR `is_stale` VALE CERO EN
+      TODAS LAS CORRIDAS. `CostModel.stale_surcharge_bps` existe y tiene su
+      default en 0.0, y `snapshot_cost_model()` se llama sin argumentos en
+      todos los scripts. O sea D8 dice que `is_stale` ENCARECE y en los
+      hechos no encarece nada — ni en los baselines, ni en el piloto, ni en
+      la ablacion de 7.7. La seccion 2 de este documento afirma que sin ese
+      recargo el entorno "estaria regalando una liquidez que el mercado no
+      tiene entre el 24% y el 44% de los dias", y eso es exactamente lo que
+      esta pasando. Hay que calibrarlo y activarlo, o enmendar D8.
+
+
+========================================================================
+10. GUION SUGERIDO PARA LA REUNION (15 MINUTOS)
+------------------------------------------------------------------------
+Reescrito el 2026-09-18. El guion anterior era del 12-sep y su titular era
+el desfase de fecha; ahora hay resultados del agente y el orden cambia.
+
+  1. (1 min)  LA ADVERTENCIA DE LA SECCION 0: el tramo de prueba SIGUE
+              VIRGEN (`con_test = 0` en el registro, 107 corridas). Todo lo
+              que sigue es validacion.
+  2. (2 min)  El reloj del entorno y las cuatro piezas (seccion 1), y los
+              costos: 111 a 323 pbs, con la banda que SE DERIVA (seccion 3).
+  3. (2 min)  Los baselines y la lectura que abre la conversacion: LA CAJA
+              LE GANA A TODO (40.5% contra 21.0%), asi que la vara del
+              agente no es el 1/N sino el banco. Y Markowitz, el tercer
+              baseline del documento, ya existe: paga S/1.18 MM de peaje
+              (65% del capital) — el argumento central de la tesis medido
+              sobre otro sujeto. Secciones 4 y 4.1.
+  4. (3 min)  **EL AGENTE EN LOS TRES PLIEGUES** (7.7). Le gana al 1/N en
+              retorno en 2 de 3, y su drawdown es mejor en 3 de 3 (-21.0%
+              contra -42.6% en pandemia + Castillo). Pero pierde contra la
+              CAJA en 2 de 3. Correccion honesta al registro: la frase "el
+              agente no le gana al 1/N" se habia escrito sobre el pliegue 0,
+              que resulto ser el UNICO donde pierde.
+  5. (3 min)  **D25: ENTRENAR MAS LO EMPEORA** (7.9). La curva de
+              entrenamiento sube en las 10 semillas y la validacion baja en
+              9 de 10, porque la rotacion casi se triplica. En este problema
+              el sobreajuste se manifiesta como ROTACION. Es el resultado
+              mas informativo del proyecto y es negativo.
+  6. (2 min)  **LA ABLACION DE R8** (7.7): los tres canales mejoran el
+              Sharpe y EMPEORAN el drawdown, y ninguno mueve la vara de D9.
+              Con 3 semillas la dispersion se come las diferencias (una
+              celda va de -2% a +23%), asi que NO se cierra D11.
+  7. (2 min)  **EL PROBLEMA DE LA METRICA** (7.7, lectura 2): con exceso
+              negativo el Sharpe premia agregar volatilidad. Medido: el
+              brazo de sentimiento pierde 4.6 puntos MAS que la base y su
+              Sharpe sale 0.40 MEJOR. Hay que pre-registrar la regla de
+              lectura ANTES de la corrida definitiva.
+
+DECISIONES QUE LE TOCAN AL ASESOR, en orden de cuanto mueven el resultado:
+  * LA REGLA DE LECTURA DE LA METRICA (7.8.a). El Sharpe es primario por D4
+    y por su propio pedido (acta A4), pero con exceso negativo premia el
+    riesgo. Declararlo y reportar Sharpe + retorno + maxDD con regla escrita
+    de desempate es lo mas barato y no obliga a reescribir el documento.
+  * COMO ELEGIR EL PRESUPUESTO DE PASOS cuando la meseta y el desempeno
+    fuera de muestra apuntan al reves (7.9). Propuesta: parada temprana por
+    rotacion sobre train.
+  * CORRER LOS BRAZOS DE RECOMPENSA DE D4 (DDR y log-retorno). Es la unica
+    palanca de diseno sin explorar y hay hipotesis concreta.
+  * REABRIR D7: penalizador de rotacion, si o no, a la luz de 7.9.
+  * El salto de +61% de Pacasmayo (2025-12-16) cae DENTRO del test del
+    pliegue 2. Se trata como evento normal o se declara aparte? Hay que
+    decidirlo ANTES de mirar ese tramo (seccion 2).
+  * Ventana expanding o rolling (6.2): la medicion no respalda recortar,
+    pero la eleccion hay que PRE-REGISTRARLA.
+  * El criterio de exito, tiene que premiar explicitamente "salirse del
+    mercado"? (7.4.c). Markowitz tambien se va a caja el 8% del horizonte,
+    asi que el argumento ya no depende del agente.
+
+
+========================================================================
+11. COMO REPRODUCIR TODO
+------------------------------------------------------------------------
+  # artefactos (una sola vez; ~10 min con el agente, ~2 min sin el)
+  python scripts/genera_artefactos_oe1.py
+  python scripts/genera_artefactos_oe1.py --sin-agente
+
+  # el notebook de la reunion
+  python scripts/create_oe1_notebook.py        # regenera el .ipynb
+  jupyter lab notebooks/OE1_entorno_y_agente.ipynb
+
+  # solo los baselines por consola
+  python scripts/smoke_env_oe1.py
+
+  # el piloto del agente por consola
+  python scripts/train_ppo_oe1.py --timesteps 150000 --seeds 3
+
+  # la ablacion de R8 — 4 vistas x 3 pliegues x 3 semillas (~90 min)
+  python scripts/ablacion_r8.py --folds 3 --seeds 3 --timesteps 150000
+
+  # D25, el presupuesto de pasos — 10 semillas x 1M (~2 h)
+  python scripts/d25_presupuesto.py --seeds 10 --timesteps 1000000
+
+  # regenerar el panel (solo si cambia la ingesta; R4 y R5 NO se tocan)
+  python -m src.market                       # R3, ~1 min
+  python scripts/run_r6_integration.py       # R6, ~1 min
+
+  # tests (70)
+  python tests/test_portfolio_env.py      # 15
+  python tests/test_folds.py              # 10
+  python tests/test_fundamental_shape.py  # 16
+  python tests/test_desfase_fecha_bvl.py  #  5
+  python tests/test_markowitz.py          # 14
+  python tests/test_vistas_r8.py          # 10
+
+ARTEFACTOS: data/interim/artefactos_oe1/
+  panel.json  costos.json  baselines.json  banda_nula.json  pliegues.json
+  regimenes.json  exploracion.json  agente.json  curvas.npz  corrida.log
+  modelos/ppo_<modo>_f<pliegue>_s<semilla>.zip   <- medio de verificacion R7
+  ablacion_r8.json          las 36 corridas de 7.7, con sus baselines por tramo
+  d25_presupuesto.json      los 40 checkpoints de 7.9 y la meseta por semilla
+  d25_curvas.npz            las 10 curvas de entrenamiento de 1M pasos
+
+FIN DEL DOCUMENTO
+========================================================================

@@ -1,0 +1,284 @@
+ESTADO DE LA EXTRACCIÓN — TERMINAL BLOOMBERG
+Actualizado: 2026-09-16. Sesiones realizadas: 2026-09-05 y 2026-09-07.
+Acompaña a: docs/plan_extraccion_bloomberg.txt (el PLAN; este es el RESULTADO).
+Convención del proyecto: se registra lo que se consiguió y lo que no, no solo
+lo que se pensaba hacer.
+========================================================================
+
+ARCHIVOS Y PROCEDENCIA
+------------------------------------------------------------------------
+  data/raw/bloomberg/grid_ul1wocu2.xlsx   sesión 2026-09-05
+  data/raw/bloomberg/fundamentales.xlsx   sesión 2026-09-07
+  data/raw/bloomberg/fundamentales_or_mr_indice_20260916.xlsx
+                                          sesión 2026-09-16 (subido como
+                                          data-or-mr.xlsx; hojas OR, MR,
+                                          indiceper). Ver §6.
+  Ignorados en git (.gitignore:81, verificado con `git check-ignore -v`).
+  Citar: "Bloomberg L.P., consultado el 2026-09-05, 2026-09-07 y 2026-09-16."
+  Data licenciada: NO redistribuible, NO publicar como dataset.
+  ENCUADRE (acta §E, no se negocia): volcado ÚNICO, capa congelada, jamás una
+  dependencia viva del pipeline. El cierre autoritativo sigue siendo la BVL.
+
+
+========================================================================
+1. LO QUE YA ESTÁ BAJADO — NO REPETIR
+========================================================================
+
+  grid_ul1wocu2.xlsx
+  hoja              contenido                                cobertura
+  ----------------  ---------------------------------------  ------------------
+  BASE              PX_BID, PX_ASK, PX_VOLUME, TURNOVER,     2011-01-03 a
+                    PX_LAST, PX_OPEN, PX_HIGH, PX_LOW         2026-09-04, 100%
+                    x 7 activos                               (INRETC1 desde
+                                                              2012-10-04, ok)
+                    AVERAGE_BID_ASK_SPREAD                    desde 2012-04-12
+                                                              (91.9%)
+  2.EQY_FLOAT       EQY_FLOAT, EQY_FREE_FLOAT_PCT,           diaria completa
+                    EQY_SH_OUT, CUR_MKT_CAP x 7
+  4. EQY_SH_OUT     EQY_SH_OUT mensual x 7                    188 meses
+  1. NUM_TRADES     NUM_TRADES x 7                            SOLO desde
+                                                              2014-10-01
+  Estaño/Hoja10/    LMSNDS03, LMCADS03, CL1, USDPEN           completas
+  Estaño 5
+
+  fundamentales.xlsx
+  hoja              contenido                                cobertura
+  ----------------  ---------------------------------------  ------------------
+  2. Fundamentales  IS_EPS, NET_INCOME, SALES_REV_TURN        2011-03-31 en
+                    trimestrales x 7                          adelante, ~62 trim.
+  Hoja2             MXNUPESE Index (PX_LAST)                  desde 2025-08-27
+                                                              (INSERVIBLE, ver §3)
+
+  EN CONSECUENCIA, DEL PLAN QUEDAN CERRADOS:
+    P0-1 volumen y monto diarios      CERRADO
+    P0-2 puntas bid/ask diarias       CERRADO — y con serie completa desde 2011,
+                                      así que NO hace falta el plan B de
+                                      Corwin-Schultz. El OHLC queda igual como
+                                      insumo de volatilidad Garman-Klass.
+    P0-3 OHLC real                    CERRADO
+    P0-4 flotante                     CERRADO en su parte numérica.
+                                      Free float de CREDITC1 = 2.66%: la premisa
+                                      central de la tesis YA TIENE FUENTE.
+                                      Falta solo la tabla de tenedores (HDS).
+    P1-3 EQY_SH_OUT                   CERRADO (falta DVD_HIST_ALL / CACS)
+
+
+========================================================================
+2. HALLAZGOS DE LA EXTRACCIÓN
+========================================================================
+
+2.1 EL DESFASE DE FECHAS DEL PANEL   *** CRÍTICO, YA REGISTRADO ***
+  Validar el panel contra este export destapó que data/interim/market_*.parquet
+  tiene las fechas corridas UN DÍA hacia adelante. Detalle completo en la
+  memoria del proyecto (project_bug_desfase_fechas_panel).
+  PARA LA PRÓXIMA SESIÓN: no se necesita bajar NADA más para arreglarlo. El
+  PX_LAST 2011-2026 de los 7 activos ya alcanza para corregir y revalidar.
+
+2.2 DÍAS FANTASMA EN EL EXPORT
+  Las filas de feriados peruanos REPITEN exacto la fila previa (se usó relleno
+  hacia adelante, contra la advertencia del plan §9 "NUNCA USAR Fill=P").
+  Son 142 días en 2012-2025 (3.9%). Se eliminan con un reindex al calendario de
+  la BVL. NO justifica re-extraer: se resuelve con CDR PE (pantalla, gratis).
+
+2.3 NUM_TRADES NO LLEGA A 2012
+  Arranca 2014-10-01 para los 7 por igual. Preguntar en FLDS si hay un campo
+  equivalente para 2012-2014; si no lo hay, se documenta el hueco.
+
+2.4 FUNDAMENTALES: TRIMESTRE DISCRETO, NO ACUMULADO
+  Los valores de Bloomberg NO son acumulados YTD (Alicorp 2011: 983.6 / 1048.4 /
+  1136.8 / 1086.8, no monótonos). La SMV sí entrega YTD. Homologar al reconciliar.
+  A REVISAR: LUSURC1 sale idéntico en 2011-09-30 y 2011-12-31 (74.96 / 459.85).
+  Puede ser real, pero huele a fila repetida.
+
+
+========================================================================
+3. ÍNDICE LOCAL — RESUELTO FUERA DEL TERMINAL (2026-09-07)
+========================================================================
+  EL TICKER ES:  SPBLPGPT Index
+                 S&P/BVL Peru General TOTAL RETURN PEN.
+                 Retorno total, en soles: es exactamente lo que pide P1-2.
+                 Sucesor del IGBVL.
+
+  POR QUÉ NO APARECÍA EN LA BÚSQUEDA "Peru" DEL TERMINAL:
+  la BVL CAMBIÓ DE PROVEEDOR DE ÍNDICES. MSCI reemplazó a S&P el 1-sep-2025
+  (el Selectivo, el 27-ago-2025). Los índices nuevos son MSCI nuam Peru General
+  y MSCI nuam Peru Select Capped 15%.
+
+  DESCARTADO — MSCI nuam Peru Select (MXNUPESE Index):
+  la Hoja2 de fundamentales.xlsx lo confirma empíricamente: primer dato
+  2025-08-27, 275 filas, nada antes. No hay historia ni real ni reconstruida.
+  Es dato para el registro, no una pérdida.
+
+  A FAVOR DE SPBLPGPT: la discontinuación cae al FINAL de la muestra, así que
+  debería cubrir 2012 a ago-2025, casi todo el horizonte.
+  PERO VERIFICAR CON HP DESDE 1/1/2010: S&P tomó el cálculo del IGBVL alrededor
+  de 2015 y la versión TR podría tener historia reconstruida. El primer dato
+  real es lo único que hay que mirar. Regla general y suficiente: todo dato
+  anterior a la fecha de lanzamiento es back-calculado por definición; se puede
+  usar, pero se DECLARA.
+
+  PENDIENTE BARATO EN CASA: ^SPBLPGPT aparece listado en Yahoo Finance. Si tiene
+  historia, el índice local sale GRATIS y esta línea del plan se jubila.
+  Probar con yfinance, que ya está en el proyecto. Bajarlo del terminal igual.
+
+  ETFPERUD (VanEck El Dorado Peru ETF, BVL, marzo 2021, en USD): replica al
+  S&P/BVL Perú Select. NO sirve para el horizonte completo, pero como baseline
+  invertible del tramo final es MÁS HONESTO QUE EPU: es local, cotiza en la BVL,
+  y no tiene ni el quiebre metodológico del 10-abr-2023 ni el problema del ~66%
+  de tenencias pure-play que el plan §7.1 ya le registró a EPU. Bajarlo.
+
+  OJO CON LA CIRCULARIDAD: cualquier índice Select se solapa fuerte con los 7
+  activos. Como BASELINE está perfecto (de eso se trata). Como REGRESOR sería
+  parcialmente circular — mismo reparo del plan §7.1 a EPU.
+
+
+========================================================================
+4. PENDIENTE PARA LA PRÓXIMA SESIÓN — EN ORDEN
+========================================================================
+
+  0. LAS PREGUNTAS DE §12 DEL PLAN — RESPONDIDAS 2026-09-16:
+     - Se puede volver cuando se quiera, sin tope de descarga. Ya no hace
+       falta priorizar por escasez de terminal: re-extraer es barato.
+     - La data se puede usar en la tesis (sigue sin publicarse como dataset).
+     - LQA está en la licencia. BEST_EPS también (campos BEST_ disponibles).
+
+  HALLAZGOS 2026-09-16 (sin terminal, revisando fundamentales.xlsx):
+     - CPACASC1 trae SOLO 15 trimestres (2011-Q1 a 2014-Q3; el BDH de la
+       columna T tiene rows=15). Pacasmayo NO tiene fundamentales 2014-Q4 en
+       adelante en este export. Re-extraer con Dts=S para ver qué devuelve.
+     - Solo el primer bloque se bajó con Dts=S; los otros 6 con Dts=H, o sea
+       que su fecha se ASUME alineada con la de Alicorp. Re-extraer con Dts=S
+       en todos.
+     - El export usó Per=M y NINGÚN override de FILING_STATUS.
+     - SPBLPADV Index NO es el índice: es "S&P/BVL Peru General Index
+       Advancers" (conteo de acciones que subieron; último valor 12). Huella
+       para reconocer el correcto: SPBLPGPT cerró 19,766.72 el 2017-12-01
+       (Yahoo; ^SPBLPGPT en Yahoo trae UNA sola fila, no sirve como fuente).
+
+  1. ÍNDICE LOCAL — lo más importante que falta.
+     =BDH("SPBLPGPT Index","PX_LAST,TOT_RETURN_INDEX_GROSS_DVDS",
+          "1/1/2012","12/31/2025","Days=W","Fill=#N/A")
+     Antes: HP <GO> desde 1/1/2010 y anotar el primer dato real.
+     TOT_RETURN_INDEX_GROSS_DVDS lo calcula Bloomberg sobre cualquier índice del
+     que tenga dividendos, así que sirve de verificación cruzada: si sale igual
+     a PX_LAST, el índice ya es TR; si sale por encima, la brecha anualizada
+     debe rondar el dividend yield del mercado (3-4%).
+     Bajar también ETFPERUD, y MEMB <GO> para los miembros históricos.
+
+  2. FUNDAMENTALES — COMPLETAR LO DEL 07-sep. Faltan las DOS piezas que eran el
+     motivo de P1-1, y las dos son baratas:
+     (a) EL PAR OR / MR. Lo bajado es una sola extracción (la reexpresada, por
+         defecto). El panel bitemporal es la DIFERENCIA; con una sola no hay
+         nada que restar. Repetir con el override:
+         =BDH("ALICORC1 PE Equity","IS_EPS,NET_INCOME,SALES_REV_TURN",
+              "1/1/2011","12/31/2025","Per=Q","FILING_STATUS=OR")
+     (b) FUNDAMENTAL_PUBLIC_DATE. Es el campo más valioso del P1: árbitro
+         INDEPENDIENTE DE LA SMV para el known_date de D20. Va como columna más.
+         Sumar la pantalla ERN si alcanza el tiempo.
+         CORRECCIÓN 2026-09-16 (en el terminal): FUNDAMENTAL_PUBLIC_DATE y
+         FUNDAMENTAL_DATABASE_DATE NO son campos, son OVERRIDES de IS_EPS etc.
+         (como FILING_STATUS): piden el dato "tal como estaba a esa fecha", no
+         devuelven la fecha. La fecha de anuncio hay que buscarla por otro lado
+         (FLDS "announcement": ANNOUNCEMENT_DT, EARN_ANN_DT_TIME_HIST_WITH_EPS
+         vía BDS, pantalla ERN) — nombres por confirmar en FLDS.
+       - Índice: buscando SPBLPG / IGBVL en el terminal solo aparecen
+         Advancers, Decliners y Total Volume. Pendiente probar el ticker exacto
+         por BDP/BDH en Excel (un índice discontinuado puede no salir en el
+         autocompletado y aun así tener historia).
+
+  3. PANTALLAS — no consumen presupuesto de BDH, lanzarlas mientras corre lo
+     anterior. Exportar cada una a su propia hoja.
+     [ ] CDR PE   calendario oficial de Lima. SUBIÓ DE PRIORIDAD: resuelve los
+                  días fantasma de §2.2 y saca a build_trading_calendar de su
+                  circularidad (que ES la distinción de D8).
+     [ ] DVD + CACS + =BDS(...,"DVD_HIST_ALL")   tercer árbitro del desfase de
+                  reconocimiento del BCP y de los eventos no-AL pendientes de R4.
+     [ ] HDS      tabla de tenedores. El % ya está; falta la tabla citable.
+     [ ] MEMB     sobre MSCI Peru (la familia de PAÍSES, no la de nuam: son
+                  índices distintos). Cierra H5.b, la ventana de reclasificación
+                  emergente a frontera del 14-ago-2015.
+     [ ] LQA      dos minutos para ver si está en la licencia. Si no, no insistir.
+     [ ] ECO      calendario macro de Perú con hora.
+
+  4. P2 SI SOBRA TIEMPO: CPAC US / BAP US con OHLCV+puntas (solo cierre del día
+     ANTERIOR, o es fuga); BEST_EPS / BEST_TARGET_PRICE; husmear FLDS por news
+     sentiment; preguntar por flujos de no residentes.
+
+  NO QUEMAR TIEMPO EN: índices externos (SPX, DXY, EEM, MCHI — gratis y mejores
+  como ETF), commodities (ya bajados), tarifario de las SAB, libro de órdenes,
+  intradía largo. Y no se necesita nada nuevo para el bug de fechas.
+
+
+========================================================================
+5. TRABAJO EN CASA — SIGUE PENDIENTE (plan §13)
+========================================================================
+  [ ] Arreglar el desfase de fechas y revalidar. TODO lo demás depende de esto:
+      cualquier resultado de OE1 con el panel actual está en cuarentena.
+  [ ] Volcar los Excel a parquet en data/raw/bloomberg/ con fecha en el nombre.
+  [ ] Reconciliación del volumen contra data/interim/bvl_mensual.parquet
+      (173 meses oficiales). NO SE CORRIÓ EN EL SITIO. Criterio pre-registrado
+      del plan §4.1: si el ratio no cae en [0.95, 1.05] en la mayoría de meses,
+      Bloomberg se declara parcial y NO se usa como cantidad negociada — igual
+      que Yahoo. Documentar en un hallazgos_bloomberg.txt con el mismo criterio
+      con que se validó Yahoo (probe_yahoo_confiabilidad.py).
+  [ ] Reconciliar el spread contra el snapshot BVL del 27-jul-2026. Si se
+      preserva el ORDEN (ALICORC1 0.08% < INRETC1 0.13% < MINSURI1 0.14% <
+      CPACASC1 0.63% < FERREYC1 0.70% < CREDITC1 1.65% < LUSURC1 2.20%), la
+      serie histórica hereda credibilidad.
+  [ ] Si el spread pasa: recalcular el c* por bisección CON LA SERIE, no con el
+      snapshot. Es el resultado central de D7.
+  [ ] Si el volumen pasa: rehacer ejecutabilidad §6.3-6.4 con datos diarios y
+      anotar la mitigación en riesgos (convención: se anota, no se borra).
+  [ ] Anotar en inconsistencias_documento_vs_implementacion.txt la entrada sobre
+      justificacion_cierre_vs_ohlcv.txt: el argumento pasa de "no hay OHLCV" a
+      "existe y decidimos qué hacer con él" (plan §4.3).
+  [ ] Probar ^SPBLPGPT en yfinance (§3).
+  [ ] Actualizar la sección E del acta con lo conseguido y lo que no.
+
+
+========================================================================
+6. SESIÓN 2026-09-16 — REVISIÓN DE data-or-mr.xlsx
+========================================================================
+
+6.1 ÍNDICE LOCAL — CONSEGUIDO (hoja indiceper)
+  SPBLPGPT Index ("S&P/BVL Peru General TR PEN"): diario 2011-01-03 a
+  2025-08-29, 3,680 obs. Termina donde S&P dejó de calcularlo (MSCI desde
+  1-sep-2025). Sin nulos, sin fines de semana, SIN días repetidos (esta vez no
+  hubo relleno hacia adelante).
+  Controles:
+  - Huella: 19,766.72 el 2017-12-01, idéntico a Yahoo. Es el índice correcto.
+  - Calendario: 3,428 días vs 3,429 del panel en 2012-01-02..2025-08-29.
+    Solo índice: 2018-01-15. Solo panel: 2018-01-01 y 2025-01-01 (Año Nuevo
+    en el PANEL: revisar qué activo aporta esas filas).
+  - Fechas: corr(retorno índice, retorno 1/N de los 7) = 0.62 contemporánea,
+    0.19 con t-1 y 0.09 con t+1. Sin desfase.
+  - IGBVL Index (misma hoja) solo llega a 2015-04-30 y coincide con SPBLPGPT
+    en el 99.7% de los días de 2011-01..2015-04 (3 diferencias chicas). O sea:
+    ANTES DE MAYO-2015 SPBLPGPT ES LA SERIE DEL IGBVL EMPALMADA.
+  PENDIENTE: confirmar que el tramo IGBVL (2011-2015) ya sea de retorno total.
+  Con esta hoja NO se puede. Bajar TOT_RETURN_INDEX_GROSS_DVDS del mismo
+  ticker o la versión de precio, y declarar el empalme en la tesis.
+
+6.2 FUNDAMENTALES OR / MR — CONSEGUIDO, CON UN BLOQUE DESALINEADO
+  Hoja MR: FILING_STATUS=MR + override FUNDAMENTAL_DATABASE_DATE=20260916.
+  Hoja OR: FILING_STATUS=OR. 7 activos x 62 trimestres (INRETC1 56).
+  - El export del 07-sep ERA la versión MR: coincide al 100% con la hoja MR
+    en 6 de 7 activos. Queda confirmado cuál era el default.
+  - PACASMAYO: el bloque CPACASC1 del 07-sep (15 filas) NO era Pacasmayo
+    (ventas ~1,000-2,100 MM, coincidencia 0%). La hoja MR sí trae los 62
+    trimestres con ventas ~230-320 MM, consistentes con la empresa. Descartar
+    el bloque viejo.
+  - *** LUSURC1 OR ESTÁ DESFASADO desde 2020-12-31 ***. Otra vez Dts=H: una
+    sola columna de fechas. A OR le falta un trimestre (61 vs 62) y todo lo
+    posterior sube una fila (el valor en 2020-12-31 es el MR de 2021-03-31, y
+    así hasta el final). Re-bajar LUSURC1 OR con Dts=S. Hasta entonces, el
+    tramo 2020-12..2026-06 de LUSURC1 OR es INSERVIBLE.
+  - Diferencias OR vs MR (celdas, sin contar el desfase de LUSURC1):
+    ALICORC1 54, MINSURI1 46, FERREYC1 35, INRETC1 20, CPACASC1 12, CREDITC1 8.
+    Repartidas en todos los años, no solo 2017-2019. Hay reexpresiones grandes
+    (Minsur ventas 2014 -27% a -31%, 2023-T4 -40%; Alicorp utilidad 2013-T4
+    -27%, ventas 2021 reclasificadas). Es la señal que se buscaba.
+  - OJO IS_EPS: hay valores raros (MINSURI1 2013-09 OR 3.429 vs MR 0.067;
+    CPACASC1 repite 0.1003 en trimestres con utilidades distintas). Para el
+    panel, preferir NET_INCOME / acciones antes que IS_EPS.
+  - La fecha de anuncio sigue sin bajarse (ver §4, punto 2b).
