@@ -296,6 +296,10 @@ RESUMEN OPERATIVO
   BLOQUEANTE PARA R8: el punto 3. Mientras las vistas mezclen macro con los
   otros canales, la ablación es INATRIBUIBLE y no debe correrse.
   >> LEVANTADO EL 2026-09-12 (vistas separadas en src/env/features.py).
+  >> PERO OJO (18-sep): la ablacion corrida cubre los CUATRO BRAZOS DE
+     ATRIBUCION, no la "COMBINACION COMPLETA" que pide el texto de R8.
+     `completa` nunca se ha corrido con un agente. La entrada 3 esta resuelta
+     en su parte de CODIGO; el requisito de R8 NO esta cubierto todavia.
 
   ESTADO AL 2026-09-18: de las nueve entradas, 3 están RESUELTAS (3, 7, 8) y
   las 6 restantes son de DOCUMENTO o de DECISIÓN, ninguna de código. Para

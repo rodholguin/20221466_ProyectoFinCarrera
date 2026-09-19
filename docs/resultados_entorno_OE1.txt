@@ -911,6 +911,15 @@ costos funciona, el peso medio del agente ahi debe tender a cero.
 36 corridas: 4 vistas x 3 pliegues x 3 semillas, 150k pasos, sobre
 VALIDACION. `scripts/ablacion_r8.py`. EL TRAMO DE PRUEBA SIGUE VIRGEN.
 
+  >> AVISO DE ALCANCE, Y CORRIGE COMO SE TITULO ESTA SECCION: lo que se
+     corrio son los CUATRO BRAZOS DE ATRIBUCION (`VISTAS_ABLACION`), que
+     sustituyen `completa` por `mercado_macro`. Eso fue deliberado —macro no
+     existia cuando se escribio el E3 y hacia falta un brazo limpio para el—
+     pero NO reemplaza a la cuarta configuracion que exige el documento.
+     R8 pide "solo mercado; mercado + sentimiento; mercado + fundamentales;
+     COMBINACION COMPLETA", y `completa` NUNCA SE HA CORRIDO.
+     **R8 SIGUE INCOMPLETO.** Ver 7.10.
+
 DOS COSAS QUE HUBO QUE ARREGLAR ANTES DE PODER CORRERLA, y las dos eran
 defectos propios: las vistas mezclaban macro (resuelto el 12-sep) y la
 sorpresa fundamental entraba sin winsorizar (D27, resuelto el 18-sep).
@@ -1015,6 +1024,49 @@ cite: NO se cierra D11 (el criterio de abandono del canal de sentimiento).
 El sentimiento tiene la mayor mejora de Sharpe Y el peor drawdown Y el
 mayor costo Y es el único que empeora contra el 1/N. A tres semillas eso
 no es un veredicto, es un empate ruidoso.
+
+------------------------------------------------------------------------
+7.10 LO QUE FALTA DE R8: LAS SENIALES CRUZADAS
+------------------------------------------------------------------------
+De las OCHO vistas definidas en src/env/features.py, solo se han corrido
+CUATRO. Las que faltan son todas las COMBINADAS:
+
+  vista                          tipo             corridas
+  solo_mercado                   brazo limpio         80
+  mercado_macro                  brazo limpio          9
+  mercado_sentimiento            brazo limpio          9
+  mercado_fundamentales          brazo limpio          9
+  mercado_macro_sentimiento      combinada         NUNCA
+  mercado_macro_fundamentales    combinada         NUNCA
+  completa                       combinada         NUNCA   <- LA EXIGE EL E3
+  mercado_sentimiento_18         combinada         NUNCA
+
+SON DOS PREGUNTAS DISTINTAS Y HACEN FALTA LAS DOS. Los brazos limpios
+contestan "cuanto aporta cada canal POR SEPARADO". Las combinadas contestan
+"se COMPLEMENTAN o son redundantes": si `completa` supera la SUMA de los
+aportes individuales, los canales se complementan; si no los alcanza, se
+estorban entre si.
+
+HAY UNA PREDICCION FALSABLE, y sale de lo medido en 7.7 y 7.9: los tres
+canales empujan al agente a OPERAR MAS (el sentimiento sube la rotacion 40%;
+macro es el unico que la baja). Si eso se acumula, `completa` deberia rotar
+todavia mas y pagar mas peaje — o sea PEOR, no mejor, que es exactamente el
+mecanismo que 7.9 identifico como causa del deterioro. Segundo motivo para
+esperar que le cueste: `completa` tiene 381 dimensiones de observacion contra
+87 de la base, con una red de 64x64 y ~3,300 dias de UNA sola trayectoria.
+Si sale al reves —si supera a la suma— es un hallazgo fuerte: diria que la
+informacion esta en la INTERACCION y no en los canales sueltos.
+
+COSTO:
+  solo `completa` (lo que exige el documento)   9 corridas   ~25 min   3 configs
+  + las dos parejas (descompone interaccion)   27 corridas   ~70 min   9 configs
+
+`mercado_sentimiento_18` NO entra por ahora: D15(c) dice que esa resolucion
+de 18 columnas se compra SOLO si el canal de 9 muestra senial, y hoy el
+sentimiento esta ambiguo (la mayor mejora de Sharpe, pero el peor drawdown y
+el unico brazo que empeora contra el 1/N). Correrlo ahora seria saltarse su
+propia condicion.
+
 
 ------------------------------------------------------------------------
 7.8 LO QUE HAY QUE PRE-REGISTRAR ANTES DE LA CORRIDA DEFINITIVA
@@ -1220,6 +1272,13 @@ BLOQUEANTES DE LA CORRIDA DEFINITIVA (no del codigo ni del MVP):
          correr. De las nueve inconsistencias con el documento, las tres de
          CODIGO estan cerradas; las seis restantes son de documento o de
          decision.
+
+  [ABIERTO, Y ES REQUISITO DEL DOCUMENTO] LAS VISTAS CRUZADAS DE R8. Se
+      corrieron los cuatro brazos de ATRIBUCION, no la "combinacion completa"
+      que exige el E3. `completa`, `mercado_macro_sentimiento` y
+      `mercado_macro_fundamentales` NUNCA se han corrido con un agente.
+      R8 NO ESTA ACREDITADO hasta que `completa` corra. Cuesta 9 corridas y
+      ~25 min. Ver 7.10.
 
 TRABAJO DE PANEL YA DECIDIDO Y NO IMPLEMENTADO:
 
