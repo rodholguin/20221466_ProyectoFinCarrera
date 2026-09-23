@@ -96,3 +96,11 @@ data/interim/_respaldo_pre_fix_fecha/
 # Archivos de bloqueo de Office (se crean al abrir un .pptx/.docx y desaparecen
 # al cerrarlo). Nunca deben commitearse.
 ~$*
+
+# Salidas regenerables de los generadores de entregables (scripts/entregables).
+# Las figuras se rehacen con figuras.py / figuras2.py / figppt.py en segundos;
+# los .docx y .pptx SI se versionan porque son los entregables presentados.
+scripts/entregables/fig/
+scripts/entregables/figppt/
+scripts/entregables/node_modules/
+scripts/entregables/package*.json

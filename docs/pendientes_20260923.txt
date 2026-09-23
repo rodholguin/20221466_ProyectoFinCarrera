@@ -1,0 +1,171 @@
+PENDIENTES ANOTADOS EL 2026-09-22, PARA RETOMAR EL 2026-09-23
+Tesis: Aprendizaje por refuerzo profundo aplicado a la Bolsa de Valores de Lima
+Autor: Rodrigo Holguin — Asesor: Dr. E. Villanueva
+========================================================================
+
+CONTEXTO: el 2026-09-22 se presentó el avance de OE1 a OE3 ante los profesores
+de tesis. La devolución fue positiva ("un gran avance"). Este documento anota
+lo que quedó pendiente al cerrar esa sesión. NADA de lo de abajo está hecho.
+
+
+========================================================================
+1. CORRECCIONES DE DOCUMENTACIÓN — SON LO PRIMERO, Y SON BARATAS
+------------------------------------------------------------------------
+Las tres salieron de verificar afirmaciones del propio proyecto contra los
+datos. Las tres están corregidas en el Word de avance y NO en los .txt del
+repo, que es de donde se copian las cifras al documento final de tesis. Si no
+se corrigen acá, vuelven a propagarse.
+
+1.1 "EL MEJOR AÑO DE LA DÉCADA" ES FALSO. Afecta a
+    docs/resultados_entorno_OE1.txt §6.1 y §7.4, que afirman que la validación
+    del pliegue 0 resultó ser el mejor año de la década para la BVL.
+
+    LO MEDIDO (índice equiponderado de los 7 activos, bruto, sin costos):
+      pliegue 0 val  2018-11-22..2019-11-21   ret +14.2%  vol 11.1%  maxDD  -9.9%
+      pliegue 1 val  2020-11-19..2021-11-22   ret  -5.8%  vol 26.5%  maxDD -41.9%
+      pliegue 2 val  2022-11-22..2023-11-21   ret  -5.4%  vol  9.4%  maxDD -10.2%
+
+      El tramo del pliegue 0 está en el PERCENTIL 81 de todas las ventanas de
+      252 días entre 2013 y 2025. NO es el máximo: la mejor ventana del periodo
+      rinde +69.9% y termina el 2017-02-03; por año calendario, 2016 dio +53.3%
+      y 2017 +20.2% contra +13.3% de 2019.
+
+    REDACCIÓN CORRECTA: "es el tramo más favorable de los SEIS que produce la
+    partición", no "el mejor año de la década". La afirmación original
+    comparaba solo los seis tramos de los pliegues y se generalizó sin medirla.
+
+1.2 EL BARRIDO DE λ ES DISCRETO. docs/resultados_entorno_OE1.txt §7.12 concluye
+    "NO EXISTE λ QUE CUMPLA LAS DOS, EN NINGUNA DE LAS DOS FORMAS". Lo que el
+    barrido respalda es "ningún valor PROBADO cumple las dos": la grilla salta
+    de λ=0.51 (riesgo 16.8%, T1 sí) a λ=1.02 (riesgo 28.8%, T1 no) en
+    logret_dd, y entre esos dos puntos hay un tramo sin explorar donde podría
+    haber un λ que pase ambos umbrales.
+
+    DOS OPCIONES: (a) suavizar la redacción a "ningún valor probado"; o
+    (b) correr el barrido fino entre 0.51 y 1.02 y zanjarlo. (b) no cuesta
+    corridas de entrenamiento —el tamiz no entrena— así que es barato.
+
+1.3 LA CARACTERIZACIÓN DE LOS PLIEGUES NO ESTÁ DOCUMENTADA. Las etiquetas
+    "año alcista / pandemia y elecciones / año bajista" que usan el Word y la
+    presentación se apoyan en las cifras de 1.1, medidas sobre nuestro propio
+    universo. Conviene dejarlas escritas en resultados_entorno_OE1.txt §6, y
+    declarar explícitamente que la clasificación es MEDIDA SOBRE EL PANEL y no
+    tomada de un índice externo — porque el índice local de retorno total
+    (SPBLPGPT) sigue siendo un pendiente de D10.
+
+
+========================================================================
+2. VERSIONADO — HAY 1,185 LÍNEAS SIN COMMITEAR DESDE EL 19-SEP
+------------------------------------------------------------------------
+Último commit: 22f9cd1, del 2026-09-18. Rama: feat/oe1-r8-markowitz-d25.
+
+MODIFICADO Y SIN COMMITEAR:
+  docs/resultados_entorno_OE1.txt        +505  §7.11 a §7.15 (diagnóstico de la
+                                               recompensa, tamiz, `completa`,
+                                               brazos de D4)
+  docs/decisiones_pendientes_OE1.txt     +177  D4 reabierta, D29 nueva
+  docs/estado_extraccion_bloomberg.txt   +169  cierre de A1, fechas de anuncio
+  src/env/rewards.py                     +212  3 recompensas nuevas, guardas λ/κ
+  docs/ejecutabilidad_y_costos_OE1.txt    +41
+  scripts/ablacion_r8.py                  +36  flag --out
+  docs/riesgos_transversales_datos.txt    +24
+  data/interim/registro_configuraciones.jsonl +27  BITÁCORA DE D10 (append-only:
+                                               sostiene el Sharpe deflactado)
+  docs/inconsistencias_documento_vs_implementacion.txt +6
+  src/env/portfolio_env.py                 +5
+
+SIN RASTREAR:
+  scripts/d4_tamiz_recompensas.py · scripts/d4_diagnostico_recompensas.py
+  scripts/corre_d4_brazos.cmd · tests/test_rewards_d4.py (15 tests)
+  docs/checklist_bloomberg_20260919.txt
+  docs/informe_avance_OE1_OE3.docx · docs/avance_tesis_OE1_OE3.pptx
+  scripts/entregables/  (ver sección 3)
+
+SUGERENCIA: tres commits separados, como está organizado el historial —
+OE1 (código y tests) · Bloomberg (docs) · entregables de avance.
+
+LIMPIEZA PENDIENTE: en la raíz del repo quedaron a1.xlsx, a2.docx y a2_eco.xlsx,
+que son copias de lo ya archivado con nombre y fecha en data/raw/bloomberg/.
+Decidir si se borran.
+
+
+========================================================================
+3. LO QUE SÍ SE GUARDÓ HOY (para que no se pierda)
+------------------------------------------------------------------------
+Los generadores del Word y de la presentación vivían solo en un directorio
+temporal de sesión. Se movieron al repo:
+
+  scripts/entregables/figuras.py      4 figuras del Word
+  scripts/entregables/figuras2.py     6 figuras más (curva de aprendizaje,
+                                      patrimonio, pesos, mapa de calor,
+                                      frontera de recompensas)
+  scripts/entregables/figppt.py       versión con tipografía grande
+  scripts/entregables/informe.js      genera el .docx (21 páginas)
+  scripts/entregables/deck.js         genera el .pptx (15 láminas)
+  scripts/entregables/README.md       cómo regenerar y qué NO tocar
+
+VERIFICADO: los cinco corren desde la nueva ubicación y reproducen los dos
+documentos (se generaron copias de prueba y se borraron).
+
+AVISO QUE ESTÁ EN EL README Y CONVIENE REPETIR ACÁ: la PPT de docs/ es la
+versión PRESENTADA y editada a mano por el autor (17 láminas: +3 de
+planteamiento al inicio, -1 de los dos defectos propios). deck.js genera las 15
+originales, así que correrlo contra esa ruta PISA esas ediciones.
+
+
+========================================================================
+4. DECISIONES DEL AUTOR QUE BLOQUEAN LA CORRIDA DEFINITIVA
+------------------------------------------------------------------------
+Ninguna necesita cómputo. Todas tienen que estar PRE-REGISTRADAS antes de
+tocar el tramo de prueba. Detalle en docs/decisiones_pendientes_OE1.txt.
+
+  D4 (reabierta)  qué recompensa se usa. El tamiz reprobó a las seis
+                  candidatas y los brazos corridos mostraron que el tamiz NO
+                  predice el desempeño. La opción más defendible es quedarse
+                  con el DSR y reportar el tamiz como resultado negativo.
+  D29 (nueva)     si el tamiz es vinculante o solo caracteriza.
+  D25             presupuesto de pasos: la meseta dice 750k y la evidencia
+                  fuera de muestra dice 150k. Falta pre-registrar la parada
+                  temprana por rotación medida sobre train.
+  D23             ventana expanding (implementada) o rolling. La medición no
+                  respalda rolling, pero la elección hay que pre-registrarla.
+  D24             condición inicial del episodio: arrancar en caja o en 1/N.
+  D26             parámetros de Markowitz.
+  PACASMAYO       cómo se trata el salto de +61% del 2025-12-17, que cae DENTRO
+                  del test del pliegue 2. Decidirlo ANTES de mirar ese tramo.
+  REGLA DE LECTURA  con exceso negativo el Sharpe premia la volatilidad. Fijar
+                  por escrito el desempate entre Sharpe, retorno y caída.
+
+
+========================================================================
+5. TRABAJO DE CÓDIGO PENDIENTE
+------------------------------------------------------------------------
+5.1 ENTRENAR SAC Y DDPG. Es lo único que hoy aparece incompleto frente al
+    documento de tesis: R7 compromete PPO, DDPG y SAC, y las 134 corridas
+    registradas son TODAS PPO. D3 decidió PPO primario y SAC como robustez;
+    la inconsistencia #2 con el documento sigue abierta.
+
+5.2 EL RECARGO POR `is_stale` VALE CERO EN TODAS LAS CORRIDAS.
+    CostModel.stale_surcharge_bps existe con default 0.0 y
+    snapshot_cost_model() se llama sin argumentos en todos los scripts. O sea
+    D8 dice que el precio arrastrado ENCARECE y en los hechos no encarece nada.
+    Calibrarlo y activarlo, o enmendar D8. Van TRES sesiones con esto anotado.
+
+5.3 ENGANCHAR LOS SPREADS HISTÓRICOS DE BLOOMBERG AL MODELO DE COSTOS.
+    half_spread_bps ya acepta una matriz (T, n): se cambia el argumento. Falta
+    el xlsx -> parquet, los 142 días fantasma y la reconciliación
+    pre-registrada. Es refuerzo del modelo de costos, no un bloqueante.
+
+
+========================================================================
+6. LA CORRIDA DEFINITIVA — SOLO DESPUÉS DE CONGELAR EL PRE-REGISTRO
+------------------------------------------------------------------------
+  - 10 semillas en vez de 3. Con 3, la dispersión DENTRO de una celda es diez
+    veces la diferencia ENTRE brazos (§7.7).
+  - Los 3 pliegues, corridos seguidos, sin mirar resultados intermedios.
+  - Sobre el tramo de prueba, UNA sola vez. Hoy el registro marca con_test = 0.
+  - Después: Sharpe deflactado, intervalos por semillas (no por pliegues, que
+    no son independientes) y comparación contra la banda nula.
+
+QUEDA PARA EL FINAL: índice local de retorno total (baseline de mercado de D10,
+hoy inexistente), tarifario primario de la SAB y P/B.
