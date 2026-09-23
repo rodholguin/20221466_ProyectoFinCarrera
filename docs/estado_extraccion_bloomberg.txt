@@ -1,5 +1,5 @@
 ESTADO DE LA EXTRACCIÓN — TERMINAL BLOOMBERG
-Actualizado: 2026-09-16. Sesiones realizadas: 2026-09-05 y 2026-09-07.
+Actualizado: 2026-09-19. Sesiones: 2026-09-05, 09-07, 09-16 y 09-19.
 Acompaña a: docs/plan_extraccion_bloomberg.txt (el PLAN; este es el RESULTADO).
 Convención del proyecto: se registra lo que se consiguió y lo que no, no solo
 lo que se pensaba hacer.
@@ -282,3 +282,170 @@ ARCHIVOS Y PROCEDENCIA
     CPACASC1 repite 0.1003 en trimestres con utilidades distintas). Para el
     panel, preferir NET_INCOME / acciones antes que IS_EPS.
   - La fecha de anuncio sigue sin bajarse (ver §4, punto 2b).
+
+========================================================================
+7. SESIÓN 2026-09-19 — FECHAS DE ANUNCIO, TENEDORES Y CALENDARIO MACRO
+========================================================================
+Archivos: data/raw/bloomberg/ern_evts_20260919.xlsx (14 hojas: ERN y EVTS de
+los 7) · a2_eco.xlsx (hoja ECO) · a2.docx (10 capturas: CDR, HDS x7, MSCI).
+La sesión terminó por límite de tiempo de terminal, no por haber acabado.
+
+7.1 A1 CERRADO — LA FECHA DE ANUNCIO, QUE ERA LO IRREEMPLAZABLE
+------------------------------------------------------------------------
+NO SE CONSIGUIÓ POR DONDE SE BUSCABA. `ANNOUNCEMENT_DT` por BDP, por BDH y
+`EARN_ANN_DT_TIME_HIST_WITH_EPS` por BDS devuelven los tres `#N/A Review`.
+Queda registrado: para la BVL esos campos de Excel no tienen cobertura.
+
+SE CONSIGUIÓ POR PANTALLA. `EVTS <GO>` exporta el calendario de eventos por
+emisor y ahí SÍ está, con más historia que ERN:
+
+  hoja            ER confirmados  desde        huecos 2011-25  ERN los tapa
+  EVTS_ALICORC1         62        2011-02-14        2              2/2
+  EVTS_CREDITC1         62        2011-01-27        1              1/1
+  EVTS_MINSURI1         63        2011-03-01        0              --
+  EVTS_LUSURC1          59        2011-02-25        7              7/7
+  EVTS_INRETC1          56        2012-10-30        2   (pre-IPO, no son huecos)
+  EVTS_FERREYC1         62        2011-02-11        3              3/3
+  EVTS_CPACAS           64        2011-02-11        0              --
+
+  >> COBERTURA EFECTIVAMENTE COMPLETA. EVTS cubre 2011-2026 y ERN (que solo
+     llega a 2015-Q3) tapa exactamente los huecos que EVTS deja. Los 2 de
+     InRetail no son huecos: salió a bolsa en octubre de 2012.
+
+  428 earnings release en total, más de regalo: 214 earnings calls, 76 fechas
+  ex-dividendo, 61 juntas y 5 operaciones de M&A.
+
+7.2 LAS HORAS DE EVTS NO SON UTILIZABLES. MEDIDO, NO SUPUESTO
+------------------------------------------------------------------------
+Se cruzaron los 60 anuncios de Alicorp contra sus Hechos de Importancia de la
+BVL, que traen `registerDate` CON HORA. Hay tres regímenes distintos:
+
+  2011-2016  horas REDONDAS repetidas trimestre tras trimestre (11:00, 12:00,
+             y desde 2014 siempre 17:00). Son RELLENO, no dato.
+  2018-2020  horas irregulares que coinciden con la BVL a ±18 minutos en 5 de
+             6 casos. ESAS son reales y están EN HORA DE LIMA, no en UTC (si
+             fueran UTC la diferencia sería ~300 min y constante).
+  2021-2025  horas de madrugada que caen 5 a 34 horas DESPUÉS del hecho de la
+             BVL. Es la hora en que BLOOMBERG CAPTURÓ la noticia, no la del
+             emisor — y al caer de madrugada CORRE LA FECHA uno o dos días.
+
+  >> NO USAR NI LA HORA NI LA FECHA DE BLOOMBERG PARA `known_date`. La BVL es
+     la fuente autoritativa y Bloomberg llega después por construcción. El
+     valor de EVTS es CONFIRMAR que el anuncio ocurrió, no fecharlo.
+
+  >> ECO SÍ ESTÁ EN HORA DE LIMA: las decisiones de tasa del BCRP salen a las
+     18:00, que es la hora oficial de anuncio. Ancla independiente.
+
+7.3 EL CRUCE CONTRA LA BVL — LA AUDITORÍA QUE A1 BUSCABA
+------------------------------------------------------------------------
+  hoja            ER 2012-25   con hecho BVL a <= 1 día
+  EVTS_INRETC1        53            51  (96%)
+  EVTS_LUSURC1        49            41  (84%)
+  EVTS_CPACAS         56            47  (84%)
+  EVTS_ALICORC1       55            42  (76%)
+  EVTS_MINSURI1       56            41  (73%)
+  EVTS_FERREYC1       53            36  (68%)
+  EVTS_CREDITC1       55            34  (62%)
+
+  El filtro de códigos de la BVL es ESTRECHO a propósito (solo "Aprobación de
+  la Información Financiera"). Ampliarlo es trabajo en casa y debería subir el
+  62-84%. Con lo que hay, entre dos tercios y la totalidad de los anuncios
+  quedan confirmados por dos fuentes independientes.
+
+7.4 FREE FLOAT — HDS CORRIGE UN NÚMERO QUE LA TESIS CITA
+------------------------------------------------------------------------
+  activo      float HDS   tenedor principal
+  ALICORC1      32.74%    Grupo Romero 67.26%
+  CREDITC1       2.26%    Credicorp 97.74%
+  LUSURC1        2.86%    China Yangtze Power 97.14%
+  CPACASC1      49.99%    Inversiones Pacasmayo 50.01%
+
+  *** LA TESIS CITA 2.66% DE FREE FLOAT PARA EL BCP. ESE ES EL VALOR DEL
+      2011-01-03, el primer día de la serie. Hoy es 2.26% y el rango histórico
+      va de 1.93% a 21.70%. El número no está mal: está mal CITADO. Hay que
+      ponerle fecha o, mejor, usar la serie. ***
+
+  Y EL FLOAT NO ES ESTÁTICO EN NINGUNO:
+      ALICORC1  54.98 -> 32.74      CPACASC1  32.53 -> 49.99
+      CREDITC1   2.66 ->  2.26      LUSURC1   25.99 ->  2.86  (OPA de 2019)
+      MINSURI1 100.00 -> 100.00     INRETC1  100.00 -> 42.60
+  El análisis de capacidad usa un valor fijo. Con Luz del Sur cayendo de 26% a
+  2.9% a mitad del horizonte, hay que rehacerlo con la serie.
+
+  LO QUE HDS AGREGA Y LA SERIE NO: en Pacasmayo el float NOMINAL es 49.99%
+  pero ~14% está en AFPs (Integra 6.77%, Prima 6.83%, Profuturo 0.49%), que no
+  rotan. El float EFECTIVO es bastante menor que el nominal en todo el
+  universo, y eso agrava la restricción de capacidad.
+
+  DATO CRUDO QUE VALE UNA SECCIÓN: Luz del Sur negoció el 18-sep 1,064
+  acciones, S/13,830 EN TODO EL DÍA. La posición 1/7 de la cartera son S/257k:
+  18 días del volumen completo del mercado en ese papel.
+
+7.5 ECO — CALENDARIO MACRO CON SORPRESAS. EL HALLAZGO INESPERADO
+------------------------------------------------------------------------
+  2,471 eventos de Perú, 2011-01-01 a 2026-09-25, CON HORA, y con consenso
+  (`Encues(M)`) y dato efectivo. 935 EVENTOS CON SORPRESA CALCULABLE:
+
+      Tipo referencial (BCRP)      188 sorpresas
+      Actividad económica YoY      186
+      IPC Lima MoM                 183
+      IPC Lima YoY                 179
+      Tasa de desempleo de Lima    140
+      PIB YoY                       59
+
+  POR QUÉ IMPORTA: el canal macro del panel son NIVELES (TC, EMBI, cobre). La
+  SORPRESA es la parte que es noticia. Y R8 midió que macro es el único canal
+  que CALMA al agente (baja la rotación 0.39 y el costo S/9,125).
+  NO SE ADOPTA POR AHORA: agregar una familia de features después de correr R8
+  es una decisión, no un regalo, y tiene que pasar por el mismo tamiz que
+  eliminó al oro y rechazó al estaño (probe_macro_exposicion.py).
+
+7.6 LO QUE NO SALIÓ
+------------------------------------------------------------------------
+  [ ] A2 — el par OR/MR con Dts=S. SE AMPLÍA EL ALCANCE: se midió que el
+      export del 16-sep usó `Dts=H` en LAS DOS hojas (OR y MR), no solo en
+      OR. Solo LUSURC1 quedó desalineado (22 de 62 trimestres casan CORRIDOS
+      contra 0-1 de los demás), pero los otros seis salieron bien POR SUERTE:
+      basta que a uno le falte un trimestre para que se corra en silencio.
+      >> REBAJAR LOS 7, EN OR Y EN MR, UNA FÓRMULA POR TICKER.
+  [ ] A3 — SPBLPGPT con TOT_RETURN_INDEX_GROSS_DVDS.
+  [ ] CDR PE — salió SOLO 2026, y el horizonte es 2012-2025. Inservible.
+      Alternativa: los feriados peruanos son públicos y se reconstruyen en
+      casa; lo que Bloomberg aportaba era el calendario de LIQUIDACIÓN.
+  [ ] MEMB — lo que se exportó fue el BUSCADOR de tickers, no la lista de
+      miembros. Para el MEMB real hay que entrar a `MXPE Index` y correrlo ahí.
+  [ ] LQA — no se llegó. Parámetros ya definidos (ver 7.7).
+
+  EL ADD-IN DE EXCEL SE CAYÓ a media sesión: `=BDP("ALICORC1 PE Equity","NAME")`
+  dejó de responder. No se recuperó. Para la próxima: revisar primero que el
+  TERMINAL siga logueado (se desloguea por inactividad) y `DAPI <GO>`, que es
+  la pantalla que gobierna el add-in y tiene opción de reparar.
+
+7.7 TICKERS NUEVOS IDENTIFICADOS, PARA LA PRÓXIMA
+------------------------------------------------------------------------
+  M7PE Index    MSCI Peru Net PEN — índice de Perú EN SOLES, retorno neto, de
+                un proveedor DISTINTO al de SPBLPGPT. Si tiene historia a 2011
+                resuelve A3 por otra vía: si coincide con SPBLPGPT en
+                2011-2015, el empalme del IGBVL es de retorno total; si
+                diverge ~3-4% anual, no lo es.
+  MXPE Index    MSCI Peru Index. Es sobre este que hay que correr MEMB.
+  M1PE Index    MSCI Peru Net Total Return USD.
+
+  LQA — PARÁMETROS YA DEFINIDOS:
+    volumen de liquidación   CREDITC1 45,918 acc (S/257k = 1/7 de la cartera)
+                             y 321,429 acc (S/1.8 MM, todo en un activo)
+                             LUSURC1 21,251 acc (el peor spread)
+    horizonte objetivo       1 DÍA — el entorno rebalancea diario y ejecuta
+                             en t+1; es la prueba correcta, no una pesimista
+    costo objetivo           vacío (son modos excluyentes; queremos el costo)
+    volumen / volatilidad / bid-ask   DEFAULT de Bloomberg, y anotar lo que
+                             muestre: si se sobreescriben con los nuestros el
+                             ejercicio no valida nada
+    confianza                95%
+    desde                    12 meses (un trimestre puede caer en racha rara)
+
+  LA REFERENCIA CONTRA LA QUE SE COMPARA (costo de ida del simulador hoy):
+    ALICORC1 55.5 · CREDITC1 134.0 · FERREYC1 86.5 · INRETC1 58.0 ·
+    LUSURC1 161.5 · MINSURI1 58.5 · CPACASC1 83.0   (pbs)
+  Si LQA dice que liquidar S/257k de CREDITC1 en un día cuesta MÁS de 134 pbs,
+  el simulador está subestimando el costo.

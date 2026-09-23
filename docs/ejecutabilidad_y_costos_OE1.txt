@@ -357,6 +357,47 @@ meses del horizonte. Calendario: mediana de 21 sesiones/mes.
 
 
 ========================================================================
+6.1 EL FLOTANTE NO ES UNA CONSTANTE — MEDIDO EL 2026-09-19
+========================================================================
+Todo el cuadro de capacidad de arriba trata al flotante como un numero fijo.
+La serie EQY_FREE_FLOAT_PCT de Bloomberg (2011-2026, ya bajada en
+grid_ul1wocu2.xlsx) dice que no lo es:
+
+    activo      2011-01-03   2026-09-04     minimo     maximo
+    ALICORC1        54.98       32.74        32.74      88.96
+    CREDITC1         2.66        2.26         1.93      21.70
+    CPACASC1        32.53       49.99        32.53     100.00
+    LUSURC1         25.99        2.86         2.86      25.99
+    MINSURI1       100.00      100.00         0.00     100.00
+    INRETC1        100.00       42.60        17.11     100.00
+
+*** CORRECCION A UNA CIFRA QUE LA TESIS CITA: el free float del BCP de 2.66%
+    es el valor del 2011-01-03, el PRIMER DIA DE LA SERIE. Hoy es 2.26% y el
+    rango historico va de 1.93% a 21.70%. El numero no esta mal: esta mal
+    CITADO. Hay que ponerle fecha, o —mejor— usar la serie. ***
+
+LO QUE ESTO OBLIGA A REHACER: **LUZ DEL SUR CAE DE 26% A 2.9% A MITAD DEL
+HORIZONTE** (la OPA de China Yangtze Power, 2019). Un cuadro de capacidad con
+flotante fijo promedia dos regimenes distintos y no describe ninguno. El
+calculo hay que rehacerlo con la serie, por tramo.
+
+Y HAY UN SEGUNDO SESGO, EN LA MISMA DIRECCION. La tabla HDS del 19-sep
+(data/raw/bloomberg/pantallas_cdr_hds_msci_20260919.docx) muestra que el
+flotante NOMINAL sobreestima al EFECTIVO: en Pacasmayo el nominal es 49.99%
+pero ~14% esta en AFPs (Integra 6.77%, Prima 6.83%, Profuturo 0.49%), que no
+rotan. El tope de capacidad calculado sobre flotante nominal es OPTIMISTA.
+
+    DATO CRUDO QUE DIMENSIONA EL PROBLEMA: Luz del Sur negocio el 18-sep-2026
+    1,064 acciones, S/13,830 EN TODO EL DIA. La posicion 1/7 de una cartera de
+    S/1.8 MM son S/257k: DIECIOCHO DIAS del volumen completo del mercado en ese
+    papel.
+
+    >> CONVENCION DE RIESGOS: esto no borra el cuadro de la seccion 6, le anade
+       su limite. El techo de ~S/1.84 MM sigue siendo el orden de magnitud; lo
+       que cambia es que su dispersion entre tramos esta sin medir.
+
+
+========================================================================
 7. PENDIENTES
 ========================================================================
   [x] Sección 6 completada con la corrida de analiza_capacidad_oe1.py.

@@ -1,0 +1,150 @@
+CHECKLIST DE SESIÓN — TERMINAL BLOOMBERG, 2026-09-19
+Sesiones previas: 05-sep, 07-sep, 16-sep. Estado completo en
+docs/estado_extraccion_bloomberg.txt. Esto es SOLO lo que falta.
+========================================================================
+
+LAS DOS REGLAS QUE YA SE PAGARON CARO — NO NEGOCIABLES
+------------------------------------------------------------------------
+  R1. `Dts=S` EN **CADA** BLOQUE DE BDH, SIEMPRE.
+      Con `Dts=H` hay una sola columna de fechas y los demás bloques ASUMEN
+      que están alineados. Ya causó DOS desalineaciones: los 6 bloques del
+      07-sep y el LUSURC1 OR del 16-sep (inservible desde 2020-12).
+  R2. `Fill=#N/A`, NUNCA `Fill=P`.
+      El relleno hacia adelante metió 142 días fantasma (3.9% de 2012-2025):
+      los feriados repiten exacto la fila previa.
+  R3. Pegar como VALORES antes de salir, y encabezado de procedencia en cada
+      hoja (ticker literal, campo, rango, overrides). Dos copias en medios
+      distintos antes de salir del edificio.
+
+Los 7 tickers:
+  ALICORC1 PE Equity · CREDITC1 PE Equity · FERREYC1 PE Equity
+  INRETC1 PE Equity  · LUSURC1 PE Equity  · MINSURI1 PE Equity
+  CPACASC1 PE Equity
+
+
+========================================================================
+BLOQUE A — LO IRREEMPLAZABLE (si el día se corta, que sea después de esto)
+========================================================================
+
+[ ] A1. FECHA DE ANUNCIO DE RESULTADOS.  *** LO MÁS VALIOSO QUE FALTA ***
+    POR QUÉ: es el árbitro INDEPENDIENTE DE LA SMV para el `known_date` de
+    D20. Hoy el panel usa registerDate de la BVL con fallback a un lag fijo,
+    y el 44% de las observaciones usa el lag. Sin un tercero, no hay forma de
+    saber si ese 44% está bien.
+    OJO, YA SE PERDIÓ TIEMPO ACÁ: FUNDAMENTAL_PUBLIC_DATE y
+    FUNDAMENTAL_DATABASE_DATE **NO son campos, son OVERRIDES**. No devuelven
+    la fecha; piden el dato "tal como estaba a esa fecha".
+    CÓMO BUSCARLO, en este orden:
+      1) FLDS <GO>, buscar "announcement" y "earnings date". Candidatos a
+         confirmar: ANNOUNCEMENT_DT, LATEST_ANNOUNCEMENT_DT,
+         EARN_ANN_DT_TIME_HIST_WITH_EPS.
+      2) Si es histórico, va por BDS (no BDH):
+         =BDS("ALICORC1 PE Equity","EARN_ANN_DT_TIME_HIST_WITH_EPS")
+      3) Pantalla ERN <GO> sobre cada uno de los 7, exportar a hoja.
+    ENTREGABLE MÍNIMO ACEPTABLE: una fecha de anuncio por trimestre y por
+    activo, 2011-2025. Si solo hay historia parcial, bajar lo que haya y
+    anotar desde cuándo.
+
+[ ] A2. RE-BAJAR LUSURC1 OR CON Dts=S.
+    POR QUÉ: el tramo 2020-12 → 2026-06 del OR está corrido una fila (el
+    valor en 2020-12-31 es en realidad el de 2021-03-31). Hoy es INSERVIBLE
+    y rompe la mitad del panel bitemporal de ese activo.
+    =BDH("LUSURC1 PE Equity","IS_EPS,NET_INCOME,SALES_REV_TURN",
+         "1/1/2011","12/31/2025","Per=Q","Dts=S","Fill=#N/A",
+         "FILING_STATUS=OR")
+    CONTROL EN EL SITIO: tienen que salir 62 trimestres, no 61.
+
+[ ] A3. SPBLPGPT — CONFIRMAR QUE EL TRAMO 2011-2015 ES RETORNO TOTAL.
+    POR QUÉ: está medido que antes de may-2015 SPBLPGPT ES el IGBVL empalmado
+    (coinciden 99.7%). Si ese tramo es índice de PRECIO y no de retorno total,
+    el baseline de mercado de la tesis subestima 3-4% anual en un tercio del
+    horizonte — y el agente le "gana" por un artefacto.
+    =BDH("SPBLPGPT Index","PX_LAST,TOT_RETURN_INDEX_GROSS_DVDS",
+         "1/1/2011","12/31/2025","Days=W","Dts=S","Fill=#N/A")
+    CÓMO SE LEE: si las dos columnas salen IGUALES, el índice ya es TR en
+    todo el tramo. Si TOT_RETURN sale por encima, la brecha anualizada debe
+    rondar el dividend yield del mercado (3-4%) — y entonces el tramo viejo
+    es de precio y hay que declarar el empalme.
+    Antes: HP <GO> desde 1/1/2010 y anotar el PRIMER DATO REAL.
+
+
+========================================================================
+BLOQUE B — PANTALLAS. GRATIS, NO GASTAN BDH. LANZARLAS MIENTRAS CORRE A.
+========================================================================
+
+[ ] B1. CDR PE <GO>   Calendario oficial de feriados de Lima.
+        SUBIÓ DE PRIORIDAD: resuelve los 142 días fantasma de una vez y saca
+        a build_trading_calendar de su circularidad — hoy el calendario se
+        infiere de los propios precios, que es justo lo que D8 distingue.
+        Exportar 2011-2026 completo.
+
+[ ] B2. HDS <GO>      Tabla de tenedores, los 7.
+        El free float de CREDITC1 = 2.66% ya está bajado y es la PREMISA
+        CENTRAL de la tesis. Falta la tabla citable que la respalde.
+
+[ ] B3. DVD <GO> + CACS <GO> + =BDS(<ticker>,"DVD_HIST_ALL")
+        Tercer árbitro del desfase de reconocimiento del BCP y de los eventos
+        no-AL que quedaron pendientes al correr R4.
+
+[ ] B4. ECO <GO>      Calendario macro de Perú CON HORA.
+        Sirve para el t+1 de D13: saber si un dato macro se conoció antes o
+        después del cierre.
+
+[ ] B5. MEMB <GO>     Miembros históricos de MSCI Peru.
+        OJO: la familia de PAÍSES (MSCI Peru), NO la de nuam — son índices
+        distintos. Cierra H5.b: la ventana de reclasificación de emergente a
+        frontera del 14-ago-2015.
+
+[ ] B6. LQA <GO>      Está confirmado en la licencia (§4.0). Dos minutos.
+        Si devuelve costo de liquidación por tamaño de orden, es insumo
+        directo del CostModel y de la restricción de capacidad.
+
+
+========================================================================
+BLOQUE C — HUECOS CONOCIDOS. PREGUNTAR, NO INSISTIR.
+========================================================================
+
+[ ] C1. NUM_TRADES no llega a 2012 (arranca 2014-10-01 para los 7 por igual).
+        FLDS <GO>: ¿hay campo equivalente para 2012-2014? Si no lo hay, se
+        documenta el hueco y se cierra el tema.
+
+[ ] C2. ETFPERUD (VanEck El Dorado Peru, BVL, marzo 2021, USD).
+        PX_LAST diario desde su inicio. Como baseline invertible del tramo
+        final es MÁS HONESTO que EPU: es local, cotiza en la BVL, y no tiene
+        el quiebre metodológico del 10-abr-2023.
+        =BDH("ETFPERUD PE Equity","PX_LAST","1/1/2021","12/31/2025",
+             "Dts=S","Fill=#N/A")
+
+
+========================================================================
+BLOQUE D — SOLO SI SOBRA TIEMPO
+========================================================================
+
+[ ] D1. CPAC US Equity y BAP US Equity: OHLCV + puntas.
+        *** SOLO EL CIERRE DEL DÍA ANTERIOR, o es fuga de información ***
+        (Nueva York cierra después de Lima).
+[ ] D2. BEST_EPS / BEST_TARGET_PRICE (confirmados en licencia).
+[ ] D3. FLDS <GO>, husmear por news sentiment.
+[ ] D4. Preguntar por flujos de no residentes.
+
+
+========================================================================
+NO QUEMAR TIEMPO EN
+========================================================================
+  Índices externos (SPX, DXY, EEM, MCHI): gratis y mejores como ETF.
+  Commodities: ya bajados (LMSNDS03, LMCADS03, CL1, USDPEN).
+  Tarifario de las SAB, libro de órdenes, intradía largo.
+  Nada del bug de fechas: ya se arregló, no requiere terminal.
+  Re-bajar puntas/volumen/OHLC/flotante: P0 está CERRADO al 100%.
+
+
+========================================================================
+CONTROLES A HACER EN EL SITIO, ANTES DE IRSE
+========================================================================
+  [ ] LUSURC1 OR devuelve 62 trimestres (no 61).
+  [ ] Cada bloque de BDH tiene SU columna de fechas (mirar que haya una
+      columna de fecha por activo, no una sola compartida).
+  [ ] Ningún feriado repite exacto la fila previa (mirar 28-29 de julio).
+  [ ] SPBLPGPT: 19,766.72 el 2017-12-01. Es la huella que confirma que es el
+      índice correcto y no SPBLPADV (que es el conteo de acciones que suben).
+  [ ] Todo pegado como valores. Dos copias.
