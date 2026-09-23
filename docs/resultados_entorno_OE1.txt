@@ -1038,7 +1038,7 @@ CUATRO. Las que faltan son todas las COMBINADAS:
   mercado_fundamentales          brazo limpio          9
   mercado_macro_sentimiento      combinada         NUNCA
   mercado_macro_fundamentales    combinada         NUNCA
-  completa                       combinada         NUNCA   <- LA EXIGE EL E3
+  completa                       combinada             9   <- CORRIDA 19-sep
   mercado_sentimiento_18         combinada         NUNCA
 
 SON DOS PREGUNTAS DISTINTAS Y HACEN FALTA LAS DOS. Los brazos limpios
@@ -1056,6 +1056,12 @@ esperar que le cueste: `completa` tiene 381 dimensiones de observacion contra
 87 de la base, con una red de 64x64 y ~3,300 dias de UNA sola trayectoria.
 Si sale al reves —si supera a la suma— es un hallazgo fuerte: diria que la
 informacion esta en la INTERACCION y no en los canales sueltos.
+
+  >> CERRADO EL 2026-09-19: `completa` se corrio (9 corridas, 19 min) y con
+     eso R8 cubre las CUATRO configuraciones del documento. El resultado esta
+     en 7.13 y contesta la pregunta de esta seccion: LOS CANALES SE ESTORBAN
+     (la interaccion es -3.9pp de retorno y -0.86 de Sharpe). Las otras dos
+     combinadas dejan de ser urgentes por eso mismo.
 
 COSTO:
   solo `completa` (lo que exige el documento)   9 corridas   ~25 min   3 configs
@@ -1172,6 +1178,503 @@ resultado el argumento se debilita: el costo esta en el retorno NETO, pero el
 DSR parece premiar la volatilidad que la operacion genera, asi que objetivo y
 costo no estan hablando el mismo idioma. No es cobrar dos veces; es que el
 termino de riesgo y el termino de costo se cancelan mal.
+
+
+------------------------------------------------------------------------
+7.11 POR QUE ENTRENAR MAS EMPEORA: SE ABRIO LA RECOMPENSA Y SE MIDIO
+------------------------------------------------------------------------
+7.9 dejo medido el QUE (la rotacion casi se triplica) y dio el POR QUE como
+LECTURA: "cuanto mas optimiza el DSR, mas patrones de corto plazo encuentra
+y para explotarlos tiene que operar". Eso era interpretacion, no medicion.
+Esta seccion la contrasta. `scripts/d4_diagnostico_recompensas.py`, sobre el
+pliegue 0, artefacto d4_diagnostico_recompensas.json.
+
+NO HIZO FALTA ENTRENAR NADA. Una recompensa se caracteriza con series de
+retorno; entrenar para explicarla mide el agente, no la recompensa. Las
+series son REALES y salen del mismo simulador: 1/N diario, 1/N mensual y
+Markowitz sobre train (2013-01-02 a 2018-10-23) y sobre val (2018-11-22 a
+2019-11-21). "Solo caja" queda fuera porque su dispersion es tan chica que
+el DSR nunca sale del calentamiento: no hay nada que descomponer.
+
+EL PUNTO DE PARTIDA ES ALGEBRA, NO ESTADISTICA. Reordenando el DSR:
+
+    r_t = [ B·(R−A) − ½·A·(R²−B) ] / V^{3/2}
+        = (B / V^{3/2}) · [ (R−A) − (A / 2B)·(R²−B) ]
+
+El castigo al retorno al cuadrado NO es una constante: vale A/(2B), o sea es
+PROPORCIONAL A LA MEDIA MOVIL DEL PROPIO RETORNO. Dos consecuencias, y las
+dos se midieron.
+
+(1) EL TERMINO DE RIESGO PESA ENTRE 7% Y 10% DE LA SENIAL. Separando cada
+    r_t en su termino de retorno y su termino de varianza, y midiendo que
+    fraccion del MOVIMIENTO total aporta cada uno:
+
+      serie          tramo   ret an   vol an   coef A/2B   peso del term. var
+      1/N diario     train    +2.4%    13.5%       2.43           9.7%
+      markowitz      train    -2.7%    13.0%       0.09           9.6%
+      1/N diario     val     +12.6%    11.1%       3.36           7.4%
+      markowitz      val     +49.9%    21.4%       7.14          18.9%
+
+    >> EL "AJUSTE POR RIESGO" DEL DSR ES DE SEGUNDO ORDEN EN ESTE MERCADO.
+       Nueve de cada diez unidades de senial son retorno puro. El agente que
+       maximiza DSR esta, en la practica, maximizando retorno de corto plazo
+       con un descuento de escala — y explotar retorno de corto plazo EXIGE
+       operar. Ese es el mecanismo de 7.9, ahora con numero.
+
+(2) EN 44% DE LOS DIAS DE ENTRENAMIENTO EL PRECIO DE LA VARIANZA SALE
+    NEGATIVO. Cuando A < 0 el coeficiente cambia de signo y el termino deja
+    de castigar dispersion: la PAGA. En train es 44% de los dias (43% para
+    el 1/N mensual, 50% para Markowitz); en val, donde el tramo tuvo deriva
+    positiva, baja a 34% (6% para Markowitz, que anualizo +49.9%).
+
+    >> EN UN TRAMO PERDEDOR EL OBJETIVO PREMIA TOMAR MAS RIESGO, y 2013-2018
+       es exactamente eso: el 1/N anualizo +2.4% contra +2.6% de la caja.
+
+LO QUE **NO** SALIO COMO SE ESPERABA, Y SE REPORTA IGUAL:
+
+(3) INFLAR LA VOLATILIDAD A MEDIA CONSTANTE **BAJA** EL DSR ACUMULADO,
+    SIEMPRE. Con r' = m + k·(r − m), que conserva la media EXACTA:
+
+      serie        tramo   k=1.25   k=1.5   k=2.0     (cambio en DSR acumulado)
+      1/N diario   train     -0.1    -0.1    -0.1     sobre una base de  2.6
+      1/N diario   val       -0.3    -0.6    -0.8     sobre una base de 17.6
+      markowitz    val       -0.7    -0.6    -0.1     sobre una base de 28.9
+
+    Sobre estas tres series la hipotesis fuerte —"el DSR prefiere el
+    ruido"— parecia FALSA, y asi se escribio primero. Mirese igual la
+    MAGNITUD: DUPLICAR la volatilidad anual (de 11.1% a 22.3%) le cuesta al
+    1/N un 4.5% de su recompensa acumulada. La aversion existe y es
+    DESPRECIABLE, que es el hallazgo (1) por otra via.
+
+    >> CORREGIDO EL MISMO DIA, CON 36 CELDAS EN VEZ DE 3 (ver 7.12): sobre
+       18 estrategias reales x 2 tramos, inflar la volatilidad a media
+       constante SUBE el DSR acumulado en 44% de las celdas. Lo que se
+       leyo aca como "siempre baja" era un artefacto de tres series. La
+       conclusion de este punto QUEDA ANULADA; lo que sobrevive es la
+       magnitud: cuando baja, baja poquisimo.
+
+(4) LA PRUEBA DIRECTA DE D25 TAMBIEN SALIO NEGATIVA. Se construyeron
+    trayectorias con los momentos MEDIDOS de cada presupuesto (7.9),
+    reusando la forma de una serie real y remuestreando por bloques de 21
+    dias, 200 veces. Comparacion PAREADA contra 150k:
+
+      presupuesto   ret val   vol val   mediana DSR − DSR(150k)   supera a 150k
+      300k pasos      +1.0%      5.6%            -1.16                 30%
+      600k pasos      +1.9%      7.5%            -0.95                 33%
+      1M pasos        +1.4%      6.8%            -1.06                 33%
+
+    >> DADA LA MISMA FORMA DE TRAYECTORIA, EL DSR **SI** PREFIERE AL AGENTE
+       DE 150k. Entonces el deterioro de D25 NO se explica por los momentos.
+       (Ojo con la lectura ingenua: la mediana MARGINAL del DSR acumulado
+       sube con el presupuesto —3.59, 5.11, 6.32, 6.72— y sugiere lo
+       contrario. Con variables correlacionadas y sesgadas la mediana
+       marginal no ordena; lo que decide es la diferencia pareada.)
+
+DONDE SI FALLA, Y ES EL HALLAZGO CENTRAL DE ESTA SECCION:
+
+(5) EL DSR ACUMULADO ORDENA AL REVES EN EL TRAMO DE ENTRENAMIENTO.
+
+      tramo   serie          Sharpe del periodo   DSR acumulado
+      train   1/N diario           +0.17               2.6
+      train   1/N mensual          +0.22               2.7
+      train   markowitz            -0.21              14.8    <-- 5.7x MAS
+      val     1/N diario           +1.06              17.6
+      val     markowitz            +1.89              28.9    <-- ordena BIEN
+
+    >> SOBRE EL MISMO TRAMO EN QUE EL AGENTE OPTIMIZA, EL OBJETIVO LE PAGA
+       CASI SEIS VECES MAS A UNA ESTRATEGIA QUE **PIERDE** PLATA QUE A UNA
+       QUE GANA. En validacion, un anio con deriva positiva, ordena bien.
+       El objetivo es fiel cuando hay tendencia y deja de serlo cuando el
+       mercado es plano — y el tramo de entrenamiento es el plano.
+
+    ESO CIERRA EL ARGUMENTO DE D25. Entrenar mas no "falla": el agente
+    cumple cada vez mejor un objetivo que, EN ESE TRAMO, no es el desempeño.
+    Por eso la curva de entrenamiento sube en las 10 semillas mientras la
+    validacion baja en 9.
+
+(6) DE PASO, UNA AFIRMACION DEL CODIGO QUE NO SE SOSTIENE. El docstring de
+    src/env/rewards.py dice que "sumar los incrementos aproxima el Sharpe
+    del periodo". Medido, la razon entre la suma y el Sharpe EWMA terminal
+    va de -14 a -443 en train y de +187 a +292 en val; si la suma telescopara
+    al Sharpe terminal esa razon seria ~1/eta = 60 en los cuatro casos. NO
+    LO HACE. La suma del DSR es una integral de camino: depende del ORDEN en
+    que llegan los retornos, no solo de su media y su dispersion. Hay que
+    corregir esa frase del codigo y la del acta de D4.
+
+    Parte de ese efecto de orden se ve en el denominador V^{-3/2}: en el
+    decil de dias con la ventana mas CALMA se acumula 15.2% de la masa de
+    recompensa en train y 20.2% en val, contra el 10% que tocaria si fuera
+    proporcional, y ahi |r| es 2.0x y 4.0x mas grande que en el decil mas
+    agitado. O sea: EL DSR PAGA DESPROPORCIONADAMENTE POR UN DIA BUENO QUE
+    LLEGA DESPUES DE UN TRAMO QUIETO. La forma de fabricar eso es salirse y
+    volver concentrado — operar. Es un efecto real pero de segundo orden;
+    no alcanza por si solo para explicar el 5.7x de (5).
+
+(7) ADVERTENCIA SOBRE V1, Y LLEGA A TIEMPO. **LA DDR PAGA POR INFLAR LA
+    VOLATILIDAD A MEDIA CONSTANTE**, que es justo lo contrario de lo que se
+    le pide:
+
+      serie        tramo   k=1.25   k=1.5   k=2.0    (cambio en DDR acumulado)
+      1/N diario   train     +0.6    +1.0    +1.5
+      1/N diario   val       +0.4    +0.6    +0.9
+      markowitz    val      +15.1   +23.4   +32.1    sobre una base de -87.4
+
+    El brazo V1 de D4 se iba a correr con la hipotesis de que, al castigar
+    semivarianza, corregiria la rotacion. LA MEDICION DICE QUE LA AGRAVARIA.
+    Vale la pena correrlo igual —esta pre-registrado y el diagnostico no es
+    una corrida— pero con la prediccion al reves y escrita de antemano.
+
+QUE SIGNIFICA PARA LA LITERATURA, Y ES LO QUE HAY QUE ESCRIBIR EN LA TESIS.
+El DSR de Moody-Saffell se propuso y se valido sobre series con deriva
+positiva (S&P 500 y divisas de los 90). Su termino de riesgo pesa A/(2B): con
+A ≈ 0 degenera, y con A < 0 cambia de signo. La BVL 2013-2018 es exactamente
+ese regimen: el 1/N anualizo +2.4% contra +2.6% de la caja. NO ES QUE LA
+RECOMPENSA ESTE MAL IMPLEMENTADA —los tests la verifican contra la formula
+publicada— es que se la esta usando fuera del regimen donde fue disenada.
+Esta es la razon tecnica, y no retorica, por la que los resultados de esta
+tesis NO SE PUEDEN COMPARAR DE FRENTE con los de la literatura anglosajona:
+no cambia solo el mercado, cambia el signo de un termino del objetivo.
+
+
+------------------------------------------------------------------------
+7.12 TAMIZ DE RECOMPENSAS: SE ELIGE SIN ENTRENAR Y SIN GASTAR EL CONTADOR
+------------------------------------------------------------------------
+`scripts/d4_tamiz_recompensas.py`, artefacto d4_tamiz_recompensas.json.
+
+EL CANDADO QUE ESTO ABRE. D4 dice "tres brazos y no mas" porque cada brazo que
+se entrena es una configuracion mas en el contador de D10 y degrada el Sharpe
+deflactado. Con esa regla, explorar recompensas parecia caro por definicion.
+No lo es: CARACTERIZAR UNA RECOMPENSA NO NECESITA UN AGENTE, necesita series de
+retorno. El tamiz corre 18 estrategias REALES dentro del mismo simulador —1/N a
+tres frecuencias, los tres Markowitz, comprar y mantener cada uno de los 7
+activos, 5 carteras de la banda nula, y la caja— sobre train y val, y no
+entrena nada. CERO configuraciones anotadas. Solo lo que pasa el tamiz se lleva
+corridas.
+
+EL CRITERIO, FIJADO EN EL CODIGO ANTES DE CORRERLO (constantes UMBRAL_* ):
+
+  T1 FIDELIDAD DE ORDEN. El acumulado de la recompensa tiene que ordenar las 18
+     estrategias igual que el Sharpe del periodo, en LOS DOS tramos. rho de
+     Spearman >= +0.50.
+  T2 NO PAGA POR RUIDO. Inflar la vol a media constante (k=1.5) no puede SUBIR
+     el acumulado en ninguna de las 36 celdas (18 estrategias x 2 tramos).
+  T3 EL RIESGO PESA. Por ablacion contra la recompensa con el termino de riesgo
+     apagado, normalizando cada serie por su propia magnitud: >= 20%.
+  T4 VE EL PEAJE. Restar 1 punto base por dia tiene que bajar el acumulado de
+     forma monotona y no despreciable (>= 1% por bp/dia).
+
+  TRES DEFECTOS DE MEDICION QUE HUBO QUE ARREGLAR, Y SE DICEN: T3 comparaba
+  series en UNIDADES CRUDAS —el DSR vale ~1e0 por paso y el log-retorno ~1e-3—
+  y daba 99% para toda la familia diferencial, que es decir nada; T2 reportaba
+  el peor caso RELATIVO y con acumulados cerca de cero daba cifras de tres
+  digitos sin significado; y a `dsr_rot` no se le pasaba la rotacion, con lo
+  cual su castigo era identicamente cero. SE CORRIGIO COMO SE MIDE. LOS
+  UMBRALES NO SE TOCARON: siguen siendo 0.50, 20% y 1%.
+
+EL RESULTADO, Y ES CONTUNDENTE: NINGUNA DE LAS SEIS PASA LAS CUATRO.
+
+  recompensa    rho Sharpe tr  rho Sharpe val  ruido PAGA  peso riesgo  peaje
+  dsr                  +0.11           +0.36      44%/36       29.9%    2.03%
+  ddr                  -0.63           -0.38      83%/36       48.2%   -4.69%
+  logret               +0.98           +0.99       0%/36        0.0%   22.42%
+  mv (λ=16.3)          +0.46           +0.23       0%/36       28.5%   27.24%
+  logret_dd (λ=1.0)    +0.39           +0.86       0%/36       28.8%    7.99%
+  dsr_rot (κ=1)        +0.24           -0.52      86%/36       41.0%    0.09%
+
+LO QUE DICE CADA FILA:
+
+  * EL DSR NO ORDENA. rho +0.11 en train sobre 18 estrategias reales. No es el
+    ruido de la muestra chica de 7.11 —ahi eran tres estrategias— es la
+    propiedad. Y EN 44% DE LAS CELDAS INFLAR LA VOLATILIDAD A MEDIA CONSTANTE
+    LE SUBE EL ACUMULADO.
+    >> ESTO CORRIGE EL PUNTO (3) DE 7.11, que con tres series concluyo que
+       inflar la vol "siempre" bajaba el DSR. Con 36 celdas, sube en 44%. La
+       conclusion de 7.11 era un artefacto de muestra chica y queda anulada;
+       lo que sobrevive es la magnitud: cuando baja, baja poquisimo.
+
+  * LA DDR ORDENA AL REVES. rho NEGATIVA en los dos tramos (-0.63, -0.38),
+    paga por ruido en 83% de las celdas, y un lastre de costo le SUBE la
+    recompensa (-4.69%: restar plata mejora el objetivo). El brazo V1 de D4 se
+    iba a correr con la hipotesis de que, al castigar semivarianza, corregiria
+    la rotacion. ESTA MEDIDO QUE HARIA LO CONTRARIO, y por un margen que no
+    admite discusion. Correrlo ahora seria gastar 30 corridas del contador para
+    confirmar lo que un tamiz de tres minutos ya dijo.
+
+  * EL LOG-RETORNO PASA T1 POR TAUTOLOGIA y hay que decirlo: su acumulado ES el
+    retorno, asi que ordenar por retorno es ordenar por si mismo. Su reprobacion
+    es T3, y tambien por construccion: es el CONTROL, no tiene termino de riesgo.
+    Sirve exactamente para lo que D4 lo puso y para nada mas.
+
+  * `dsr_rot` SALE PEOR QUE EL DSR SOLO. Con el castigo escalado localmente, el
+    termino κ·rotacion·B/V^{3/2} domina y la recompensa se vuelve CIEGA al costo
+    real (0.09% por bp, contra 2.03% del DSR pelado), ademas de invertir el
+    orden en val (-0.52). Reabrir D7 por esta via NO funciona.
+
+  * LAS DOS UNICAS SANAS son `mv` y `logret_dd`: cero celdas donde el ruido
+    pague, termino de riesgo que pesa ~28%, y sensibilidad clara al peaje. Las
+    dos reprueban T1 con el λ calibrado al 25%.
+
+LA FRONTERA λ: ES UN CANJE, Y NO TIENE PUNTO DULCE.
+λ no es un boton de desempeño, fija cuanto pesa el riesgo contra el retorno.
+Subirlo mejora T3 y empeora T1, porque el acumulado se parece cada vez menos al
+retorno, que es contra lo que se mide el orden. Barrido sobre las mismas 18
+estrategias:
+
+  mv            λ=1.6   rho .94/.98   riesgo  2.9%     T1 si · T3 NO
+                λ=8.1   rho .54/.54   riesgo 14.6%     T1 si · T3 NO
+                λ=16.3  rho .46/.23   riesgo 28.5%     T1 NO · T3 si
+                λ=32.6  rho .42/-.02  riesgo 51.2%     T1 NO · T3 si
+
+  logret_dd     λ=0.10  rho .95/.99   riesgo  3.9%     T1 si · T3 NO
+                λ=0.25  rho .87/.98   riesgo  9.2%     T1 si · T3 NO
+                λ=0.51  rho .74/.93   riesgo 16.8%     T1 si · T3 NO   <-- el mas cerca
+                λ=1.02  rho .39/.86   riesgo 28.8%     T1 NO · T3 si
+                λ=2.03  rho .21/.58   riesgo 44.8%     T1 NO · T3 si
+
+  >> NO EXISTE λ QUE CUMPLA LAS DOS, EN NINGUNA DE LAS DOS FORMAS.
+
+Y ESE ES EL HALLAZGO, no un fracaso del ejercicio: A FRECUENCIA DIARIA Y EN UN
+MERCADO SIN DERIVA, "ORDENAR LAS ESTRATEGIAS COMO LAS ORDENA EL SHARPE" Y "QUE
+EL RIESGO PESE DE VERDAD" SON EXIGENCIAS EN CONFLICTO DIRECTO. El retorno
+diario es ~1e-3 y su cuadrado ~1e-6: para que el termino de riesgo se haga notar
+hay que multiplicarlo por un λ tan grande que deja de parecerse al retorno. El
+DSR disimula ese conflicto metiendo el riesgo en el denominador en vez de
+restarlo — y lo que consigue, medido, es no ordenar (rho +0.11).
+
+UNA COLUMNA QUE NO REPROBO NUNCA, Y ES LA QUE IMPORTA ACA. La fidelidad de
+orden contra el DRAWDOWN de `logret_dd` se queda en +0.62/+0.83 con el λ
+calibrado y en +0.82/+0.78 con λ a la mitad, ESTABLE EN TODO EL BARRIDO. Si el
+criterio de exito de la tesis fuera el drawdown —y 7.7 dejo medido que esa, y
+no el retorno, es la ventaja del agente contra el 1/N— `logret_dd` lo ordena
+bien con cualquier λ. Eso NO autoriza a cambiar el criterio despues de ver el
+resultado: autoriza a plantear la enmienda de D4 con el argumento sobre la mesa.
+
+LO QUE HAY QUE DECIDIR, Y ES DEL AUTOR (entra como enmienda a D4):
+  (a) Bajar el umbral de T3 de 20% a 15% y adoptar `logret_dd` con λ=0.51, que
+      lo cumple todo salvo por 3.2 puntos. Es mover un umbral despues de ver el
+      resultado y hay que registrarlo como tal.
+  (b) Dejar T1 medido contra el DRAWDOWN en vez del Sharpe para la recompensa
+      que se elija, con el argumento de 7.7. Mismo reparo: se decide despues.
+  (c) Aceptar que ninguna pasa, quedarse con el DSR por ser el estandar de la
+      literatura, y REPORTAR EL TAMIZ COMO RESULTADO NEGATIVO. Es la opcion mas
+      honesta y probablemente la mas publicable: dice que el objetivo estandar
+      del area no ordena estrategias en un mercado sin deriva.
+  (d) Correr igual `mv` y `logret_dd` a 3 semillas x 3 pliegues (18 corridas,
+      ~45 min, 6 configuraciones del contador) para ver si el tamiz PREDICE el
+      desempeño del agente. Eso valida el tamiz como metodo, que vale mas que
+      el resultado de cualquiera de los brazos.
+
+EL BRAZO V1 DE D4 (LA DDR) NO DEBERIA CORRERSE. Es la unica recomendacion
+inequivoca que sale de esta seccion.
+
+
+------------------------------------------------------------------------
+7.13 `completa` CORRIDA (2026-09-19): R8 QUEDA ACREDITADO, Y LOS CANALES SE
+     ESTORBAN
+------------------------------------------------------------------------
+9 corridas (3 pliegues x 3 semillas, 150k pasos, val), mismo protocolo y mismo
+presupuesto que la ablacion del 18-sep para que sean comparables.
+`scripts/ablacion_r8.py --views completa`, 19 min, artefacto
+ablacion_r8_completa.json. Con esto R8 cubre LAS CUATRO configuraciones que
+pide el documento: solo mercado, mercado+sentimiento, mercado+fundamentales y
+COMBINACION COMPLETA.
+
+APORTE PAREADO CONTRA solo_mercado, mediana de las 9 celdas:
+
+  brazo                      ret     sharpe   sortino   maxDD     rot    costo S/
+  mercado_macro            +1.4pp    +0.384   +0.415   -1.0pp   -0.39    -9,125
+  mercado_sentimiento      +1.8pp    +0.452   +0.653   -2.0pp   +0.73   +10,661
+  mercado_fundamentales    +0.6pp    +0.136   +0.273   -1.6pp   -0.36      -319
+  completa                 -0.1pp    +0.113   +0.019   -2.5pp   -0.15    -2,096
+
+LA PREGUNTA QUE ESTE BRAZO EXISTIA PARA CONTESTAR —si los canales se
+complementan o se estorban— TIENE RESPUESTA, Y ES CLARA:
+
+                             ret     sharpe   sortino   maxDD     rot
+  suma de los 3 canales    +3.8pp    +0.972   +1.341   -4.5pp   -0.02
+  completa (medida)        -0.1pp    +0.113   +0.019   -2.5pp   -0.15
+  INTERACCION              -3.9pp    -0.860   -1.322   +2.0pp   -0.13
+
+  >> SE ESTORBAN. `completa` no alcanza ni la CUARTA PARTE de la suma de los
+     aportes individuales en Sharpe, y en retorno el aporte se anula del todo.
+     Juntar los tres canales no suma informacion: la diluye.
+
+  >> Y NO ES RUIDO DE SIGNO: en las 9 celdas, `completa` mejora a la base 4/9
+     en retorno y 5/9 en Sharpe —una moneda— pero solo 2/9 EN DRAWDOWN. O sea
+     EMPEORA el drawdown en 7 de 9, que es consistente con los tres brazos
+     sueltos (los tres lo empeoran) y es la unica senial estable del ejercicio.
+
+  >> TAMPOCO MUEVE LA VARA DE D9: le gana a la caja en 1 de 3 pliegues, igual
+     que los otros cuatro brazos.
+       pliegue0  completa +2.8%  ·  base +2.6%  ·  1/N +11.8%  ·  caja +1.9%
+       pliegue1  completa -8.0%  ·  base -7.3%  ·  1/N  -8.7%  ·  caja +0.3%
+       pliegue2  completa -4.1%  ·  base -0.9%  ·  1/N  -7.5%  ·  caja +5.4%
+
+LA PREDICCION PRE-REGISTRADA EN 7.10 FALLO EN SU PRIMERA MITAD, Y SE DICE.
+Se escribio antes de correr que `completa` rotaria MAS, porque los tres canales
+empujan a operar y 7.9 identifico la rotacion como el mecanismo del deterioro.
+MEDIDO: la rotacion BAJA (-0.15) y el costo tambien (-S/2,096). El deterioro es
+real pero NO viene por ahi.
+
+  La segunda mitad de la prediccion SI se sostiene: `completa` tiene 381
+  dimensiones de observacion contra 87 de la base, con una red de 64x64 y ~3,300
+  dias de UNA sola trayectoria. El patron de las cuatro vistas es monotono en la
+  dimension —87 base, 136 macro (+1.4pp), 178 sentimiento (+1.8pp), 241
+  fundamentales (+0.6pp), 381 completa (-0.1pp)— y el unico brazo que pierde el
+  aporte entero es el mas grande. Con 3 semillas eso es compatible con el ruido
+  y NO se reporta como hallazgo; se deja como la hipotesis a contrastar en la
+  corrida de 10 semillas.
+
+LO QUE ESTO CAMBIA EN EL PLAN. `mercado_macro_sentimiento` y
+`mercado_macro_fundamentales` —las otras dos combinadas— ya no son urgentes:
+servian para descomponer una interaccion POSITIVA, y la interaccion medida es
+negativa y grande. Correrlas ahora seria gastar 18 corridas del contador para
+detallar por que se estorban tres canales que, sueltos, tampoco mueven la vara
+de D9. Quedan como trabajo futuro explicito.
+
+
+------------------------------------------------------------------------
+7.14 BRAZOS DE RECOMPENSA — PREDICCIONES ESCRITAS ANTES DE CORRER
+------------------------------------------------------------------------
+Lanzado el 2026-09-19. 18 corridas: 2 recompensas x 3 pliegues x 3 semillas,
+150k pasos, vista `solo_mercado`, mismo protocolo y presupuesto que todo lo
+demas para que sean comparables. Cuesta 6 configuraciones del contador de D10.
+
+    mv          lam = 16.29
+    logret_dd   lam =  1.02
+
+LOS DOS LAMBDA SALEN DE LA REGLA DE D4(a) —calibracion por ESCALA, para que el
+termino de riesgo pese 25% de la senial— calculada sobre el tramo de
+entrenamiento del pliegue 0 con `calibra_escala()`. SE MANTIENEN FIJOS EN LOS
+TRES PLIEGUES: un lambda por pliegue seria un grado de libertad mas y no esta
+pre-registrado. NO se usa el lam=0.51 que el barrido de 7.12 señalo como "el
+mas cerca de pasar el tamiz": elegirlo seria calibrar despues de ver.
+
+EL PROPOSITO NO ES ELEGIR GANADOR. Es contestar si EL TAMIZ PREDICE EL
+DESEMPEÑO DEL AGENTE. Si predice, queda validado un metodo para decidir sin
+entrenar y sin gastar el contador, que vale mas que el resultado de cualquiera
+de los dos brazos.
+
+PREDICCIONES, Y SE ESCRIBEN ACA PARA NO PODER ACOMODARLAS DESPUES:
+
+  P1 ROTACION. `mv` y `logret_dd` van a rotar MENOS que `dsr`. Es la prediccion
+     mas fuerte y sale de T4: restar 1 bp/dia les baja el acumulado 27.2% y
+     8.0% respectivamente, contra 2.03% del DSR. Ven el peaje, asi que deberian
+     operar menos. Rotacion del DSR en el piloto: 1.97.
+
+  P2 DRAWDOWN. `logret_dd` va a tener MEJOR drawdown que `dsr` en la mayoria de
+     las 9 celdas. Castiga exactamente eso, y 7.7 dejo medido que el drawdown
+     es la ventaja del agente. Es la prediccion con hipotesis previa a favor.
+
+  P3 ORDEN. Si el tamiz predice, el orden por Sharpe en validacion deberia ser
+     logret_dd > dsr ≈ mv, que es el orden de T1 en val (+0.86, +0.36, +0.23).
+
+  P4 EL NULO HONESTO, Y ES LO MAS PROBABLE. Con 3 semillas el RETORNO va a
+     salir inconcluyente otra vez: en la ablacion del 18-sep una sola celda
+     tenia 25 puntos de rango. Las variables que pueden discriminar son la
+     ROTACION y el DRAWDOWN, que ahi fueron las estables. Si el veredicto
+     depende del retorno, no hay veredicto.
+
+  QUE CONTARIA COMO QUE EL TAMIZ FALLA COMO METODO: que `logret_dd` rote MAS
+  que el DSR, o que su drawdown salga PEOR, en la mayoria de las 9 celdas. Las
+  dos son observables y ninguna depende del retorno.
+
+LO QUE ESTE EJERCICIO **NO** CONTESTA: cual recompensa adoptar. Eso es la
+enmienda de D4 y sigue siendo decision del autor. Tres semillas son
+diagnostico, D10 pide diez, y estos agentes heredan D25 (subentrenados por
+igual, pero por igual).
+
+
+------------------------------------------------------------------------
+7.15 LOS BRAZOS DE RECOMPENSA, CORRIDOS: EL TAMIZ **NO** PREDICE
+------------------------------------------------------------------------
+18 corridas terminadas el 2026-09-19 (11 min). `mv` lam=16.29 y `logret_dd`
+lam=1.02, 3 pliegues x 3 semillas, 150k pasos, vista solo_mercado. Artefactos
+ablacion_d4_mv.json y ablacion_d4_logret_dd.json. Predicciones en 7.14, escritas
+ANTES de correr.
+
+DIFERENCIA PAREADA CONTRA `dsr`, por semilla y pliegue (mediana de 9 celdas):
+
+  brazo         ret    sharpe  sortino   maxDD     rot   costo S/   signos+ (ret)
+  mv          -0.2pp   -0.194   -0.225  +1.2pp   -0.225     +334        4/9
+  logret_dd   -2.2pp   +0.038   -0.024  -3.0pp   +0.124   +4,878        4/9
+
+CONTRA LAS PREDICCIONES:
+
+  P1 ROTACION (la mas fuerte).  MIXTA.
+     `mv` SI rota menos: -0.225, menor en 7/9 celdas. Coherente con T4 (27.2%
+     de caida por bp). `logret_dd` NO: rota +0.124, menor en solo 4/9, pese a
+     que su T4 daba 8.0% contra 2.03% del DSR. LA SENSIBILIDAD AL PEAJE MEDIDA
+     SOBRE SERIES NO SE TRADUJO EN MENOS ROTACION DEL AGENTE.
+
+  P2 DRAWDOWN.  **FALLO**, y era la unica con hipotesis previa a favor.
+     `logret_dd` castiga explicitamente el drawdown y su drawdown sale PEOR:
+     -3.0pp de mediana, mejor en solo 4/9 celdas. La recompensa que penaliza
+     exactamente lo que se queria proteger no lo protegio.
+
+  P3 ORDEN.  ACIERTA EN SIGNO, PERO ES UN ACIERTO VACIO.
+     Leido como corresponde —PAREADO, no por mediana marginal, que es la
+     leccion de 7.11(4)— el orden por Sharpe es logret_dd (+0.038) > dsr >
+     mv (-0.194), que es el predicho. Pero +0.038 con 5/9 signos positivos es
+     una moneda. El orden se cumple con magnitudes indistinguibles de cero.
+     (Por NIVEL marginal el orden sale mv > logret_dd > dsr, al reves. Que las
+     dos lecturas se contradigan es, otra vez, el sintoma de que no hay señal.)
+
+  P4 EL RETORNO NO DISCRIMINA.  ACERTO.
+     mv rango [-5.5, +17.7]pp · logret_dd rango [-8.8, +5.8]pp, 4/9 positivos
+     los dos. Como estaba escrito: si el veredicto depende del retorno, no hay
+     veredicto.
+
+LAS DOS CONDICIONES DE FALSACION SE CUMPLIERON. 7.14 decia: "que contaria como
+que el tamiz falla como metodo: que `logret_dd` rote MAS que el DSR, o que su
+drawdown salga PEOR, en la mayoria de las 9 celdas". OCURRIERON LAS DOS.
+
+  >> **EL TAMIZ NO PREDICE EL DESEMPEÑO DEL AGENTE. SE REPORTA COMO FALLIDO.**
+     No se le busca una lectura que lo salve: las condiciones estaban escritas
+     antes justamente para no poder hacer eso.
+
+QUE SOBREVIVE Y QUE MUERE, PORQUE NO ES LO MISMO:
+  MUERE la pretension de usar el tamiz para ANTICIPAR como se va a comportar un
+  agente. Esa era la apuesta de 7.14 y perdio.
+  SOBREVIVE el tamiz como CARACTERIZACION DE LA RECOMPENSA. Que la DDR ordene
+  estrategias al reves (rho -0.63) o que un lastre de costo le suba el
+  acumulado son propiedades de la FUNCION, verificables sin agente y clavadas
+  en tests/test_rewards_d4.py. Siguen siendo ciertas y siguen siendo motivo
+  suficiente para no correr la DDR.
+  La distincion importa: el tamiz sirve para DESCARTAR una recompensa rota, no
+  para ELEGIR entre recompensas sanas.
+
+Y EL RESULTADO QUE MAS PESA PARA LA TESIS, QUE NO ES SOBRE EL TAMIZ:
+
+  le gana a la caja (D9)      dsr 1/3   ·   mv 0/3   ·   logret_dd 0/3
+
+  pliegue0   dsr +2.6%   mv -0.1%   logret_dd -2.3%   ·  1/N +11.8%  caja +1.9%
+  pliegue1   dsr -7.3%   mv -6.3%   logret_dd -6.4%   ·  1/N  -8.7%  caja +0.3%
+  pliegue2   dsr -0.9%   mv +0.4%   logret_dd -1.6%   ·  1/N  -7.5%  caja +5.4%
+
+  CAMBIAR LA RECOMPENSA NO MUEVE LA VARA. Las dos alternativas quedan igual o
+  peor que el DSR, y ninguna de las tres le gana a la caja en mas de un pliegue.
+
+  >> JUNTO CON D25, ESTO CIERRA DOS DE LAS TRES VIAS DE MEJORA:
+       computo      MEDIDO (7.9):  entrenar mas EMPEORA.
+       recompensa   MEDIDO (7.15): las tres formas dan lo mismo.
+       señal        MEDIDO (7.13): los canales se ESTORBAN; ninguno mueve D9.
+     Las tres se midieron y las tres dieron negativo. El problema no esta en el
+     objetivo, ni en el presupuesto, ni en que falten canales: LO QUE FALTA ES
+     SEÑAL EXPLOTABLE EN ESTE MERCADO, O EL PEAJE SE LA COME. Y eso ya no es un
+     defecto del metodo — es el resultado de la tesis, y es consistente con lo
+     que el propio Markowitz enseño al correrlo (§4.1): genera bruto y el costo
+     se lo lleva entero.
+
+LO QUE ESTO NO AUTORIZA A CONCLUIR. Tres semillas, agentes subentrenados por
+igual (D25), y un rango de 23 puntos en una sola celda de `mv`. Nada de esto es
+hallazgo hasta las 10 semillas de D10. Lo que SI esta establecido con esta
+corrida es lo NEGATIVO: no hay motivo para esperar que un cambio de recompensa
+rescate a OE1, y por lo tanto no hay motivo para gastar el contador en mas
+brazos de D4.
+
+COSTO EN EL CONTADOR: 6 configuraciones nuevas. Registro D10 tras esta corrida:
+134 corridas, 31 configuraciones distintas, con_test = 0.
 
 
 ========================================================================

@@ -709,3 +709,27 @@ QUÉ HACER (priorización para la próxima sesión)
 ========================================================================
 FIN DEL DOCUMENTO
 ========================================================================
+
+
+========================================================================
+AÑADIDO 2026-09-19 — UNA DECISIÓN QUE EL CÓDIGO NO APLICA
+========================================================================
+`stale_surcharge_bps` existe en `src/env/costs.py::CostModel` y vale 0.0 EN
+TODAS LAS CORRIDAS, porque `snapshot_cost_model()` se llama sin ese argumento.
+
+Es decir: D8 decide que un precio ARRASTRADO (día sin cotización) debe encarecer
+la operación, y en los hechos no la encarece en un solo punto básico. Ninguna de
+las 134 corridas del registro de D10 lo tuvo activo.
+
+POR QUÉ ESTÁ ACÁ Y NO EN "resuelto": lleva DOS SESIONES anotado (18-sep y
+19-sep) sin arreglarse. Es exactamente el patrón "decisión tomada, código no
+actualizado" del Tier 1, y el hecho de que se repita es el riesgo, no el bug.
+
+MITIGACIÓN PROPUESTA (no aplicada): que `snapshot_cost_model()` EXIJA el
+argumento en vez de tener defecto 0.0 — una guarda que falle temprano, como las
+que se le pusieron a λ y κ en las recompensas nuevas del 19-sep. Un defecto
+silencioso que contradice una decisión es peor que un error ruidoso.
+
+LÍMITE Y RESIDUO: mientras no se aplique, TODO resultado de OE1 subestima el
+costo en los días `is_stale`, y esos no son pocos — el panel los marca
+explícitamente. La dirección del sesgo es conocida: a favor del agente.

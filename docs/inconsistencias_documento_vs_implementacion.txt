@@ -300,6 +300,12 @@ RESUMEN OPERATIVO
      ATRIBUCION, no la "COMBINACION COMPLETA" que pide el texto de R8.
      `completa` nunca se ha corrido con un agente. La entrada 3 esta resuelta
      en su parte de CODIGO; el requisito de R8 NO esta cubierto todavia.
+  >> CERRADO EL 2026-09-19: `completa` corrio (9 corridas, 3 pliegues x 3
+     semillas, 19 min) y R8 cubre ya las CUATRO configuraciones del documento.
+     Resultado en §7.13 de docs/resultados_entorno_OE1.txt: LOS CANALES SE
+     ESTORBAN — la interaccion contra la suma de los aportes individuales es
+     -3.9pp de retorno y -0.86 de Sharpe. Sigue siendo diagnostico a 3
+     semillas, no hallazgo: D10 pide 10.
 
   ESTADO AL 2026-09-18: de las nueve entradas, 3 están RESUELTAS (3, 7, 8) y
   las 6 restantes son de DOCUMENTO o de DECISIÓN, ninguna de código. Para

@@ -124,13 +124,29 @@ def main() -> None:
     ap.add_argument("--timesteps", type=int, default=150_000)
     ap.add_argument("--seeds", type=int, default=3)
     ap.add_argument("--folds", type=int, default=3)
-    ap.add_argument("--reward", default="dsr", choices=["dsr", "ddr", "logret"])
+    ap.add_argument("--reward", default="dsr",
+                    choices=["dsr", "ddr", "logret", "mv", "logret_dd", "dsr_rot"])
+    # D4 ENMENDADA (19-sep): los candidatos exigen su escala EXPLICITA. No hay
+    # defecto a proposito —una constante que nadie recalibra cuando cambia el
+    # universo es la trampa que este proyecto ya piso tres veces— asi que el
+    # valor se pre-registra y viaja al registro de D10 con la configuracion.
+    ap.add_argument("--lam", type=float, default=None,
+                    help="lambda de mv / logret_dd (ver d4_tamiz_recompensas.py::calibra_escala)")
+    ap.add_argument("--kappa", type=float, default=None,
+                    help="kappa de dsr_rot")
     ap.add_argument("--log-std", type=float, default=-2.0)
     ap.add_argument("--action-mode", default="delta", choices=["delta", "logits"])
     ap.add_argument("--action-scale", type=float, default=0.05)
     ap.add_argument("--rebalance-every", type=int, default=1)
     ap.add_argument("--n-envs", type=int, default=4)
+    # El artefacto se PARAMETRIZA porque este script ya no corre una sola vez:
+    # una corrida parcial (una vista suelta, u otra recompensa) sobrescribia el
+    # JSON de la ablacion entera y se perdia. El defecto no cambia, asi que las
+    # invocaciones viejas siguen escribiendo donde siempre.
+    ap.add_argument("--out", default=str(SALIDA),
+                    help="ruta del artefacto JSON de salida")
     args = ap.parse_args()
+    salida = Path(args.out)
 
     from stable_baselines3 import PPO
     from stable_baselines3.common.env_util import make_vec_env
@@ -144,8 +160,19 @@ def main() -> None:
     print(f"total    : {len(args.views) * args.folds * args.seeds} corridas")
     print("EL TRAMO DE PRUEBA NO SE TOCA: todo se evalúa sobre val (D21).\n")
 
+    reward_kwargs: dict = {}
+    if args.lam is not None:
+        reward_kwargs["lam"] = args.lam
+    if args.kappa is not None:
+        reward_kwargs["kappa"] = args.kappa
+    if args.reward in ("mv", "logret_dd") and "lam" not in reward_kwargs:
+        ap.error(f"la recompensa {args.reward} necesita --lam (pre-registrado)")
+    if args.reward == "dsr_rot" and "kappa" not in reward_kwargs:
+        ap.error("la recompensa dsr_rot necesita --kappa (pre-registrado)")
+
     cfg_extra = {
         "reward": args.reward,
+        "reward_kwargs": reward_kwargs,
         "rebalance_every": args.rebalance_every,
         "action_mode": args.action_mode,
         "action_scale": args.action_scale,
@@ -178,6 +205,7 @@ def main() -> None:
             base_cfg = {
                 "view": vista,
                 "reward": args.reward,
+                "reward_kwargs": reward_kwargs,
                 "rebalance_every": args.rebalance_every,
                 "fold": p.idx,
                 "action_mode": args.action_mode,
@@ -221,8 +249,8 @@ def main() -> None:
                 )
             resultados["vistas"][vista][f"pliegue{p.idx}"] = por_semilla
 
-        SALIDA.parent.mkdir(parents=True, exist_ok=True)
-        SALIDA.write_text(json.dumps(resultados, indent=2, ensure_ascii=False), encoding="utf-8")
+        salida.parent.mkdir(parents=True, exist_ok=True)
+        salida.write_text(json.dumps(resultados, indent=2, ensure_ascii=False), encoding="utf-8")
 
     # ------------------------------------------------------------------ tablas
     def med(vista: str, fold: int, clave: str) -> float:
@@ -262,7 +290,7 @@ def main() -> None:
                 print(f"    {vista:<26}" + "".join(celdas) + f"{np.median(todo):>+12.3f}")
 
     print(f"\n\nregistro de configuraciones (D10): {conteo()}")
-    print(f"artefacto: {SALIDA}")
+    print(f"artefacto: {salida}")
     print(f"\nterminado en {(time.time()-t0)/60:.1f} min")
     print(
         "\nRECORDATORIO: 3 semillas es DIAGNÓSTICO, no resultado. D10 pide 10 "

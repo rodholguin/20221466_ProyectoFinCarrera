@@ -205,7 +205,10 @@ class PortfolioEnv(_BASE):
         v_next = self._value(self.t)
 
         net_return = v_next / v_pre - 1.0
-        reward = self.reward_fn.step(net_return)
+        # La rotacion va SIEMPRE, aunque casi ninguna recompensa la mire:
+        # asi el brazo que reabre D7 no necesita un entorno distinto, que es
+        # como se cuelan las comparaciones no comparables.
+        reward = self.reward_fn.step(net_return, turnover)
 
         self.step_count += 1
         self.w_post = target

@@ -32,7 +32,7 @@ ya no cabe en la cabeza.
   D1   alcance del agente                      CERRADA — portafolio
   D2   espacio de acción                       CERRADA — ENMENDADA: acción relativa
   D3   algoritmo                               CERRADA — PPO primario
-  D4   función de recompensa                   CERRADA — DSR (enmendada 09-03)
+  D4   función de recompensa                   REABIERTA 09-19 — el tamiz reprueba a las 3
   D5   observación: ventana y recurrencia      CERRADA — ventana apilada, sin RNN
   D6   normalización causal                    CERRADA — expanding por activo
   D7   costos de transacción y slippage        CERRADA en forma — falta tarifario
@@ -57,6 +57,8 @@ ya no cabe en la cabeza.
   D26  parámetros del baseline Markowitz       ABIERTA — implementado, falta pre-registrar
   D27  escala de la sorpresa fundamental       CERRADA — winsorizada, enmienda D6
   D28  estado de las corridas por vista        AUDITADA — integradas SI, corridas NO
+  D29  tamiz de recompensas sin entrenar       NUEVA 09-19 — criterio pre-registrado, 0 del contador
+  D30  sorpresas macro del calendario ECO      NUEVA 09-19 — 935 eventos disponibles, NO adoptados
 
   >> EVENTO DE DATOS DEL 2026-09-12, y condiciona la lectura de TODO lo de
      arriba: se descubrió que el endpoint share-values de la BVL etiquetaba
@@ -243,6 +245,84 @@ DECISIONES (en orden de resolución sugerido)
       (recompensa incremental de Sharpe, común en trading RL); (c) retorno puro.
     Decidir la forma y los pesos/λ.
 
+    ================================================================
+    ENMIENDA PENDIENTE (2026-09-19) — EL TAMIZ REPRUEBA A LOS TRES BRAZOS
+    ================================================================
+    Medido en §7.11 y §7.12 de docs/resultados_entorno_OE1.txt, con
+    scripts/d4_diagnostico_recompensas.py y scripts/d4_tamiz_recompensas.py.
+    NINGUNA CORRIDA DE AGENTE: 0 configuraciones al contador de D10.
+
+    LO QUE SE MIDIÓ DE LA PRIMARIA (DSR):
+      · Reordenando, r_t ∝ (R−A) − (A/2B)·(R²−B). El precio de la varianza es
+        A/(2B), PROPORCIONAL a la media móvil del retorno: con A≈0 degenera y
+        con A<0 CAMBIA DE SIGNO. En train eso pasa en 44% de los días.
+      · El término de riesgo explica 7-10% de la señal.
+      · Su acumulado NO ORDENA: rho de Spearman +0.11 (train) y +0.36 (val)
+        contra el Sharpe del periodo, sobre 18 estrategias reales. En train le
+        paga 5.7x más a Markowitz, que pierde plata, que al 1/N, que gana.
+      · Inflar la volatilidad a media constante le SUBE el acumulado en 44% de
+        las 36 celdas.
+      >> ESO EXPLICA D25: el agente cumple cada vez mejor un objetivo que, en el
+         tramo donde entrena, no es el desempeño.
+
+    LO QUE SE MIDIÓ DE V1 (DDR), Y CAMBIA LA RECOMENDACIÓN:
+      · Ordena AL REVÉS: rho −0.63 (train) y −0.38 (val).
+      · Paga por ruido en 83% de las celdas.
+      · Un lastre de costo le SUBE la recompensa (−4.69% por bp/día).
+      >> LA DDR NO DEBERÍA CORRERSE. Se iba a correr con la hipótesis de que,
+         al castigar semivarianza, corregiría la rotación. Está medido que haría
+         lo contrario. Es la única recomendación inequívoca del ejercicio.
+         Correrla igual cuesta 30 corridas del contador para confirmar lo que
+         un tamiz de tres minutos ya dijo.
+
+    LO QUE SE MIDIÓ DE V0 (log-retorno): pasa T1 POR TAUTOLOGÍA —su acumulado
+    ES el retorno— y reprueba T3 por construcción: no tiene término de riesgo.
+    Sigue sirviendo para lo que D4 lo puso, que es ser el control, y para nada
+    más.
+
+    TRES CANDIDATOS NUEVOS, YA IMPLEMENTADOS Y EN TAMIZ (src/env/rewards.py):
+      C1 `mv`         log-retorno − λ·(R−A)². Es D4(a), la propuesta del 09-02.
+                      El precio del riesgo vuelve a ser una CONSTANTE, que es
+                      justo lo que al DSR le falta.
+      C2 `logret_dd`  log-retorno − λ·(incremento del drawdown). Forma por paso
+                      del objetivo tipo Calmar / E(MDD) de Almahdi y Yang
+                      (2017). Es el único con hipótesis previa a favor: §7.7
+                      dejó medido que la ventaja del agente contra el 1/N es el
+                      DRAWDOWN, no el retorno.
+      C3 `dsr_rot`    DSR − κ·rotación. REABRE D7 (ver ahí). MEDIDO: sale PEOR
+                      que el DSR pelado — se vuelve ciego al costo real (0.09%
+                      por bp contra 2.03%) e invierte el orden en val (−0.52).
+                      Esta vía NO funciona.
+
+    NI `mv` NI `logret_dd` PASAN EL TAMIZ TAMPOCO, y el porqué es el hallazgo:
+    λ fija cuánto pesa el riesgo contra el retorno, y subirlo mejora T3 y
+    empeora T1 monótonamente. Barrido completo en §7.12. NO EXISTE λ QUE CUMPLA
+    LAS DOS, en ninguna de las dos formas. A frecuencia diaria y sin deriva,
+    "ordenar como ordena el Sharpe" y "que el riesgo pese" son exigencias en
+    conflicto directo: el retorno diario es ~1e-3 y su cuadrado ~1e-6.
+
+    LO MÁS CERCA: `logret_dd` con λ=0.51 — rho 0.74/0.93 (pasa T1 holgado) y
+    peso del riesgo 16.8% contra el umbral de 20%. Y su fidelidad de orden
+    contra el DRAWDOWN se queda en +0.82/+0.78 ESTABLE EN TODO EL BARRIDO.
+
+    LO QUE HAY QUE DECIDIR (es del autor, y las cuatro son defendibles):
+      (a) Bajar el umbral de T3 a 15% y adoptar `logret_dd` con λ=0.51. Es
+          mover un umbral DESPUÉS de ver el resultado; se registra como tal.
+      (b) Medir T1 contra el DRAWDOWN en vez del Sharpe, con el argumento de
+          §7.7. Mismo reparo: se decide después de ver.
+      (c) Quedarse con el DSR por ser el estándar de la literatura y REPORTAR
+          EL TAMIZ COMO RESULTADO NEGATIVO. Es la opción más honesta y
+          probablemente la más publicable: dice que el objetivo estándar del
+          área no ordena estrategias en un mercado sin deriva.
+      (d) Correr `mv` y `logret_dd` a 3 semillas x 3 pliegues (18 corridas,
+          ~45 min, 6 configuraciones) para ver si el tamiz PREDICE el desempeño
+          del agente. Eso valida el TAMIZ COMO MÉTODO, que vale más que el
+          resultado de cualquier brazo suelto.
+
+    LO QUE NO CAMBIA: η sigue pre-registrada en 1/60; R_t sigue siendo neto de
+    costos; los estadísticos suficientes de la recompensa que se elija siguen
+    yendo al vector de observación (Markov). `logret_dd` expone DD_t por eso.
+
 [X] D5. OBSERVACIÓN — CERRADA (2026-09-03): VENTANA APILADA + MLP, SIN RNN.
     RAZÓN, y no es solo "hay poco dato": LA MEMORIA YA ESTÁ EN LAS FEATURES.
     Las EWMAs de 5/20/60 días de D11/D15 cargan explícitamente la persistencia
@@ -288,6 +368,14 @@ DECISIONES (en orden de resolución sugerido)
        Corregido; ver D27.
 
 [~] D7. COSTOS — CERRADA EN FORMA (2026-09-03); FALTAN CIFRAS DE FUENTE PRIMARIA.
+    >> REABIERTA Y RESUELTA EN SU PARTE NUEVA (2026-09-19). §7.9 pedía
+       reabrirla porque el DSR parecía premiar la volatilidad que la
+       operación genera. Se implementó el brazo `dsr_rot` (DSR − κ·rotación)
+       y SE MIDIÓ QUE NO FUNCIONA: con el castigo escalado localmente la
+       recompensa se vuelve CIEGA al costo real (0.09% por bp contra 2.03%
+       del DSR pelado) e invierte el orden en val (rho −0.52). EL ARGUMENTO
+       ORIGINAL DE D7 —no cobrar dos veces— SE SOSTIENE, y ahora con una
+       medición detrás y no solo con el razonamiento. Ver §7.12.
     ESTRUCTURA (cerrada):
       c_i = comisión SAB + derechos (BVL+Cavali+SMV) + medio spread OBSERVADO
             del activo, por lado. Impacto de mercado ≈ 0 POR CONSTRUCCIÓN: el
@@ -2670,6 +2758,93 @@ Se registra para que no vuelva a pasar lo de "decidido y no implementado".
     (depende de la propia historia de retornos del agente), así que su nivel
     absoluto no es comparable entre configuraciones; solo su TENDENCIA dentro
     de una corrida.
+
+[ ] D29. TAMIZ DE RECOMPENSAS SIN ENTRENAR — NUEVA (2026-09-19).
+    EL CANDADO QUE ABRE. D4 dice "tres brazos y no más" porque cada brazo
+    entrenado es una configuración más en el contador de D10. Con esa regla,
+    explorar recompensas parecía caro por definición. No lo es: CARACTERIZAR
+    UNA RECOMPENSA NO NECESITA UN AGENTE, necesita series de retorno. El tamiz
+    corre 18 estrategias reales dentro del mismo simulador, sobre train y val,
+    y no entrena nada: CERO configuraciones anotadas.
+
+    EL CRITERIO, FIJADO EN EL CÓDIGO (constantes UMBRAL_* de
+    scripts/d4_tamiz_recompensas.py) ANTES DE CORRERLO:
+      T1 FIDELIDAD DE ORDEN   rho de Spearman del acumulado contra el Sharpe
+                              del periodo >= +0.50, en LOS DOS tramos.
+      T2 NO PAGA POR RUIDO    inflar la vol a media constante (k=1.5) no puede
+                              subir el acumulado en ninguna de las 36 celdas.
+      T3 EL RIESGO PESA       por ablación normalizada, >= 20% de la señal.
+      T4 VE EL PEAJE          restar 1 bp/día baja el acumulado >= 1%, monótono.
+
+    HONESTIDAD SOBRE LA PRIMERA CORRIDA: hubo que arreglar TRES DEFECTOS DE
+    MEDICIÓN (T3 comparaba series en unidades crudas y daba 99% para toda la
+    familia diferencial; T2 reportaba un peor-caso relativo que explota cuando
+    el acumulado pasa por cero; a `dsr_rot` no se le pasaba la rotación).
+    SE CORRIGIÓ CÓMO SE MIDE; LOS UMBRALES NO SE TOCARON.
+
+    LO QUE FALTA DECIDIR:
+      · Si el tamiz es VINCULANTE (una recompensa que lo reprueba no se corre)
+        o solo INFORMATIVO. Hoy ninguna de las seis lo pasa, así que declararlo
+        vinculante sin más dejaría a OE1 sin recompensa.
+      · Si T1 se mide contra el Sharpe o contra el drawdown (ver enmienda D4).
+      · Si el mismo método se extiende a otras decisiones que hoy se resuelven
+        entrenando. D23 (ventana) y D24 (condición inicial) NO son tamizables
+        así —dependen del agente—, pero D26 (parámetros de Markowitz) sí.
+
+    POR QUÉ IMPORTA MÁS QUE SU RESULTADO: es un método para elegir SIN gastar
+    el contador y SIN mirar validación. Es la misma lógica con que D22 calibró
+    la exploración por rotación en vez de por desempeño.
+
+[ ] D30. SORPRESAS MACRO (CALENDARIO ECO) — NUEVA (2026-09-19).
+    QUE APARECIO. La pantalla ECO del terminal, bajada el 19-sep
+    (data/raw/bloomberg/eco_calendario_macro_20260919.xlsx), trae 2,471 eventos
+    macro de Perú entre 2011 y 2026 CON HORA, y para cada uno el CONSENSO
+    (`Encues(M)`) junto al dato EFECTIVO. Eso hace calculables 935 SORPRESAS:
+
+        Tipo referencial (BCRP)      188      IPC Lima YoY            179
+        Actividad económica YoY      186      Tasa de desempleo       140
+        IPC Lima MoM                 183      PIB YoY                  59
+
+    POR QUÉ ES TENTADOR, Y NO ES POCO. El canal macro del panel son NIVELES
+    (TC, EMBI, cobre, tasa, inflación, SPX, MSCI-EM). La SORPRESA —dato menos
+    consenso— es la parte que efectivamente es NOTICIA; el nivel ya está
+    descontado. Y §7.7 midió que macro es el ÚNICO canal que CALMA al agente:
+    baja la rotación 0.39 y el costo S/9,125. Si algún canal merece más
+    resolución, es ese.
+
+    Y ADEMÁS ESTÁ EN HORA DE LIMA, verificado: las decisiones de tasa del BCRP
+    figuran a las 18:00, que es la hora oficial de anuncio. Eso permite decidir
+    con precisión si un dato se conoció antes o después del cierre (D13), cosa
+    que las horas de EVTS NO permiten (ver §7.2 de estado_extraccion_bloomberg).
+
+    POR QUÉ **NO** SE ADOPTA HOY, Y ES LO IMPORTANTE:
+      1. R8 YA SE CORRIÓ. Agregar una familia de features después de medir la
+         ablación cambia el sujeto del experimento. Si entra, R8 se vuelve a
+         correr entero, y eso son 36+ corridas del contador de D10.
+      2. NO HA PASADO EL TAMIZ. La regla del proyecto es que ningún factor
+         macro entra por ser plausible: pasa por `probe_macro_exposicion.py`
+         sobre el universo vigente, que es el mismo filtro que ELIMINÓ al oro
+         (0 de 7 activos) y RECHAZÓ al estaño.
+      3. §7.13 midió que los canales SE ESTORBAN (interacción −3.9pp de retorno
+         y −0.86 de Sharpe). Sumar dimensiones tiene costo demostrado, no solo
+         beneficio hipotético.
+      4. §7.15 cerró que la vía de la recompensa tampoco mueve la vara. Antes
+         de agregar señal hay que decidir si el problema ES de señal — y esa
+         es la pregunta abierta de la tesis, no un detalle de implementación.
+
+    LO QUE HAY QUE DECIDIR:
+      (a) Pasar las 6 series de sorpresa por el tamiz de exposición. Es barato
+          y no gasta contador: es correlación, no entrenamiento.
+      (b) Si pasan, decidir si entran como CANAL NUEVO (y R8 se recorre) o como
+          refuerzo del canal macro existente (y R8 se recorre igual).
+      (c) O declararlas TRABAJO FUTURO y dejarlas documentadas. Es la opción
+          barata y, con lo medido en 7.13 y 7.15, la más defendible.
+
+    OJO CON EL LOOK-AHEAD SI SE ADOPTA: el consenso `Encues(M)` es conocible
+    ANTES del anuncio, pero el dato `Efectivo` NO. La sorpresa solo existe
+    DESPUÉS del evento, a su hora. Con el reloj t+1 de D13 eso se respeta solo,
+    pero hay que probarlo con el mismo test de venda en los ojos que se le hizo
+    a Markowitz y a la sorpresa fundamental.
 
 ========================================================================
 NOTAS DE RIESGO (para tener presente al decidir)
