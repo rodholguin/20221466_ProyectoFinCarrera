@@ -506,7 +506,7 @@ function chip(s, x, y, n, texto, w) {
   const s = slideBase("OE3 · Resultados", "R8 · El agente protege capital; las noticias prometen más");
   img(s, "g5_mapa_calor_r8.png", 5.45, 1.45, 7.45, 4.15, { top: true });
   caption(s, 5.45, 5.62, 7.45, "Retorno en validación por configuración y pliegue (mediana de 3 semillas). Azul es ganancia; rojo, pérdida.");
-  stat(s, M, 1.5, 4.6, "+9.7%", "alcanza el agente con el canal de noticias en el mejor año de la década, contra +2.6% con solo datos de mercado", { fs: 40, hEtq: 0.85, fsEtq: 12 });
+  stat(s, M, 1.5, 4.6, "+9.7%", "alcanza el agente con el canal de noticias en el tramo más favorable de la partición, contra +2.6% con solo datos de mercado", { fs: 40, hEtq: 0.85, fsEtq: 12 });
   card(s, M, 3.35, 4.6, 1.25, "Su ventaja clara es otra: la prudencia", [
     "Con solo mercado tiene la menor caída de todas las estrategias con acciones: −4.2% contra −10.2% del reparto igualitario.",
   ], { fs: 11.5, fsTitulo: 12.5, gapTitulo: 0.32 });

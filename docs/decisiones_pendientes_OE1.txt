@@ -296,10 +296,22 @@ DECISIONES (en orden de resolución sugerido)
 
     NI `mv` NI `logret_dd` PASAN EL TAMIZ TAMPOCO, y el porqué es el hallazgo:
     λ fija cuánto pesa el riesgo contra el retorno, y subirlo mejora T3 y
-    empeora T1 monótonamente. Barrido completo en §7.12. NO EXISTE λ QUE CUMPLA
-    LAS DOS, en ninguna de las dos formas. A frecuencia diaria y sin deriva,
-    "ordenar como ordena el Sharpe" y "que el riesgo pese" son exigencias en
-    conflicto directo: el retorno diario es ~1e-3 y su cuadrado ~1e-6.
+    empeora T1 monótonamente. Barrido completo en §7.12. [Decía "NO EXISTE λ
+    QUE CUMPLA LAS DOS, en ninguna de las dos formas": TACHADO el 2026-09-26,
+    ver abajo.] A frecuencia diaria y sin deriva, "ordenar como ordena el
+    Sharpe" y "que el riesgo pese" son exigencias en conflicto: el retorno
+    diario es ~1e-3 y su cuadrado ~1e-6.
+
+    CORRECCIÓN DEL 2026-09-26 — SÍ EXISTE, PARA `logret_dd`. La grilla del
+    barrido saltaba de 0.5 a 1.0 veces el λ de referencia, y el cruce caía en
+    el hueco. Barrido fino (§7.12): en el pliegue 0, `logret_dd` con
+    λ ∈ [0.63, 0.68] PASA LOS CUATRO CRITERIOS tal como se pre-registraron
+    (T1 rho .52-.59 / .89-.90, T2 0/36, T3 20.1-21.3%, T4 12.5-13.8%/bp).
+    Para `mv` no hay ninguno. Calificaciones: la ventana es angosta (~6% del
+    λ calibrado); en el pliegue 1 la ventana es [0.65, 0.95]; en el pliegue 2
+    NO hay ningún λ (T1 en val nunca llega a .50). Y el brazo corrido en
+    §7.15 usó λ=1.02, que reprueba T1: el tamiz todavía NO se ha contrastado
+    con un brazo que lo PASE.
 
     LO MÁS CERCA: `logret_dd` con λ=0.51 — rho 0.74/0.93 (pasa T1 holgado) y
     peso del riesgo 16.8% contra el umbral de 20%. Y su fidelidad de orden
@@ -308,6 +320,12 @@ DECISIONES (en orden de resolución sugerido)
     LO QUE HAY QUE DECIDIR (es del autor, y las cuatro son defendibles):
       (a) Bajar el umbral de T3 a 15% y adoptar `logret_dd` con λ=0.51. Es
           mover un umbral DESPUÉS de ver el resultado; se registra como tal.
+          >> SUPERADA EL 2026-09-26. (a') Adoptar `logret_dd` con λ en
+             [0.65, 0.68] (la intersección de los pliegues 0 y 1; p. ej. 0.66)
+             SIN mover ningún umbral. Reparos: la ventana se encontró después
+             de ver el tamiz y no estaba pre-registrada, y el pliegue 2 no
+             admite ningún λ. Si se elige (a'), el brazo que habría que
+             correr es ESTE, no el de λ=1.02 que ya se corrió.
       (b) Medir T1 contra el DRAWDOWN en vez del Sharpe, con el argumento de
           §7.7. Mismo reparo: se decide después de ver.
       (c) Quedarse con el DSR por ser el estándar de la literatura y REPORTAR
@@ -2123,7 +2141,9 @@ pliegue 0, validación; PPO, log_std=−2, ent_coef=0, vista solo_mercado, DSR):
    En su tramo de entrenamiento LA CAJA LE GANÓ A LA RENTA VARIABLE en retorno
    Y en drawdown. Con una recompensa que penaliza volatilidad, quedarse en caja
    es la respuesta CORRECTA a lo que el agente vio. La validación resultó ser el
-   mejor año de la década para la BVL y esa política quedó mal parada.
+   tramo más favorable de los seis de la partición (percentil 78 de las
+   ventanas de un año; ver resultados §6.1) y esa política quedó mal parada.
+   [Corregido el 2026-09-26: decía "el mejor año de la década", que es falso.]
    >> El agente no falló: train y val son REGÍMENES OPUESTOS.
 
 4. CONSECUENCIAS QUE SÍ SON DECISIONES:

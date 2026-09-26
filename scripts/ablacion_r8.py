@@ -20,7 +20,7 @@ semillas, que en la sección 7.4(d) de resultados resultó ser grande. Comparar
 medianas sueltas desperdicia esa estructura.
 
 POR QUÉ TRES PLIEGUES Y NO UNO. Está medido que la validación del pliegue 0 fue
-el mejor año de la década (+11.9% el 1/N) y las de los pliegues 1 y 2 fueron
+el tramo más favorable de los seis (+11.9% el 1/N) y las de los pliegues 1 y 2 fueron
 años de caída (-8%). Un solo pliegue mide el RÉGIMEN, no el canal.
 
 LO QUE ESTO **NO** ES:

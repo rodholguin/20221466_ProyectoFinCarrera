@@ -3,6 +3,18 @@ Tesis: Aprendizaje por refuerzo profundo aplicado a la Bolsa de Valores de Lima
 Autor: Rodrigo Holguin — Asesor: Dr. E. Villanueva
 ========================================================================
 
+AVANCE AL 2026-09-26
+  1.1 HECHO. Corregido en resultados §6.1, §7.4, §7.7; decisiones; notebook y
+      su generador; ablacion_r8.py; deck.js. Sin el tramo ciego (test del
+      pliegue 2) el percentil es 78, no 81.
+  1.2 HECHO, Y CAMBIÓ LA CONCLUSIÓN: se corrió el barrido fino (opción b).
+      `logret_dd` con λ ∈ [0.63, 0.68] PASA LOS CUATRO criterios en el
+      pliegue 0; en el pliegue 1 la ventana es [0.65, 0.95]; en el pliegue 2
+      no hay ninguna. `mv` no tiene ninguna. Ver §7.12 y la opción (a') de D4.
+  1.3 HECHO. §6.1, con scripts/caracteriza_pliegues.py.
+  2   Commits hechos el 22-sep. a1/a2/a2_eco borrados de la raíz el 26-sep
+      (MD5 idéntico a sus copias en data/raw/bloomberg/).
+
 CONTEXTO: el 2026-09-22 se presentó el avance de OE1 a OE3 ante los profesores
 de tesis. La devolución fue positiva ("un gran avance"). Este documento anota
 lo que quedó pendiente al cerrar esa sesión. NADA de lo de abajo está hecho.

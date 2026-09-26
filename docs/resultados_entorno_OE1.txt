@@ -475,10 +475,59 @@ Los mismos baselines por tramo, ANUALIZADOS:
   pliegue2 train            -0.47%       0.73%       2.15%       -46.4%
   pliegue2 val              -7.55%      -7.83%       5.40%       -11.3%
 
-La validacion del pliegue 0 resulto ser EL MEJOR ANO DE LA DECADA para la
-BVL (+11.9%); las de los pliegues 1 y 2 fueron anos de caida (-8%). Con
-estos datos, cualquier conclusion sacada de un pliegue unico MIDE EL
-REGIMEN, NO AL AGENTE.
+La validacion del pliegue 0 es EL TRAMO MAS FAVORABLE DE LOS SEIS QUE PRODUCE
+LA PARTICION (+11.9% el 1/N); las de los pliegues 1 y 2 fueron anos de caida
+(-8%). Con estos datos, cualquier conclusion sacada de un pliegue unico MIDE
+EL REGIMEN, NO AL AGENTE.
+
+CORREGIDO EL 2026-09-26. Hasta aca decia "EL MEJOR ANO DE LA DECADA para la
+BVL". Es FALSO: la frase comparaba solo los seis tramos de la particion y se
+generalizo sin medirla. Medido (abajo), el tramo esta en el percentil 78 de
+las ventanas de un ano. Es favorable, no excepcional. La conclusion del
+parrafo —que un pliegue unico mide el regimen— NO cambia: la diferencia
+entre los tramos de validacion sigue siendo de ~20 puntos.
+
+CARACTERIZACION DE LOS TRAMOS — MEDIDA SOBRE EL PANEL, NO SOBRE UN INDICE
+EXTERNO. Indice equiponderado de los 7 activos, rebalanceado a diario,
+BRUTO (sin costos ni caja), sobre la valuacion total-return. Reproducible
+con `scripts/caracteriza_pliegues.py`:
+
+  tramo              desde        hasta          ret     vol    maxDD
+  pliegue 0 train    2013-01-02   2018-10-23   +18.0%   13.6%   -44.9%
+  pliegue 0 val      2018-11-22   2019-11-21   +14.2%   11.1%    -9.9%
+  pliegue 1 train    2013-01-02   2020-10-21   +25.6%   13.5%   -44.9%
+  pliegue 1 val      2020-11-19   2021-11-22    -5.8%   26.6%   -41.9%
+  pliegue 2 train    2013-01-02   2022-10-21   +11.9%   15.9%   -44.9%
+  pliegue 2 val      2022-11-22   2023-11-21    -5.4%    9.4%   -10.2%
+
+  (El +14.2% bruto del indice y el +11.9% del 1/N de la tabla de arriba son
+  la misma cartera: la diferencia es el peaje de rebalancear a diario.)
+
+  Contra las 2,505 ventanas de 252 dias entre 2013-01-02 y 2023-12-20:
+    val pliegue 0  +14.2%  -> percentil 78
+    val pliegue 1   -5.8%  -> percentil 31
+    val pliegue 2   -5.4%  -> percentil 32
+    mejor ventana  +69.9%, termina el 2017-02-03 · mediana +0.3%
+
+  Por ano calendario: 2013 -7.6% · 2014 +2.4% · 2015 -26.3% · 2016 +53.3%
+  · 2017 +20.2% · 2018 -4.9% · 2019 +13.3% · 2020 -7.9% · 2021 -6.3% ·
+  2022 -6.1%. El mejor ano de la decada es 2016, y 2017 tambien supera a
+  2019.
+
+  POR QUE LAS VENTANAS SE CORTAN EN 2023-12-20. El test del pliegue 2 es el
+  unico tramo que ningun pliegue usa para entrenar ni validar, y el registro
+  de D10 exige con_test = 0. La medicion del 2026-09-22 (la que se uso en el
+  informe de avance) incluia ese tramo y daba percentil 81; con el tramo
+  excluido da 78. La conclusion es la misma.
+
+LOS ROTULOS QUE USAN EL INFORME Y LA PRESENTACION salen de esta tabla y NO
+de un indice de mercado: "ano alcista" (pliegue 0: +14.2%, vol 11.1%),
+"pandemia y elecciones" (pliegue 1: -5.8%, la vol mas alta de los seis
+tramos, 26.6%, y caida de -41.9%), "ano bajista" (pliegue 2: -5.4% con vol
+baja, 9.4%: caida lenta, no crisis). Describen NUESTRO universo de 7
+activos, no a la BVL. Contrastarlos contra el indice local de retorno total
+(SPBLPGPT) sigue pendiente: es el baseline de mercado de D10 y todavia no
+existe.
 
 ------------------------------------------------------------------------
 6.2 VENTANA QUE CRECE O VENTANA QUE SE DESPLAZA (PREGUNTA DEL ASESOR,
@@ -796,7 +845,10 @@ Y ELIGE BIEN. Los baselines sobre los DOS tramos del pliegue 0:
 En su tramo de ENTRENAMIENTO la caja le gano a la renta variable en retorno
 Y en drawdown. Con una recompensa que penaliza volatilidad, quedarse en
 caja es la RESPUESTA CORRECTA a lo que el agente vio. Que la validacion
-resultara el mejor ano de la decada es una propiedad del corte.
+resultara un ano favorable (percentil 78 de las ventanas de un ano, y el
+tramo mas favorable de los seis de la particion; ver §6.1) es una propiedad
+del corte. [Corregido el 2026-09-26: decia "el mejor ano de la decada", que
+es falso.]
 
   >> EL AGENTE NO FALLO: TRAIN Y VAL SON REGIMENES OPUESTOS.
 
@@ -931,7 +983,7 @@ fundamental y que la tubería es determinista dada la semilla.
 
 MEDIANA DE 3 SEMILLAS, POR PLIEGUE:
 
-  pliegue 0 · val 2018-11 .. 2019-11   (el MEJOR año de la década)
+  pliegue 0 · val 2018-11 .. 2019-11   (el tramo más favorable de los seis; percentil 78, §6.1)
     brazo                     ret    sharpe   sortino    maxDD   rot
     solo_mercado            +2.6%     0.18      0.25     -4.2%   1.97
     mercado_macro           +4.4%     0.40      0.63     -5.2%   1.48
@@ -990,8 +1042,8 @@ CINCO LECTURAS, Y LA PRIMERA MANDA:
        es elegir el resultado. Ver 7.8.
 
  3. **NINGUN CANAL MUEVE LA VARA DE D9.** Contra la CAJA, los cuatro
-    brazos van 1 de 3, y el pliegue que ganan es el 0 — el mejor año de la
-    década. Contra el 1/N, la base va 2/3 y el sentimiento EMPEORA a 1/3.
+    brazos van 1 de 3, y el pliegue que ganan es el 0 — el tramo más
+    favorable de la partición (§6.1). Contra el 1/N, la base va 2/3 y el sentimiento EMPEORA a 1/3.
     Agregar señales no convirtió al agente en ganador: lo movió de lugar.
 
  4. **LOS TRES CANALES EMPEORAN EL DRAWDOWN.** Sentimiento 2/9 positivos
@@ -1431,7 +1483,61 @@ estrategias:
                 λ=1.02  rho .39/.86   riesgo 28.8%     T1 NO · T3 si
                 λ=2.03  rho .21/.58   riesgo 44.8%     T1 NO · T3 si
 
-  >> NO EXISTE λ QUE CUMPLA LAS DOS, EN NINGUNA DE LAS DOS FORMAS.
+  >> [TACHADO EL 2026-09-26] "NO EXISTE λ QUE CUMPLA LAS DOS, EN NINGUNA DE
+     LAS DOS FORMAS."
+
+ESA CONCLUSION ERA FALSA, Y NO SOLO IMPRECISA. La grilla de arriba salta de
+0.5 a 1.0 veces el λ de referencia, y en las DOS formas el cruce T1/T3 cae
+justo en ese hueco. Barrido fino en paso 0.05 sobre ese tramo (pliegue 0,
+mismos bancos, reproduce el artefacto canonico byte a byte con la grilla
+por defecto):
+
+  python scripts/d4_tamiz_recompensas.py --out <scratch> \
+         --mults 0.5,0.55,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.95,1.0
+
+  mv            λ=8.14  rho .54/.54  riesgo 14.6%   T1 si · T3 NO
+                λ=8.96  rho .49/.42  riesgo 16.1%   T1 NO · T3 NO
+                λ=11.40 rho .46/.33  riesgo 20.4%   T1 NO · T3 si
+                >> `mv`: NINGUN λ. T1 se cae ANTES de que T3 llegue a 20%.
+                   Para esta forma la conclusion original se sostiene.
+
+  logret_dd     λ=0.61  rho .62/.90  riesgo 19.5%   T1 si · T3 NO
+                λ=0.63  rho .59/.90  riesgo 20.1%   T1 si · T3 si  <--
+                λ=0.66  rho .55/.90  riesgo 20.8%   T1 si · T3 si  <--
+                λ=0.68  rho .52/.89  riesgo 21.3%   T1 si · T3 si  <--
+                λ=0.69  rho .45/.89  riesgo 21.6%   T1 NO · T3 si
+                >> `logret_dd`: EXISTE UNA VENTANA, λ ∈ [0.63, 0.68].
+
+Y EN ESA VENTANA `logret_dd` PASA LOS CUATRO CRITERIOS, no solo T1 y T3.
+Medido en paso 0.01 con T2 y T4 incluidos: T2 0/36 estrategias donde el
+ruido paga, T4 entre 12.5% y 13.8% de caida por bp, monotona. EN EL PLIEGUE
+0, QUE ES DONDE SE PRE-REGISTRO EL TAMIZ, `logret_dd` CON λ ENTRE 0.63 Y
+0.68 ES UNA RECOMPENSA ADMISIBLE.
+
+Lo que la califica, y hay que escribirlo con el resultado:
+
+  * LA VENTANA ES ANGOSTA: seis centesimas, ~6% del λ calibrado. Y T1 en
+    train pasa con poco margen (rho .52 a .59 contra el umbral de .50).
+  * NO ES ESTABLE ENTRE PLIEGUES. Barrido λ ∈ [0.10, 1.00] en paso 0.05:
+      pliegue 1  ventana λ ∈ [0.65, 0.95] — pasa los cuatro, y es ancha.
+      pliegue 2  NINGUN λ. T1 en val no llega a .50 con ningun λ (rho
+                 +0.23 en el mejor caso, NEGATIVA desde λ=0.35), y T2 falla
+                 desde λ=0.85.
+    El λ comun a los pliegues 0 y 1 es [0.65, 0.68]. El pliegue 2 no lo
+    admite con NINGUN valor, lo que sugiere que su falla no es de λ sino
+    del tramo: en su val el exceso es negativo y el Sharpe premia la
+    volatilidad (§7.7, punto 2). Eso es HIPOTESIS, no esta medido.
+  * EL λ SE ELIGE DESPUES DE VER EL TAMIZ. Es lo que el tamiz esta para
+    hacer —calibrar por propiedad de la recompensa, sin mirar al agente—,
+    pero la ventana se encontro en esta sesion y no estaba pre-registrada.
+    Si se adopta, se registra como tal.
+  * EL BRAZO QUE SE CORRIO EN §7.15 NO ERA ESTE. `logret_dd` se corrio con
+    λ=1.02, que reprueba T1 (rho train .39). Lo que §7.15 dejo medido es
+    que una recompensa QUE REPRUEBA el tamiz no mejora al agente; no dice
+    nada todavia de una que lo pasa.
+
+La lectura de abajo sigue valiendo para `mv` y como TENDENCIA general (subir
+λ canjea orden por peso del riesgo), pero ya no como imposibilidad:
 
 Y ESE ES EL HALLAZGO, no un fracaso del ejercicio: A FRECUENCIA DIARIA Y EN UN
 MERCADO SIN DERIVA, "ORDENAR LAS ESTRATEGIAS COMO LAS ORDENA EL SHARPE" Y "QUE
@@ -1453,6 +1559,12 @@ LO QUE HAY QUE DECIDIR, Y ES DEL AUTOR (entra como enmienda a D4):
   (a) Bajar el umbral de T3 de 20% a 15% y adoptar `logret_dd` con λ=0.51, que
       lo cumple todo salvo por 3.2 puntos. Es mover un umbral despues de ver el
       resultado y hay que registrarlo como tal.
+      >> SUPERADA EL 2026-09-26: no hace falta mover ningun umbral. Con
+         λ ∈ [0.63, 0.68] `logret_dd` pasa los cuatro criterios TAL COMO SE
+         PRE-REGISTRARON (ver el barrido fino arriba). La opcion que la
+         reemplaza es (a') ADOPTAR `logret_dd` con λ en esa ventana —p. ej.
+         0.66, el centro de la interseccion con el pliegue 1— declarando que
+         la ventana se encontro despues y que el pliegue 2 no admite ninguno.
   (b) Dejar T1 medido contra el DRAWDOWN en vez del Sharpe para la recompensa
       que se elija, con el argumento de 7.7. Mismo reparo: se decide despues.
   (c) Aceptar que ninguna pasa, quedarse con el DSR por ser el estandar de la
@@ -1592,6 +1704,13 @@ igual, pero por igual).
 lam=1.02, 3 pliegues x 3 semillas, 150k pasos, vista solo_mercado. Artefactos
 ablacion_d4_mv.json y ablacion_d4_logret_dd.json. Predicciones en 7.14, escritas
 ANTES de correr.
+
+[NOTA DEL 2026-09-26] LOS DOS BRAZOS CORRIDOS REPRUEBAN EL TAMIZ. Los dos λ
+son los calibrados al 25%, y con ellos ni `mv` ni `logret_dd` pasan T1. El
+barrido fino de §7.12 encontro despues que `logret_dd` con λ ∈ [0.63, 0.68]
+pasa los cuatro criterios. Lo de abajo mide entonces que una recompensa QUE
+REPRUEBA el tamiz no mejora al agente. NO mide todavia si una que lo pasa lo
+mejora.
 
 DIFERENCIA PAREADA CONTRA `dsr`, por semilla y pliegue (mediana de 9 celdas):
 

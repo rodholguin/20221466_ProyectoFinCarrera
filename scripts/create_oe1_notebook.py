@@ -605,7 +605,7 @@ add_md(r"""
 ### 6.1 · Por qué reportar un solo pliegue sería engañoso
 
 Los mismos baselines, sobre cada tramo de cada pliegue, **anualizados**.
-La validación del pliegue 0 resultó ser **el mejor año de la década** para la BVL;
+La validación del pliegue 0 es **el tramo más favorable de los seis** (percentil 78);
 la de los pliegues 1 y 2 fueron años de caída. Con estos datos, cualquier
 conclusión sacada de un pliegue único **mide el régimen, no al agente**.
 """)
@@ -1025,7 +1025,7 @@ elige la caja.**
 **Y elige bien.** En su tramo de entrenamiento (2013-01 → 2018-10), la caja
 rindió 2.63%/año contra 1.65%/año del 1/N, con drawdown 0% contra −46.5%. Con una
 recompensa que penaliza volatilidad, **quedarse en caja es la respuesta correcta a
-lo que el agente vio**. Que la validación resultara el mejor año de la década es
+lo que el agente vio**. Que la validación resultara el tramo más favorable es
 una propiedad del corte, no un error del agente.
 
 > **El agente no falló: `train` y `val` son regímenes opuestos.** Por eso los tres
@@ -1198,7 +1198,7 @@ barra naranja es la mediana. Cuatro lecturas, y **la primera manda**:
    volatilidad, el Sharpe "mejoró" 15. *Si R8 se lee del Sharpe solo, premia al
    canal que agrega riesgo en los tramos perdedores.*
 3. **Ningún canal mueve la vara de D9:** los cuatro brazos van 1 de 3 contra la
-   caja, y el pliegue que ganan es el 0 — el mejor año de la década.
+   caja, y el pliegue que ganan es el 0 — el tramo más favorable.
 4. **Los tres canales empeoran el drawdown**, que era la única ventaja clara del
    agente. *Macro lo calma* (rotación 1.50, el más barato); *sentimiento lo
    agita* (+40% de rotación, +37% de costo); *fundamentales lo saca de la caja* y

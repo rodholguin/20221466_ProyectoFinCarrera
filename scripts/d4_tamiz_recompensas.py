@@ -219,7 +219,9 @@ def peso_del_riesgo(banco_tr: dict, nombre: str, kw: dict) -> float:
     return float(masa_riesgo / (masa_total + 1e-18))
 
 
-def frontera_lambda(bancos: dict, forma: str, lam_ref: float) -> list[dict]:
+def frontera_lambda(bancos: dict, forma: str, lam_ref: float,
+                    mults: tuple[float, ...] = (0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 10.0)
+                    ) -> list[dict]:
     """Barre λ y mide el canje entre T1 (fidelidad de orden) y T3 (peso del riesgo).
 
     POR QUE HACE FALTA. λ no es un boton de desempeño: fija CUANTO pesa el
@@ -232,9 +234,13 @@ def frontera_lambda(bancos: dict, forma: str, lam_ref: float) -> list[dict]:
     SE MIDE SOBRE TRAIN Y VAL, NUNCA SOBRE UN AGENTE. Es calibracion por
     propiedad de la recompensa, no por resultado: la misma logica con que D22
     calibro la exploracion por rotacion.
+
+    LA GRILLA POR DEFECTO ES GRUESA: salta de 0.5 a 1.0 veces el λ de
+    referencia, y en las dos formas el cruce T1/T3 cae en ese hueco. `--mults`
+    barre fino un tramo sin pisar el artefacto canonico (usar con --out).
     """
     out = []
-    for mult in (0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 10.0):
+    for mult in mults:
         lam = lam_ref * mult
         kw = {"lam": lam}
         fila = {"mult": mult, "lam": lam}
@@ -260,7 +266,11 @@ def main() -> None:
     ap.add_argument("--fold", type=int, default=0)
     ap.add_argument("--folds", type=int, default=3)
     ap.add_argument("--out", default=str(SALIDA))
+    ap.add_argument("--mults", default=None,
+                    help="multiplicadores del λ de referencia para la frontera, "
+                         "separados por coma (defecto: la grilla gruesa de §7.12)")
     args = ap.parse_args()
+    mults = tuple(float(x) for x in args.mults.split(",")) if args.mults else None
 
     panel = load_panel(view="solo_mercado", warmup=WARMUP)
     costos = snapshot_cost_model(panel.tickers)
@@ -395,7 +405,8 @@ def main() -> None:
         print(f"\n  {forma}   (lambda de referencia = {lam_ref:,.2f})")
         print(f"  {'mult':>6} {'lambda':>12} {'rho Sh tr':>10} {'rho Sh val':>11} "
               f"{'rho DD tr':>10} {'rho DD val':>11} {'peso riesgo':>12}   T1  T3")
-        filas = frontera_lambda(bancos, forma, lam_ref)
+        filas = (frontera_lambda(bancos, forma, lam_ref, mults) if mults
+                 else frontera_lambda(bancos, forma, lam_ref))
         res["frontera"][forma] = filas
         for f in filas:
             print(f"  {f['mult']:>6.2f} {f['lam']:>12,.2f} "
