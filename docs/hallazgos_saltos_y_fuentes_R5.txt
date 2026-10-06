@@ -1,0 +1,272 @@
+HALLAZGOS — QUÉ MUEVE A LOS 7 ACTIVOS, Y QUÉ FUENTES LO CAPTURAN
+Sesión 2026-08-29/30. Todo reproducible con los scripts que se indican.
+========================================================================
+
+POR QUÉ ESTE DOCUMENTO. La evaluación integral de R5
+(docs/_TEMP_para_decidir_20260829.txt) abrió la pregunta de si convenía mover el
+canal de sentimiento de la prensa a los Hechos de Importancia de la BVL. Al
+medirlo aparecieron cosas que valen por sí solas, independientes de esa decisión.
+Se registran acá para que no se pierdan.
+
+
+========================================================================
+H1. LA TAXONOMÍA DE R5 FUNCIONA — PRIMERA EVIDENCIA DURA
+========================================================================
+Script: el del scratchpad de la sesión; los insumos son las 550 anotaciones y
+data/interim/market_*.parquet.
+
+Se midió |z| máximo del retorno en T..T+1 tras cada noticia anotada, contra la
+tasa base de días al azar de los mismos activos y periodo.
+
+                       n     P(|z|>2)   vs base   binomial exacto
+  RELEVANTES (mag>0)   46      34.8%     1.89x     p = 0.006
+  IRRELEVANTES (Z)    432      20.1%     1.09x     p = 0.19
+  BASE (días al azar)4200      18.4%       —
+
+LAS NOTICIAS QUE LA TAXONOMÍA LLAMA RELEVANTES COINCIDEN CON MOVIMIENTOS DE
+PRECIO A CASI EL DOBLE DEL AZAR (p=0.006). LAS QUE LLAMA IRRELEVANTES SON
+INDISTINGUIBLES DEL AZAR (p=0.19).
+
+Es la primera evidencia de que el rediseño de R5 separa señal de ruido, y no
+existía hasta ahora. En julio la correlación medida fue nula, pero sobre un
+corpus 74% ruido: no probaba nada. Esto sí.
+ES MATERIAL PARA LA TESIS, con independencia de lo que se decida sobre los
+hechos de importancia.
+
+POR CATEGORÍA (n chico; solo M&A alcanza significancia):
+  ma_reestructuracion    n=10   |z| med 2.25   P(|z|>2) 60%   p = 0.004
+  dividendo_capital      n= 2   |z| med 2.93
+  analisis_opinion       n= 8   |z| med 1.17
+  regulatorio_material   n= 5   |z| med 0.93
+  resultados             n= 3   |z| med 0.93
+  crisis_evento_adverso  n= 6   |z| med 0.85   P(|z|>2) 17%  <- DEBAJO DE LA BASE
+  operacional            n= 3   |z| med 0.67
+
+  H1.a  M&A ES LA CATEGORÍA MÁS ASOCIADA AL PRECIO DE TODO EL CORPUS. Refuerza
+        lo de D16/la discusión de polaridad: la categoría que más mueve la aguja
+        es la que va entera a `neutral`.
+  H1.b  `crisis_evento_adverso` TIENE MAGNITUD 1.0 Y ESTÁ POR DEBAJO DE LA BASE.
+        Consistente con lo visto en D14 (muchas "crisis" del corpus son un robo
+        en una tienda). Pide recalibrar el tramo — y con D15 recalibrar es gratis
+        (se aplica en build_dataset, no re-paga el LLM). NO se toca todavía: n=6.
+
+
+========================================================================
+H2. LOS HECHOS DE IMPORTANCIA NO EXPLICAN LOS SALTOS
+========================================================================
+Script: scripts/diag_saltos_vs_fuentes.py
+594 saltos (|z|>=3, excluidos los falsos por precio congelado), ventana T-3..T,
+contra el contrafáctico correcto (misma tasa en días normales).
+
+                          en saltos   en días normales   lift
+  hay hecho                   42%           32%          1.32
+  hay hecho NO rutina         24%           19%          1.25
+  hay noticia (corpus crudo)  57%           55%          1.04
+  NINGUNA DE LAS DOS          25%
+
+CONCLUSIÓN: la premisa "los saltos grandes están explicados por hechos de
+importancia" NO SE SOSTIENE. Asociación real pero modesta.
+
+CONSECUENCIA DE DECISIÓN: NO se reemplaza la prensa por los hechos. Tres razones:
+  (1) la premisa falla;
+  (2) los hechos le ganan a la prensa CRUDA (1.32 vs 1.04) pero PIERDEN contra la
+      prensa ETIQUETADA (1.89 de H1). Lo que hace valiosa a la prensa es el
+      trabajo del LLM; quitarla es tirar lo único que está medido que funciona;
+  (3) consideración de tesis: el título es "...mediante aprendizaje por refuerzo
+      y LLM". Si el canal pasa a ser un feed regulatorio con códigos oficiales,
+      el rol del LLM se reduce a clasificar `observation`. No es fatal, pero
+      cambia lo que la tesis demuestra. CONVERSAR CON EL ASESOR.
+SUMARLOS sigue en pie, por la razón original (heterogeneidad entre activos), y
+sigue sujeto a la anotación de materialidad pendiente.
+
+LÍMITE DE ESTA MEDICIÓN: mide COINCIDENCIA TEMPORAL, no causalidad. Y las tasas
+base son altas (32% y 55%), lo que le quita potencia. Por eso H1, que usa
+etiquetas, es mucho más informativo que el "hay noticia" de acá.
+
+
+========================================================================
+H3. PRINCIPIO POINT-IN-TIME: NO SE RE-FECHAN LAS NOTICIAS
+========================================================================
+Planteado por el AUTOR el 2026-08-30, y corrige una propuesta mal formulada del
+asistente ("anclar la fecha del evento al registerDate del hecho oficial").
+
+  SI UNA NOTICIA SALIÓ TARDE, SALIÓ TARDE. El agente en T solo puede ver lo
+  publicado hasta T. Moverle la fecha hacia atrás, al momento en que "de verdad"
+  ocurrió el evento, ES LOOK-AHEAD y envenenaría el backtest.
+
+LO QUE SÍ ES LEGÍTIMO, y es distinto:
+  - El HECHO DE IMPORTANCIA es OTRA OBSERVACIÓN, con su propia fecha de
+    divulgación, que sí era pública ese día. Entra por su fecha. La noticia entra
+    por la suya. Las dos conviven; ninguna se mueve.
+  - Una bandera de NOVEDAD ("ya hubo algo sobre este asunto antes de hoy") es
+    causal: se calcula mirando SOLO hacia atrás. Es legítima.
+Caso que lo ilustra (Luz del Sur, 2019): el hecho se divulgó el 30-set 08:53, el
+precio saltó +41% el 1-oct, y el titular de prensa del corpus es del 15-oct. El
+titular del 15-oct vale como lo que es —información ya descontada—, no como un
+evento de magnitud 1.0 mal fechado.
+
+
+========================================================================
+H4. LOS SALTOS SIN FUENTE SON EL 4%, NO EL 25%
+========================================================================
+Script: scripts/diag_saltos_sin_fuente.py
+Salida: data/interim/saltos_sin_fuente.csv
+
+De los 132 saltos sin hecho ni noticia, casi todos tienen explicación MECÁNICA:
+
+  (a) MOVIMIENTO COMÚN. El 61% ocurre en días donde >=2 de los 7 activos se
+      mueven con |z|>=2 (32% con >=3 activos). Contra 51% y 21% en los saltos
+      CON fuente. O sea: los saltos sin fuente son MÁS de mercado que los otros.
+      No les falta una fuente idiosincrática — es que no la tienen que tener.
+  (b) EX-DIVIDENDO: descartado. Solo 7 de 132 tienen diferencia entre retorno
+      total y crudo. La capa de acciones corporativas de R3 está haciendo su
+      trabajo.
+  (c) ILIQUIDEZ: el 64% tiene al menos un día de precio congelado en las 5
+      sesiones previas (63% en los saltos con fuente). Es el problema de D8.
+  (d) CALENDARIO: descartado. Los saltos sin fuente son MENOS frecuentes cerca de
+      fin de mes (19% vs 27% esperado), y los meses de revisión de índices no
+      destacan (37% vs 33%).
+
+RESIDUO GENUINO: 19 saltos de 511 (4%) idiosincráticos, sin precio stale y sin
+fuente. De esos, 11 SON DE INRETC1 — que salió a bolsa en octubre de 2012 (IPO a
+US$20, 20 millones de acciones) y cuyos primeros años tienen poca flotación y
+descubrimiento de precio.
+
+
+========================================================================
+H5. FUENTES QUE NO ESTAMOS CONSIDERANDO (investigación 2026-08-30)
+========================================================================
+Cuatro candidatas, ordenadas por lo accionable que son.
+
+H5.a  ADR EN NYSE — DEGRADADA EL 2026-08-30, VER H6.
+      >> CORRECCIÓN: esta hipótesis se planteó como "la más accionable" y la
+         medición posterior (H6) la DEBILITA: el ADR de Pacasmayo negocia US$47
+         mil diarios de mediana, demasiado poco para arrastrar a Lima. Sigue
+         valiendo la verificación barata —un ADR fino igual transmite
+         movimientos del mercado estadounidense— pero deja de ser la
+         explicación principal de los 35 saltos sin fuente de CPACASC1.
+         El texto original se conserva abajo tal como se escribió.
+      CEMENTOS PACASMAYO COTIZA EN NYSE COMO `CPAC` DESDE FEBRERO DE 2012
+      (1 ADS = 5 acciones comunes), o sea TODO el horizonte del panel.
+      Y CPACASC1 ES EL ACTIVO CON MÁS SALTOS SIN FUENTE (35 de 132).
+      El ADR tiene mucha más liquidez y opera en horario de EE.UU.: un movimiento
+      originado allá aparece en Lima al día siguiente SIN noticia local. Eso
+      explicaría el patrón sin necesidad de ninguna fuente de texto.
+      LO QUE FALTA: la serie NO está en el repo. config.yaml usa los tickers de
+      Lima (`.LM`); para CPACASC1 el campo `yahoo` es null. La serie de CPAC es
+      gratuita en Yahoo y el repo YA tiene tubería de yfinance.
+      También aplica a Credicorp (BAP en NYSE), con la salvedad de que el activo
+      del universo es el BANCO, no el holding.
+      PROPUESTA: bajar CPAC y medir cuántos de los 35 saltos sin fuente de
+      CPACASC1 tienen un movimiento previo del ADR. Es barato y falsable.
+      OJO PARA LA TESIS: si el ADR anticipa a Lima, es una feature con valor
+      predictivo real Y una fuente de fuga si se usa mal. Usar SOLO el cierre del
+      ADR del día ANTERIOR, nunca el del mismo día.
+
+H5.b  RECLASIFICACIÓN MSCI / FTSE — DOCUMENTADO Y FECHABLE.
+      El 14-ago-2015 MSCI abrió consulta para reclasificar al Perú de mercado
+      EMERGENTE a FRONTERA: solo tres títulos del MSCI Peru Equity Universe
+      cumplían los requisitos. Ese día la BVL cayó 5.25%, su mayor baja diaria en
+      más de cuatro años. La revisión siguió abierta hasta junio de 2016, cuando
+      MSCI decidió mantener al Perú como emergente. La salida de capital estimada
+      de haberse concretado era de al menos US$1,500 millones.
+      RELEVANCIA: varias fechas del residuo caen en esa ventana (INRETC1
+      2016-01-25 y 2016-02-10, ALICORC1 2016-02-09). Es un driver de FLUJO, no de
+      fundamentales, y no está en ningún canal actual.
+
+H5.c  RETIROS DE AFP — MEDIDO, DIRECCIONALMENTE CONSISTENTE, PERO CONFUNDIDO.
+      Las AFP son el mayor tenedor institucional de la BVL y cada ley de retiro
+      las obliga a liquidar. La prensa señala a MINSUR y FERREYCORP entre las
+      acciones más expuestas — dos de nuestros 7 activos.
+      MEDIDO CON EL PROPIO CORPUS (250 titulares sobre retiros, agrupados en 18
+      olas; retorno a 20 sesiones desde el inicio de cada ola, contra 500
+      ventanas al azar):
+          MINSURI1 -2.2%   LUSURC1 -1.4%   INRETC1 -1.4%   CREDITC1 -0.7%
+          FERREYC1 -0.3%   CPACASC1 -0.1%  ALICORC1 -0.1%
+      Minsur es el más golpeado, que coincide con lo que dice la prensa. PERO el
+      efecto mediano es chico y ESTÁ CONFUNDIDO: las olas de 2021-05 y 2022-04
+      (las de -15% a -27%) coinciden con la segunda vuelta electoral y con la
+      caída global de 2022. Con este diseño NO se pueden separar.
+      SE REGISTRA COMO CANDIDATO, NO COMO FACTOR PROBADO.
+      NOTA IMPORTANTE: estos titulares SÍ ESTÁN en el corpus y la taxonomía los
+      manda a Z_sector_macro / magnitud 0. Como evento DE LA EMPRESA está bien
+      clasificado; como driver de FLUJO del mercado, su lugar natural son las
+      columnas macro, no el canal de sentimiento.
+
+H5.d  RIESGO POLÍTICO / ELECTORAL — YA PARCIALMENTE CUBIERTO.
+      Varias fechas del residuo y de los saltos extremos caen en torno a las
+      elecciones de 2021 (FERREYC1 2021-04-12, un día después de la primera
+      vuelta; CREDITC1 2021-04-21 con -15.1%). El panel ya tiene 6 columnas macro
+      del BCRP con TC y EMBI como esqueleto (docs/fundamento_macro_riesgo_
+      politico.txt), así que este canal EXISTE. Lo que faltaría medir es si esas
+      columnas capturan bien las fechas electorales.
+
+
+========================================================================
+H6. DÓNDE SE FORMA EL PRECIO: LA PRUEBA DEL ADR APLICADA AL UNIVERSO
+========================================================================
+Planteado por el AUTOR el 2026-08-30: "me genera ruido que Cementos Pacasmayo
+cotice en NYSE, es el único de la lista, y ya habíamos descartado otras opciones
+por esto mismo". Objeción correcta y valía medirla.
+
+QUÉ CRITERIO SE USÓ REALMENTE PARA EL UNIVERSO. Frecuencia oficial de
+negociación en la BVL, no "tiene ADR". BUENAVC1 salió con 25.0% de sesiones; el
+ADR era la EXPLICACIÓN de por qué, no el criterio. CPACASC1 está en 95.5% con
+S/16.4 MM/mes, cuarto de siete por monto (docs/ejecutabilidad_y_costos_OE1.txt
+§6.2-6.3).
+
+MEDICIÓN NUEVA — volumen del ADR en USD/día, mediana 2012-2025 (yfinance):
+      BAP  (Credicorp)      US$ 44,674,404 /día
+      BVN  (Buenaventura)   US$ 15,807,703 /día
+      CPAC (Pacasmayo)      US$      47,121 /día
+Contra Lima (S/ por día operado / ~3.5):
+      CPACASC1  ~US$235,000/día en Lima  vs  US$47,121 en NY  ->  ~82% EN LIMA
+      CREDITC1  ~US$ 37,500/día en Lima
+
+CONCLUSIONES:
+  (1) EL UNIVERSO ES CONSISTENTE. Pacasmayo negocia ~5x MÁS en Lima que en Nueva
+      York: su ADR existe pero está prácticamente muerto. Buenaventura era el
+      caso opuesto — su ADR mueve 335 VECES lo que el de Pacasmayo mientras la
+      acción local se transaba 1 de cada 4 sesiones. Tener ADR no descalifica;
+      tener la liquidez EN el ADR sí. CPACASC1 es un nombre BVL-nativo por el
+      propio criterio del proyecto.
+  (2) ESTO YA ESTABA DECIDIDO PARA BCP, y la medición solo lo cuantifica.
+      docs/riesgos_transversales_datos.txt (sección MERCADO) ya dice: "los
+      líquidos (BAP 58%, SCCO 52%) son cross-listed NYSE (FUERA DE PREMISA)" y
+      "se evaluó y descartó cambiar BCP->Credicorp (BAP): BAP es líquido pero se
+      precia en NYSE (rompe la premisa de baja liquidez BVL)". [decidido]
+      El número nuevo: BAP negocia ~1,200x lo que CREDITC1 en Lima. Son VALORES
+      DISTINTOS —Credicorp incluye Pacífico, Prima AFP, Mibanco y Credicorp
+      Capital— así que no es doble cotización del mismo papel; y la delgadez de
+      CREDITC1 es COHERENTE CON LA PREMISA DE LA TESIS, que es justamente un
+      mercado ralo. No es un defecto encontrado: es el objeto de estudio.
+  (3) LO QUE SÍ QUEDA ABIERTO SOBRE CREDITC1 no es la liquidez sino el PERÍMETRO:
+      la query de noticias incluye `Credicorp` (holding) cuando el activo es el
+      BANCO — 51.4% del corpus con 2.5% de relevancia. Es la misma discusión que
+      el registro de riesgos ya tiene abierta como "distorsión de nivel por
+      free-float". Sigue pendiente de decidir.
+
+LÍMITE DECLARADO: el volumen de Yahoo ya se midió como poco confiable para los
+tickers de Lima (docs/riesgos + memoria del proyecto). Para un ADR en NYSE viene
+de la cinta consolidada y es mejor, pero aun con un margen de 5x la conclusión
+aguanta: la brecha BVN/CPAC es de 335x.
+
+
+========================================================================
+QUÉ SE HACE CON ESTO
+========================================================================
+NADA de lo anterior es una decisión tomada. Orden sugerido, del más barato al
+más caro:
+  [ ] H5.a — bajar CPAC y medir contra los 35 saltos sin fuente de CPACASC1.
+      DEGRADADA por H6 (el ADR mueve US$47 mil/día): sigue siendo barato pero
+      ya no es el hallazgo más grande. Bajó de prioridad.
+  [ ] H1.b — anotar la sospecha sobre `crisis_evento_adverso`; recalibrar recién
+      DESPUÉS de la corrida, con n suficiente.
+  [ ] H5.b — evaluar si conviene una bandera de "ventana de revisión MSCI/FTSE".
+      Son pocas fechas y son públicas.
+  [ ] H5.c — no accionar. Queda registrado como factor candidato confundido.
+  [ ] H1 — llevarlo al documento de tesis: es el resultado que justifica el
+      rediseño entero de R5.
+
+FIN
+========================================================================

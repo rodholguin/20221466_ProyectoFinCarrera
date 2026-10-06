@@ -1,0 +1,256 @@
+PENDIENTES — R5 (SENTIMIENTO). HANDOFF PARA RETOMAR
+Reescrito: 2026-08-29. Reemplaza a la versión del 2026-08-18/19, que quedó
+FALSA en sus dos bloqueantes (ambos cerrados) y en la elección de modelo
+(el ranking se invirtió). Si aparece una copia vieja, es esta la que manda.
+========================================================================
+
+>> ACTUALIZADO EL 2026-08-31. NO QUEDA NINGUNA DECISIÓN DE DISEÑO ABIERTA QUE
+   BLOQUEE. D11 a D19 están cerradas o diferidas a la ablación de R8. Lo que
+   sigue es IMPLEMENTAR Y CORRER. Ver §"QUÉ SIGUE" al final de este bloque.
+
+LEER PRIMERO, EN ESTE ORDEN
+------------------------------------------------------------------------
+  1. docs/decisiones_pendientes_OE1.txt    — el registro que manda. Cerradas:
+     D11 (enmendada por D15), D12 (absorbida), D13, D14 (descartada),
+     D15 (vigente), D16 (descartada), D17 (vigente), D18 (no adoptar hechos).
+     ABIERTA Y DIFERIDA A R8: D19 (eje de novedad/etapa). No bloquea.
+  2. docs/auditoria_anotacion_humana_R5.txt — la validación con referencia
+     humana real. Es la que manda sobre cualquier tabla anterior.
+  3. docs/taxonomia_eventos_R5.txt         — especificación de la tarea.
+  4. docs/materialidad_hechos_R5.txt       — por qué los Hechos de Importancia
+     NO entran como segunda fuente, y las limitaciones que van a la tesis.
+  5. docs/hallazgos_saltos_y_fuentes_R5.txt — H1 a H6.
+  6. docs/seleccion_modelo_R5.txt          — el barrido de modelos. OJO: su §7
+     sigue sin cerrar y su tabla es la de la referencia VIEJA (ver abajo).
+  -- docs/_TEMP_para_decidir_20260829.txt  — SUPERSEDIDO. Todo lo que tenía
+     abierto está decidido y registrado en (1) y (4). Se puede borrar.
+
+QUÉ SIGUE — LA RUTA, EN ORDEN
+------------------------------------------------------------------------
+  [X] 1. Implementar D15 (9 columnas categóricas) + D17 (bandera) + el FIX del
+         roll-forward que suma en vez de promediar.   HECHO el 2026-09-01.
+         Archivos: src/sentiment/emisores.py (nuevo), llm_sentiment.py
+         (aggregate_daily), universe.py (SENTIMENT_SCHEMA v3),
+         integration/build_dataset.py (_align_sentiment_to_calendar +
+         _sentiment_ewmas + feature_views), scripts/run_r5_news.py (guarda).
+         Pruebas: scripts/test_d15_d17.py — 24 comprobaciones, exit 0.
+         Verificado de punta a punta con el corpus REAL (19,528 artículos,
+         etiquetas simuladas, sin LLM): 24,577 filas de panel, 0 NaN en las 9
+         columnas, la bandera da 16.2% global igual que D17.
+  [X] 2. Correr R5 sobre los 7 activos.  HECHO el 2026-09-01, 8.5 h de GPU a
+         1.59 s por llamada. 19,513 titulares clasificados, 2,237 eventos
+         etiquetados, tasa de error de parseo 0.0-0.3% por activo.
+         RESULTADO POR ACTIVO (eventos / eventos por año):
+             CREDITC1 889/63.5 · INRETC1 499/35.7 · ALICORC1 258/18.4
+             LUSURC1  217/15.5 · MINSURI1 154/11.0 · FERREYC1 123/8.8
+             CPACASC1  97/6.9
+         VALIDACIÓN CRUZADA que conviene tener a mano: el modelo etiqueta 11.5%
+         del corpus, por encima del 7.2% de la anotación humana, porque
+         sobre-declara relevancia (precisión medida 59.3%). Corrigiendo:
+             2,237 x 0.593 = 1,327   vs   19,513 x 0.072 = 1,405   (6% de brecha)
+         Dos vías independientes dan el mismo orden de magnitud.
+  [X] 3. Regenerar el panel R3->R6.  HECHO el 2026-09-01.
+         24,591 filas x 118 columnas, 7 activos, 2012-01-02 a 2025-12-31.
+         0 NaN en las 9 columnas del canal; 0 filas con fecha de conocimiento
+         posterior a la fecha de la fila.
+         DE PASO se archivaron los sentiment_*.parquet de jun-2026 (esquema v1,
+         dos de ellos del universo vigente) y se eliminó `macro_oro`.
+  >> OE2 (R3-R6) QUEDA CERRADO CON ESTO. Lo que sigue es OE1: el entorno de RL
+     y el agente. Las decisiones abiertas son D4-D10 en
+     docs/decisiones_pendientes_OE1.txt, ninguna bloqueada por datos.
+
+  [ ] 4. R8 con los brazos YA pre-registrados: 9 vs 18 columnas (D15), canal
+         completo vs restringido a titular que nombra (D17), y el eje de
+         novedad si se implementa (D19).
+
+  POR QUÉ ESTE ORDEN Y NO MÁS MEDICIONES. El canal NUNCA se ha corrido de punta
+  a punta ni una vez. D14, D15, D16, D17 y D18 son afinación previa de algo que
+  todavía no se probó, y varias ya están diseñadas para que R8 las decida con
+  datos (se calculan en R6, se marcan en vez de filtrarse, entran como brazos de
+  ablación). El criterio de abandono de D11 sigue mandando: si el canal no supera
+  al baseline en la ablación de R8, el canal no se toma.
+
+
+========================================================================
+ESTADO EN UNA PÁGINA
+========================================================================
+  pieza                        estado
+  ---------------------------  --------------------------------------------
+  Taxonomía de eventos v2.1    CERRADA (15 categorías, magnitud ex-ante)
+  Prompt v2.1                  CERRADO. No se toca. Se midió TRES veces que
+                               tocarlo no paga: D14 (`alcance`), D16 (`rol`
+                               en v2.2 y v2.3). No gastar más GPU en prompts.
+  Referencia de validación     CERRADA — 550 titulares anotados por el autor
+  Elección de modelo           gemma3:12b (falta cerrar §7 del doc y correr
+                               el piloto frontier, que ahora sí es medible)
+  Codificación del canal       CERRADA por D15 — 9 columnas categóricas
+  Bandera de titular (D17)     IMPLEMENTADA en src/sentiment/emisores.py
+  2da fuente (Hechos BVL)      MEDIDA Y NO ADOPTADA — D18
+  LA CORRIDA de R5             HECHA el 2026-09-01 (8.5 h, gemma3:12b)
+  Integración en R6            IMPLEMENTADA — panel 24,591 x 118, verificado
+
+  EL NÚMERO QUE ORDENABA TODO, YA MEDIDO Y CORREGIDO. La estimación que guió todo
+  el trabajo decía "solo el 2.9% del corpus llega a las features, ~564 eventos con
+  signo, Ferreycorp 0.9/año". Lo MEDIDO sobre la corrida completa:
+      eventos etiquetados        2,237   (11.5% del corpus)
+      de ellos, con signo        1,808
+      eventos VERDADEROS estimados ~1,327  (corrigiendo por la precisión de 59.3%)
+      Ferreycorp                   8.8 eventos/año, no 0.9
+      heterogeneidad max/min       9.2x, no la 16.8x estimada
+  EL CANAL TIENE BASTANTE MÁS MASA DE LA QUE SE TEMÍA. Lo que NO cambia es el
+  problema de fondo: el reparto sigue siendo muy desigual (BCP 63.5/año contra
+  Pacasmayo 6.9) y eso no tiene arreglo con las fuentes disponibles (D18 §7). Se
+  declara como limitación y lo resuelve el criterio de abandono de D11.
+
+
+========================================================================
+BLOQUEANTE #1 — CERRADO (2026-08-26)
+========================================================================
+Era: "la referencia de validación no es humana, la produjo el asistente".
+RESUELTO. El autor anotó a ciegas 550 titulares.
+  data/interim/validacion_humana/muestra_r5_anotar.xlsx  (anotación)
+  data/interim/validacion_humana/clave_muestra_r5.csv    (bloques y pesos)
+  Evaluación:  python scripts/evalua_validacion_humana_r5.py
+  Auditoría del proceso: docs/auditoria_anotacion_humana_R5.txt
+
+RESULTADOS QUE HAY QUE TENER A MANO:
+  - Relevancia poblacional del corpus: 7.2% ±2.8pp (bloque B reponderado).
+  - Acuerdo autor-vs-asistente (bloque A, n=120): relevancia 81.7% / kappa
+    0.456; polaridad 76.9% / kappa 0.618 (n=13). El desacuerdo es 100%
+    UNIDIRECCIONAL y se explica entero por dos convenciones (sector_macro=0 y
+    "M&A siempre neutral").
+  - Prefiltro regex: descarta 19.8% con CERO relevantes perdidos.
+  - PENDIENTE MENOR: renombrar las columnas `rel_humana`/`sent_humano` del
+    archivo viejo (data/interim/r5_validacion_anotada.csv) a `*_asistente`.
+    Mientras se llamen "humana" van a seguir induciendo el error.
+
+
+========================================================================
+BLOQUEANTE #2 — CERRADO, PERO EL RANKING SE INVIRTIÓ
+========================================================================
+LA CORRECCIÓN MÁS IMPORTANTE DE ESTE DOCUMENTO. La versión anterior decía que
+"qwen2.5:32b lidera el criterio principal". Eso se midió contra la referencia
+del ASISTENTE. Medido contra la referencia HUMANA el orden se dio vuelta —que
+es exactamente el sesgo que el bloqueante #1 anticipaba:
+
+  modelo          P        R       F1     (cat)
+  gemma3:12b    75.0%   92.3%   82.8%    59.2%   <- GANA
+  qwen2.5:14b   71.4%   76.9%   74.1%    67.5%
+  qwen2.5:32b   64.3%   69.2%   66.7%    63.3%
+  gemma3:27b    46.2%   92.3%   61.5%    64.2%
+  gemma3:4b_v21 27.7%  100.0%   43.3%
+  gemma3:4b     19.4%  100.0%   32.5%
+  McNemar: 12b > toda la familia 4b (p<0.02) y > 27b (p=0.016).
+  INDISTINGUIBLE de qwen 14b (p=0.752) y 32b (p=0.289).
+
+MODELO ELEGIDO: gemma3:12b. Su recall alto es lo que importa aquí: el canal
+está famélico de eventos y un recall bajo deja a los activos chicos sin nada.
+
+HALLAZGO QUE CIERRA UNA VÍA (sigue vigente): los cinco modelos están ANIDADOS
+(unión = el más inclusivo, intersección = el más excluyente, exactamente). No
+aportan información distinta: ordenan igual y solo cambian dónde cortan. EL
+ENSEMBLE ESTÁ DESCARTADO y no hay que volver sobre él.
+
+PENDIENTE:
+  [ ] Piloto frontier (Gemini). Código LISTO (src/sentiment/llm_backends.py).
+      Falta GEMINI_API_KEY (gratis en aistudio.google.com/apikey):
+        $env:GEMINI_API_KEY="..."; python scripts/piloto_r5_taxonomia.py `
+          --model gemini-3.7-flash --etiqueta gemini_flash_v21
+      PREGUNTA: ¿un modelo frontier ROMPE el anidamiento (más precisión Y más
+      recall) o solo corta en otro punto?
+      NOVEDAD: antes esto era válido "aun con el bloqueante #1". Ahora es
+      MEJOR: se mide contra la referencia humana real.
+  [ ] Cerrar §7 de seleccion_modelo_R5.txt con el modelo elegido, su snapshot
+      exacto y la limitación declarada. Y marcar que las tablas de ese doc son
+      de la referencia vieja.
+  [ ] Métrica de selección: la auditoría dejó pendiente que el criterio debe
+      ir PONDERADO (el macro-F1 plano de 15 clases castiga por no adivinar
+      entre casillas equivalentes de magnitud 0). Con D15 la ponderación pasa a
+      ser por tramo o solo por relevancia.
+
+
+========================================================================
+DECISIONES DE DISEÑO CERRADAS DESDE LA VERSIÓN ANTERIOR
+========================================================================
+  D14 — eje `alcance`: MEDIDA Y DESCARTADA (2026-08-29). No engorda el canal
+        (masa 0.98x) y empeora la heterogeneidad entre activos de 16.5x a 30.0x.
+        Reproducible: python scripts/mide_impacto_d14.py
+        CONSECUENCIA PARA R5: el prompt v2.1 NO se toca.
+  D15 — codificación del canal: 9 columnas `sent_{pos,neu,neg}_ewma_{5,20,60}`.
+        La magnitud deja de ser multiplicador y queda solo como puerta de
+        relevancia. `neutral` ENTRA (es el 57.9% de la masa; los 13 M&A solos
+        son el 31.2% y hoy no llegan a ninguna columna).
+  D12 — ABSORBIDA por D15.
+  D11 — ENMENDADA por D15 en (ii) y (iii). El mecanismo y el criterio de
+        abandono siguen vigentes.
+
+
+========================================================================
+LA CORRIDA — QUÉ FALTA, EN ORDEN
+========================================================================
+  [ ] DECIDIR lo de docs/_TEMP_para_decidir_20260829.txt (Hechos de
+      Importancia como segunda fuente de eventos).
+  [ ] Perímetro de BCP: la query incluye `Credicorp` (holding) cuando el activo
+      es el BANCO. Hace que CREDITC1 sea el 51.4% del corpus con 2.5% de
+      relevancia. No es look-ahead (se verificó alias por alias), pero es media
+      corrida de LLM gastada en el activo de peor rendimiento. DECIDIR.
+  [ ] R5 fetch con --force (queries nuevas, sin ancla _FINANCIAL):
+        python scripts/run_r5_news.py --fetch-only --force
+      OJO: el volumen "39,783 -> ~11,487" de la versión vieja es del universo
+      ANTERIOR. Con los 7 activos actuales el corpus medido es ~19,349.
+  [ ] R5 classify con gemma3:12b.
+  [ ] Arreglar el truncamiento de titulares antes de clasificar: 1.26% vienen
+      cortados a 70 caracteres tras el prefijo de sección (`Negocios:`,
+      `Mercados:`). Regex trivial, pero pega justo en los titulares financieros.
+  [ ] R6: implementar las 9 EWMAs de D15 en build_dataset a partir de
+      sentiment_articulos_*.parquet.
+      BUG LATENTE A ARREGLAR EN EL MISMO PASO: `_align_sentiment_to_calendar`
+      PROMEDIA por n_articles al hacer roll-forward; las columnas de CONTEO de
+      eventos deben SUMARSE, no promediarse. Si se implementa D15 sin tocar
+      eso, las 9 columnas salen mal EN SILENCIO.
+  [ ] Re-correr el test de look-ahead (corr sent_t ~ ret_t) ahora que las
+      etiquetas significan algo — el de julio se midió sobre 74% de ruido.
+  [ ] Re-validar el etiquetado con el mismo protocolo tras la corrida.
+
+
+========================================================================
+INFRAESTRUCTURA (queda montada, no rehacer)
+========================================================================
+Servidor xwing (rholguin@172.19.4.64 vía salto bridge@200.16.4.64):
+  - 2x RTX 3080 (10 GB c/u), 16 cores, 125 GB RAM. Driver 535 -> Ollama corre
+    en VULKAN, no CUDA (pide 550+). Igual da 0.8-1.6 s/artículo.
+  - Ollama 0.32.14 instalado en ~/ollama (espacio de usuario, sin root).
+    Modelos ya descargados: gemma3 4b/12b/27b, qwen2.5 14b/32b.
+  - Llave SSH ~/.ssh/id_ed25519_pucp instalada en ambos saltos; ~/.ssh/config
+    con ProxyJump. `ssh phantom` entra sin contraseña.
+  - Túnel para usarlo desde local:
+      ssh -f -N -L 11435:127.0.0.1:11434 -o ServerAliveInterval=20 phantom
+      $env:OLLAMA_URL="http://127.0.0.1:11435"
+OJO: el otro servidor (bridge@200.16.4.64, hostname "phantom") tiene 3x RTX
+A5500 de 24 GB — mucho mejor hardware — pero es CUENTA COMPARTIDA. No usarlo
+para trabajos largos.
+
+Token MediaCloud rotado el 2026-08-18. El viejo quedó inerte en el historial.
+
+HECHOS DE IMPORTANCIA DE LA BVL (nuevo, 2026-08-29): el feed oficial ya está
+descargado y cacheado para los 7 activos en
+  data/raw/smv_cache/bvl_hechos_{rpj}_2012_2025.json
+Los RPJ están en config.yaml (campo smv_rpj). La función es
+src/fundamentals/fundamentals_client._bvl_fetch_hechos. NO hay que re-descargar.
+
+
+========================================================================
+TRABAJO SIN VERSIONAR
+========================================================================
+Nada de R5 se ha commiteado todavía (el autor no lo autorizó). Al cierre del
+2026-08-29 incluye los módulos y docs de la sesión de agosto más:
+  - scripts/mide_impacto_d14.py y los clasif_alcance_*.csv
+  - scripts/muestra_materialidad_hechos.py
+  - docs/_TEMP_para_decidir_20260829.txt, auditoria_anotacion_humana_R5.txt
+SUGERENCIA QUE SIGUE EN PIE: los cachés de piloto
+(data/interim/sentiment_cache/piloto_*.json) probablemente NO deberían
+versionarse — considerar .gitignore.
+
+========================================================================
+FIN
+========================================================================

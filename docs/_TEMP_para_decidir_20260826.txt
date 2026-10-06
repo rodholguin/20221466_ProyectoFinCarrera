@@ -1,0 +1,195 @@
+ARCHIVO TEMPORAL — BORRAR DESPUÉS DE DECIDIR
+Creado: 2026-08-26 (noche). Es la salida de la sesión, guardada para retomar.
+NO es documentación del proyecto: lo que queda para la tesis está en
+docs/auditoria_anotacion_humana_R5.txt y en D14 de docs/decisiones_pendientes_OE1.txt
+========================================================================
+
+LO PRIMERO QUE HAY QUE DECIDIR MAÑANA
+------------------------------------------------------------------------
+  [ ] ¿Se aplican las filas 247 y 320 a Z_sector_macro ahora (convención
+      provisional, para que la regla escrita y las etiquetas coincidan mientras
+      D14 se decide), o se esperan y se mueven directo al esquema nuevo?
+
+  Contexto: hoy están anotadas como C_analisis_opinion aunque la regla escrita
+  (nota de la fila 68) dice que C exige que el titular NOMBRE a la empresa.
+  O sea que la regla y las etiquetas no dicen lo mismo, que es la peor de las
+  situaciones. Cualquiera de las dos salidas la arregla; hay que elegir una.
+
+ESTADO AL CIERRE DE LA SESIÓN
+------------------------------------------------------------------------
+  HECHO: fila 328 corregida a Z_indice_bursatil en el Excel (relevantes 55->54,
+         CPACASC1 8.7%->6.5%, relevancia poblacional 7.3%->7.2%).
+         Respaldo del Excel previo en el scratchpad de la sesión.
+  HECHO: docs/auditoria_anotacion_humana_R5.txt (documento nuevo, completo).
+  HECHO: D14 insertada en docs/decisiones_pendientes_OE1.txt.
+  HECHO: D12 actualizada con los conteos de eventos MEDIDOS (superan a la
+         extrapolación con que se planteó).
+  PENDIENTE: 247 y 320 (arriba).
+
+
+========================================================================
+1. 13 vs 429 — POR QUÉ LO MENCIONÉ
+========================================================================
+No es un error tuyo. Es una observación sobre CÓMO SE MIDE AL MODELO, no sobre
+el panel.
+
+  [13]  "Las AFP tendrán mayores opciones de inversión..."  -> Z_sector_macro
+  [429] "Retiro AFP de 4 UIT | Cronograma..."               -> Z_no_relevante
+
+Las dos son regulación previsional, las dos en una fila de BCP, y cayeron en
+casillas Z distintas.
+
+AL PANEL NO LE CAMBIA NADA: ambas valen magnitud 0 y no generan ninguna columna.
+Da exactamente igual cuál elijas.
+
+DÓNDE SÍ CAMBIA ALGO: en el macro-F1 de 15 clases con que se compara a los
+modelos. Ahí un modelo que ponga `sector_macro` donde vos pusiste
+`no_relevante` se lleva un error completo — por no adivinar en cuál de dos
+casillas EQUIVALENTES cae una noticia que ninguna de las dos convierte en señal.
+
+LA CONCLUSIÓN NO ES "corregí la 13 o la 429". Es que la métrica principal para
+elegir modelo debe estar PONDERADA POR MAGNITUD, y el macro-F1 plano queda como
+secundario y con la advertencia.
+  - Eso además resuelve gratis el problema de B_gobierno_corporativo con 0
+    filas: en una métrica ponderada por magnitud no hay que decidir si esa clase
+    vacía vale cero o si se excluye del promedio.
+  - Y aplica en bloque a las 6 categorías Z: el 90% del corpus está clasificado
+    con un detalle que no produce ni una columna.
+
+
+========================================================================
+2. LA REGLA DEL 68 — HAY QUE REESCRIBIRLA (coincido)
+========================================================================
+Y ya se estaba violando: la 247 y la 320 están anotadas como C sin nombrar a la
+empresa.
+
+  FILA 247 — "BTG: Reemplazo de DU-003 impulsará firmas bancarias,
+              constructoras y de equipamiento"        -> C / positivo (Ferreycorp)
+  FILA 320 — "Fitch Ratings: mineras que operan únicamente en Perú afrontan
+              mayor riesgo por protestas sociales"    -> C / negativo (Minsur)
+
+EL PROBLEMA: la regla empaqueta TRES pruebas y solo dos son buenas.
+
+  (i)   ¿la empresa es el OBJETO del juicio, o su AUTOR?
+        BUENA. Separa la fila 3 (S&P califica a Alicorp -> C) de la 251 (el BCP
+        firma un estudio -> Z). Hace trabajo real. SE CONSERVA.
+
+  (ii)  ¿el juicio apunta a la empresa o a un CONJUNTO que la incluye?
+        BUENA. Es la que de verdad decide 68 / 247 / 320. SE CONSERVA.
+
+  (iii) ¿el titular la NOMBRA literalmente?
+        MALA. Es un proxy de (ii) y se rompe en los dos sentidos: 247 y 320 no
+        la nombran pero delimitan un conjunto que la contiene ("firmas de
+        equipamiento", "mineras que operan únicamente en Perú"); y al revés, un
+        titular puede nombrarla sin juzgarla.
+
+LA (iii) ES LA QUE HAY QUE TIRAR.
+
+EL REEMPLAZO DE (ii)+(iii) ES EL EJE DE `alcance` (D14). Y ahí está la parte
+importante: EL MISMO CAMPO RESUELVE TUS TRES OBSERVACIONES A LA VEZ.
+
+  caso                          tipo x alcance        magnitud
+  478 robo en una tienda        crisis  x unidad      0.3    (antes 1.0)
+  391 compra de Luz del Sur     M&A     x empresa     1.0
+   68 "acciones de la BVL"      opinion x mercado     0.0    (ahora por regla,
+                                                              no por criterio)
+  227 "InRetail puede subir"    opinion x empresa     0.3
+  247/320 juicio sobre el rubro opinion x sector      0.09
+   70 sentencia a eléctricas    regul   x empresa     1.0
+  460 Indecopi a call centers   regul   x sector      0.3    (antes 0.0)
+  541 suspensión perfecta       regul   x mercado     0.0
+
+Un campo, cuatro valores, pregunta objetiva: "¿a qué nivel apunta el hecho?".
+Y `sector_macro` desaparece como categoría: pasa a ser tipo x alcance=sector.
+
+NO ES "materialidad alta/media/baja", y eso fue a propósito: el §3 de la
+taxonomía ya argumentó que pedirle IMPORTANCIA al LLM es una segunda
+autoevaluación, y la única que existía (`confidence`) resultó ruido MEDIDO
+(0.750 en los errores vs 0.730 en los aciertos). `alcance` es observable en el
+titular; no reintroduce ese modo de falla.
+
+EL LÍMITE QUE HAY QUE DECLARAR: `alcance` APROXIMA la materialidad, no la
+resuelve. La fila 382 (denuncia ambiental contra Pucamarca) saldría
+alcance=unidad = 0.3, pero Pucamarca es UNA DE LAS DOS minas de Minsur,
+mientras que un Plaza Vea es una de cientos de tiendas de InRetail. El mismo
+`unidad` vale fracciones muy distintas del negocio según el activo, y eso no se
+sabe desde el titular. Queda como perilla de recalibración en R6 (gratis) y como
+brazo de D12.
+
+COSTO DE ADOPTARLO: ~167 filas, NO 550. Los 15 códigos actuales ya dan el eje
+`tipo`; solo hay que anotar `alcance` en las 54 relevantes + las 113 de
+Z_sector_macro (donde puede aparecer regulación sectorial nueva), y `rol` en 13.
+
+
+========================================================================
+3. SOBRE EL LEAKAGE — TU INSTINTO APUNTABA A ALGO, Y LO VERIFIQUÉ
+========================================================================
+Los casos que viste son tres fenómenos distintos (detalle en la auditoría §4.1).
+El más grave sería uno que no habías nombrado: que las queries usen MARCAS QUE
+LA EMPRESA NO POSEÍA EN TODA LA VENTANA, aplicando el perímetro societario de
+hoy hacia atrás. ESO sí sería point-in-time y contaminaría R5 entero.
+
+Revisé `mediacloud_client._build_query` alias por alias. ESTÁ LIMPIO.
+  - InRetail lleva InkaFarma / Plaza Vea / Supermercados Peruanos: todas del
+    grupo Intercorp durante toda la ventana. Mifarma, que llegó recién en 2018
+    con Quicorp, NO está en la query.
+  - Ferreycorp / Ferreyros: misma entidad, cambio de razón social.
+  - Luz del Sur: cambió de dueño (Sempra -> China Three Gorges), no de emisor.
+
+LO ÚNICO QUE SÍ APARECIÓ es sobre-alcance de perímetro en BCP: la query incluye
+`Credicorp`, que es el HOLDING, y el activo del universo es el BANCO
+(config.yaml). Arrastra Credicorp Capital, Prima AFP y Pacífico. NO es
+look-ahead y la taxonomía las manda a Z, pero explica el número más incómodo de
+toda la medición:
+
+  CREDITC1 ES EL 51% DEL CORPUS Y EL 18% DE LOS EVENTOS.
+  Más de la mitad del presupuesto de LLM se gasta en el activo de menor
+  rendimiento (relevancia 2.5%).
+
+
+========================================================================
+4. NÚMEROS DE REFERENCIA (para no volver a correr nada mañana)
+========================================================================
+Todo sale de: python scripts/evalua_validacion_humana_r5.py
+
+PREFILTRO REGEX: descarta 109/550 (19.8%). Relevantes matados: CERO.
+
+ACUERDO AUTOR vs ASISTENTE (bloque A, n=120):
+  relevancia 81.7%, kappa 0.456 · polaridad 76.9%, kappa 0.618 (n=13)
+  El desacuerdo es 100% UNIDIRECCIONAL (22 a 0) y se explica entero por dos
+  convenciones: sector_macro=0 (14 de 22) y "M&A siempre neutral" (3 de 3 en
+  polaridad).
+
+RELEVANCIA POBLACIONAL (bloque B reponderado): 7.2% ±2.8pp
+  MINSURI1 21.3% · LUSURC1 20.8% · INRETC1 16.9% · CPACASC1 6.5% ·
+  ALICORC1 5.7% · CREDITC1 2.5% · FERREYC1 1.9%
+
+EVENTOS ESPERADOS 2012-2025 (cotas superiores; train es un subconjunto):
+  INRETC1 ~540 · CREDITC1 ~253 · LUSURC1 ~218 · MINSURI1 ~193 ·
+  ALICORC1 ~96 · CPACASC1 ~54 · FERREYC1 ~33 (≈2.4/año)   TOTAL ~1,390
+
+MODELOS vs LA REFERENCIA DEL AUTOR (bloque A, ordena pero no es poblacional):
+  gemma3:12b     P 75.0%  R 92.3%  F1 82.8%   (cat 59.2%)
+  qwen2.5:14b    P 71.4%  R 76.9%  F1 74.1%   (cat 67.5%)
+  qwen2.5:32b    P 64.3%  R 69.2%  F1 66.7%   (cat 63.3%)
+  gemma3:27b     P 46.2%  R 92.3%  F1 61.5%   (cat 64.2%)
+  gemma3:4b_v21  P 27.7%  R100.0%  F1 43.3%
+  gemma3:4b      P 19.4%  R100.0%  F1 32.5%
+  McNemar: 12b > toda la familia 4b (p<0.02) y > 27b (p=0.016).
+  INDISTINGUIBLE de qwen 14b (p=0.752) y 32b (p=0.289).
+  qwen2.5:32b lideraba contra la referencia del asistente: el ranking se
+  INVIRTIÓ, que es exactamente el sesgo anticipado en el bloqueante #1.
+
+EL HALLAZGO MÁS FUERTE:
+  58% de los eventos relevantes son `neutral`, y 58% de la masa de magnitud.
+  Los 13 M&A (la categoría A más frecuente) son TODOS neutrales por regla, y
+  `neutral` no entra a sent_pos_ewma NI a sent_neg_ewma.
+  EL EVENTO MÁS MATERIAL DEL CORPUS ES HOY INVISIBLE EN LAS SEIS COLUMNAS.
+
+TRUNCAMIENTO: determinista, cuerpo cortado a EXACTAMENTE 70 caracteres antes de
+anteponer el prefijo de sección. 271 filas de 21,576 (1.26%). Regex trivial.
+
+
+========================================================================
+FIN — BORRAR ESTE ARCHIVO DESPUÉS DE DECIDIR
+========================================================================

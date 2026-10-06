@@ -1,0 +1,219 @@
+PENDIENTES DE IMPLEMENTACIÓN — NUEVO UNIVERSO (7 activos) + FEATURES MACRO
+Tesis DRL-BVL — Rodrigo Holguin. Handoff para retomar en una sesión nueva.
+Generado: jul-2026. Actualizado: jul-2026 (sesión de implementación).
+ESTADO: el CÓDIGO está cerrado (items 1-9 de "YA HECHO"); queda solo la CORRIDA
+del pipeline para el nuevo universo y la actualización de docs/notebooks.
+========================================================================
+
+CONTEXTO (qué cambió y por qué)
+-------------------------------
+Por el riesgo #1 (iliquidez, ver docs/riesgos_transversales_datos.txt) se
+revisó el universo. Se REEMPLAZARON 3 activos ilíquidos y se AMPLIÓ a 7:
+  SALEN : SAGAC1 (4.1% días operados), CORAREC1 (20.8%), BUENAVC1 (23.7%).
+  ENTRAN: InRetail INRETC1 (retail), Pacasmayo CPACASC1 (construcción),
+          Minsur MINSURI1 (minería, reemplaza BVN), Ferreycorp FERREYC1
+          (bienes de capital, NUEVO sector), Luz del Sur LUSURC1 (utilities).
+  SIGUEN: BCP CREDITC1, Alicorp ALICORC1.
+Cada candidato se validó en 3 patas (liquidez BVL + fundamentales SMV +
+cobertura mediática MediaCloud). Además se decidió añadir 6 features MACRO
+globales del BCRP (hasta inflación). Detalle y evidencia: memoria del proyecto
+project_universe_decision.md y docs/fundamento_macro_riesgo_politico.txt.
+
+
+YA HECHO (no rehacer)
+---------------------
+1. config.yaml: universe reescrito con los 7 activos + sección sources.macro.
+   Valores por-activo ya investigados y cargados (bvl_company_code, smv_rpj,
+   nominal_value, overrides). Config.load() OK.
+2. src/universe.py: Asset ganó 2 campos -> price_currency ("USD" en InRetail),
+   smv_tipo ("C" en InRetail). Defaults preservan el comportamiento anterior.
+3. src/macro/macro_client.py: descarga las 6 series BCRP y las alinea
+   point-in-time (macro_features(dates)); probado (0 NaN 2013-2025); cache
+   data/interim/macro_bcrp.parquet. Códigos validados (scripts/probe_bcrp_macro.py):
+   TC PD04640PD, cobre PD04701XD, oro PD04704XD, EMBI PD04709XD (diarias),
+   tasa PD04722MM, IPC PN01271PM (mensuales).
+
+4. (a) InRetail precio US$ -> PEN: HECHO. src/market/market_client.py._to_pen
+   consume asset.price_currency y multiplica open/high/low/close por el TC de
+   venta bancario del BCRP vigente cada fecha (fx.rate_asof, mismo criterio que
+   los dividendos en US$). Se llama en fetch_market DESPUÉS de grabar la capa
+   cruda (data/raw/market_INRETC1_bvl.parquet queda en US$, como lo devolvió la
+   fuente) y ANTES del merge Yahoo y de las acciones corporativas. Probado
+   2025-H1: US$26.4-31.8 -> S/95.5-119.9, TC 3.549-3.785, 0 NaN; ALICORC1 (PEN)
+   intacto. Si un activo USD llegara a tener ticker Yahoo, se avisa por consola
+   (habría que verificar la moneda de Yahoo antes de fusionar su OHLC).
+
+5. (b) InRetail fundamentales CONSOLIDADOS: HECHO. fetch_smv(tipo=None) resuelve
+   tipo = tipo or asset.smv_tipo or "I", así que TODOS los llamadores (incluidos
+   los scripts viejos que no pasan tipo) quedan correctos por config;
+   fetch_fundamentals expone `tipo` como override opcional. La caché de disco ya
+   estaba indexada por tipo (op_YYYYQn_TIPO.json), así que "I" y "C" coexisten.
+   Verificado 2023Q4 INRETC1: consolidado UtilidadNeta +321,717 y ActivoTotal
+   21,015,210 vs individual -40,729 / 8,149,383 (miles S/, moneda PEN -> no
+   requiere conversión de moneda en fundamentales).
+   Además scripts/gen_fundamentals.py: rango 2020-2023 hardcodeado -> cfg.start/
+   cfg.end (2005-2025), raw_dir desde config, imprime el tipo y acepta --force.
+   OJO: para INRETC1 la BVL no trae fecha real de presentación (0/1 periodos en
+   la prueba) -> known_date cae al lag fijo 40/60d. Revisar al correr R4 completo.
+
+
+6. (b.2) FIX de look-ahead detectado al implementar (b): el known_date real salía
+   del hecho de importancia "Intermedia INDIVIDUAL" aunque INRETC1 consume el
+   CONSOLIDADO. Medido (2005-2025): en INRETC1 la consolidada se divulga 9-19 días
+   DESPUÉS de la individual (mediana 14) en 30/30 trimestres; en ALICORC1 0/30 y
+   CREDITC1 0/26 (mismo día). Corregido: _EEFF_OBS_RE es ahora {"I":..., "C":...} y
+   _load_filing_dates recibe el tipo desde fetch_smv. Verificado: 30/30 periodos de
+   INRETC1 se corren +9..+14 d, 0/30 de ALICORC1 cambian. Detalle en
+   docs/riesgos_transversales_datos.txt §3(a.4).
+
+7. (d) MACRO en el panel R6: HECHO.
+   - src/integration/build_dataset.py: build_unified(..., macro=DataFrame|None) +
+     _merge_macro (join por 'date' DESPUÉS del concat, porque son globales; falla
+     con ValueError si una columna macro ya existe y avisa si el join deja NaN).
+     El builder NO descarga nada: recibe el macro ya resuelto, igual que dividends.
+   - scripts/run_r6_integration.py: calendar = build_trading_calendar(market);
+     macro = macro_features(calendar) -> se pasa a build_unified. Si el fetch macro
+     falla, el panel se construye SIN columnas macro (aviso, no aborta).
+   - feature_views: nueva vista "mercado_macro" (ablación del canal, análoga a
+     mercado_sentimiento) y las 6 columnas también en "completa" (34 cols). Las
+     vistas de sentimiento/fundamentales quedan SIN macro para poder aislar canales.
+   - AJUSTE en src/macro/macro_client.py: load_macro(start=) pasó de 2012-01-01 a
+     2011-01-01 y se REGENERÓ el caché (data/interim/macro_bcrp.parquet). Sin ese
+     colchón, el `asof` de las series MENSUALES dejaba sin valor todo enero-2012
+     (21 días hábiles de macro_tasa_ref, 22 de macro_inflacion). No es look-ahead:
+     solo agrega observaciones anteriores al horizonte.
+   VERIFICADO sobre el panel (3,513 fechas 2012-2025, activos con insumos hoy):
+     * 0 NaN en las 6 columnas macro.
+     * globalidad: 1 solo valor distinto por fecha en cada columna.
+     * rangos sensatos: cobre 195.5-567.5 cUS$/lb, oro 1049-4533 US$/oz, EMBI
+       91-372 pbs, tasa 0.25-7.75%, inflación -0.47..+1.48% mensual, TC 2.54-4.14.
+     * point-in-time de las mensuales: los escalones de macro_inflacion caen en el
+       día 1-5 del mes (mediana 1) y los de macro_tasa_ref en fin/inicio de mes
+       (mediana 30); CERO escalones a mitad de mes (día 6-24) -> ningún dato entró
+       antes de publicarse.
+
+
+8. (c) ANCLA DE ACCIONES POR TRAMOS (InRetail): HECHO.
+   - src/universe.py: nuevo campo Asset.shares_outstanding_schedule =
+     ((fecha_desde ISO, conteo), ...). Config.load lo normaliza de lista YAML a
+     tupla de tuplas (Asset es frozen/hashable; una lista lo rompería).
+   - fundamentals_client._shares_from_schedule: función ESCALONADA (searchsorted),
+     no interpolada — un follow-on cambia el conteo de golpe. Los periodos
+     anteriores al primer tramo toman el conteo más antiguo y se avisa por consola.
+   - compute_shares_earnings, precedencia explícita: schedule > override constante
+     > (Capital Emitido − tesorería)/nominal. compute_ratios también acepta el
+     schedule como razón suficiente para calcular acciones/EPS.
+   - config.yaml INRETC1: el schedule REEMPLAZA al override (una sola fuente de
+     verdad): 2012-01-01 -> 100,556,000 y 2022-06-30 -> 108,746,887.
+   VERIFICADO: unitario (escalón exacto en 2022-06-30, orden de entrada
+   indiferente, aviso en periodos previos) y REGRESIÓN sobre los activos que no
+   usan schedule: CREDITC1 (56 periodos) y ALICORC1 (57) dan Δshares = 0 y
+   Δeps_ttm = 0 exactos vs el panel vigente.
+   IMPACTO MEDIDO (utilidad consolidada trimestral SMV, 50 periodos con TTM
+   2013Q3-2025Q4): el EPS pre-2022Q2 sube +8.1456% (constante, 35 periodos) y el
+   P/E baja 7.53%; post-2022Q2 el cambio es 0.000000 (15 periodos).
+   END-TO-END con datos reales (a + b + c juntos; fund_INRETC1_smv.parquet ya
+   generado, ver CORRIDA abajo): tramos exactos 100,556,000 en 39 periodos
+   (2012Q3-2022Q1) y 108,746,887 en 15 (2022Q2-2025Q4); el escalón cae el
+   2022-08-16, que es el known_date REAL de la consolidada 2022Q2 (o sea (b.2) y
+   (c) actuando juntos). P/E diario disponible en 91.7% de los días (NaN solo en el
+   warm-up previo al primer known_date), mediana 25.8 (p25 18.4, p75 43.0 — los
+   valores altos son 2013-2016 y 2020, años de utilidad deprimida). CONTROL DE
+   ESCALA: capitalización mediana S/10,220 MM (máx 16,829), consistente con los
+   ~US$2.5-3 mil MM que vale InRetail -> el precio en PEN y el conteo de acciones
+   están ambos en la escala correcta. Al 2025-12-31: precio S/84.20, EPS 8.72,
+   P/E 9.65.
+   NO ES UN ARTEFACTO el escalón del EPS en 2022Q2 (6.25 -> 6.02 S//acción): un
+   follow-on diluye el EPS TTM porque la utilidad de los 4 trimestres previos se
+   divide entre las acciones NUEVAS. Es la definición estándar del P/E trailing
+   (capitalización de hoy ÷ utilidad de los últimos 12 meses) y el capital
+   levantado generará utilidad futura. Es CATEGÓRICAMENTE DISTINTO del caso SAGAC1
+   (§_PE_ARTIFACT_PERIODS en build_dataset): ahí una ESCISIÓN sacó activos del
+   perímetro, así que la utilidad TTM incluía un negocio que ya no existía y el
+   precio no repreció. No marcar pe_reliable=0 aquí.
+   >> SUPERADO (jul-2026). La "LIMITACIÓN DECLARADA" de abajo YA NO APLICA: el
+      Informe Bursátil Mensual de la BVL publica el conteo OFICIAL mes a mes
+      (docs/ejecutabilidad_y_costos_OE1.txt §4.5; data/interim/bvl_mensual.parquet).
+      Serie oficial de INRETC1: 2012-09 = 79,807,319 (pre-IPO), 2012-10 =
+      102,807,319 (IPO), 2022-04 = 108,746,887 (follow-on).
+      MITIGACIÓN APLICADA: config.yaml usa ahora esos tres tramos oficiales en vez
+      de la reconstrucción. RESULTADO: la reconstrucción (100,556,000) erraba
+      -2.19% — ALGO POR ENCIMA del "<=2%" que se había declarado, así que el rango
+      publicado era ligeramente optimista. El error del P/E pre-2022 pasa a CERO
+      (dato oficial, no estimado) y el escalón se fecha en ABRIL 2022 y no en
+      2022-06-30 (mismo efecto sobre periodos trimestrales; es el dato exacto).
+      RESIDUO: ninguno para InRetail. Lo que queda abierto es OTRO caso distinto
+      —el desfase de reconocimiento de BCP, balance vs fecha de listado— descrito
+      en ejecutabilidad_y_costos_OE1.txt §4.5(b).
+      El texto original se conserva abajo por trazabilidad (convención del
+      registro: se anota la mitigación, no se poda el item).
+
+   LIMITACIÓN DECLARADA [SUPERADA, ver arriba]: el tramo pre-2022Q2 es RECONSTRUIDO por razón de Capital
+   Emitido (=108,746,887 × 2,739,714/2,962,923). El follow-on fue sobre par, así
+   que el conteo real está en [100.6M, 102.9M(IPO)]: el error del P/E pre-2022Q2
+   baja de ~8% (override único) a <=2%, no a cero. NO se enmascara con
+   pe_reliable=0 (se decidió que perder 10 años de P/E es peor que un sesgo <=2%
+   que la normalización causal por activo de OE1 absorbe en buena parte).
+
+9. (e) Minsur: NADA de código nuevo, confirmado. El override (2,883,002,520 =
+   total económico, porque la acción de inversión MINSURI1 es 1/3 del patrimonio)
+   + la conversión USD->PEN de la utilidad (modal USD, ya existe para BVN) hacen
+   que el P/E salga correcto con el código actual.
+
+10. (f) CONTEO HÍBRIDO DE ACCIONES [C]: HECHO (2026-07-31). No estaba en este
+   handoff — salió del levantamiento de ejecutabilidad y se hizo ANTES de la
+   corrida a propósito (después habría obligado a repetir R4-R6 solo por esto).
+   La rama general de compute_shares_earnings pasó de (Capital Emitido −
+   tesorería)/nominal a: acciones LISTADAS según el Informe Bursátil Mensual de la
+   BVL − |tesorería SMV 1D0711|/nominal. Corrige el desfase de reconocimiento del
+   caso BCP (el capital del balance se adelantaba hasta 3 trimestres al listado:
+   16 periodos de CREDITC1 con el conteo hasta +24.64% por encima del oficial, un
+   artefacto de periodicidad ANUAL) sin romper el neteo de tesorería de Alicorp
+   (0 periodos cambian >1%). Precedencia intacta: INRETC1 (schedule) y MINSURI1
+   (override) no pasan por esta rama. Detalle, residuos y regresión:
+   docs/ejecutabilidad_y_costos_OE1.txt §8.3.
+   NUEVA DEPENDENCIA de R4: data/interim/bvl_mensual.parquet (ya generado). Si
+   falta, el pipeline avisa y cae al cálculo anterior.
+
+=> NO QUEDA CÓDIGO PENDIENTE: (a) (b) (b.2) (c) (d) (e) (f) están cerrados. Lo
+   único que falta es la CORRIDA de abajo y la actualización de docs/notebooks.
+
+
+PENDIENTE — CORRIDA (re-ejecutar el pipeline para el nuevo universo)
+-------------------------------------------------------------------
+Orden sugerido:
+  1. R3 mercado: fetch BVL de los 7 (InRetail con conversión US$->PEN) + acciones
+     corporativas. Rápido.
+  2. R4 fundamentales: gen_fundamentals.py (tipo por activo y rango 2005-2025 ya
+     resueltos, ver "YA HECHO" 5). El SMV descarga todas las empresas por período
+     (cache), así que sumar activos es casi gratis PARA TIPO "I" (la caché
+     2005-2025 ya existe del universo viejo); solo se filtra el RPJ nuevo.
+     Alternativa a gen_fundamentals: regen_fund_known_dates.py (sobrescribe todos).
+     >> INRETC1 YA ESTÁ HECHO (scripts/gen_fund_inretail.py, jul-2026):
+        data/raw/fund_INRETC1_smv.parquet = 11,602 filas, 54 periodos
+        (2012Q3-2025Q4), moneda PEN, known_date real (hecho tipo C) en 30/56
+        periodos y lag fijo en el resto (los pre-2018). NO re-descargar.
+        OJO DISCO: el tipo "C" NO estaba cacheado y cada archivo del WSDL trae
+        TODAS las empresas (~5 MB); data/raw/smv_cache/ quedó en 2.2 GB.
+        Se descargó desde 2012 y no desde 2005 a propósito: InRetail hizo IPO en
+        oct-2012 (su primer EEFF es 2012Q3), así que 2005-2011 era puro descarte.
+  3. R5 sentimiento (CUELLO DE BOTELLA): MediaCloud + Ollama gemma3:4b clasifica
+     CADA artículo. Volumen de los nuevos: InRetail ~8.6k, Pacasmayo ~10.4k,
+     Ferreycorp ~3.6k, Minsur ~1.6k, Luz del Sur ~2.0k. Correr en batch/noche.
+  4. R6 integración: run_r6_integration.py (ya con macro integrado).
+  5. Regenerar notebooks + actualizar docs (pipeline, hallazgos R3-R6, riesgos).
+
+
+VERIFICACIÓN (al terminar)
+--------------------------
+  - P/E Minsur (acción de inversión, ~1/3): valores sensatos y no explosivos.
+  - P/E InRetail: coherente pre/post 2022-Q2; precio ya en PEN.
+  - macro_*: 0 NaN sobre el calendario del panel; tasa/IPC sin look-ahead
+    (comparar known_date con fecha de publicación).
+  - Liquidez de los nuevos (is_stale) coincide con lo medido:
+    Pacasmayo ~28%, Ferreycorp ~26%, InRetail ~37%, Luz del Sur ~43%, Minsur ~35%.
+  - Conteo híbrido (item 10): que el shares_outstanding de CPACASC1, FERREYC1 y
+    LUSURC1 coincida con la serie oficial de bvl_mensual.parquet y que los avisos
+    "[shares] ... sin conteo oficial de la BVL" se limiten a 2005-2011. Ojo con
+    LUSURC1: nominal 0.68, no 1.0 -> revisar |1D0711|/0.68 contra el oficial.
+========================================================================

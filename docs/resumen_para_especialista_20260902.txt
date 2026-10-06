@@ -1,0 +1,645 @@
+================================================================================
+APRENDIZAJE POR REFUERZO PROFUNDO APLICADO A LA BOLSA DE VALORES DE LIMA
+Resumen del trabajo para revisión de especialista
+================================================================================
+Autor:   Rodrigo Holguín
+Asesor:  Dr. Edwin Villanueva
+Fecha:   2 de septiembre de 2026
+Estado:  base de datos construida y auditada; agente aún no entrenado.
+
+
+--------------------------------------------------------------------------------
+CÓMO LEER ESTE DOCUMENTO Y QUÉ SE LE PIDE
+--------------------------------------------------------------------------------
+El documento tiene dos mitades con propósitos distintos:
+
+  SECCIONES 1-7 — LO CONSTRUIDO. Qué datos se reunieron, con qué criterios y
+  qué limitaciones tienen. Lo que se busca acá es que usted detecte supuestos
+  que un practicante del mercado peruano sabría que no se sostienen.
+
+  SECCIONES 8-9 — LO ABIERTO. Siete decisiones de diseño del agente que todavía
+  NO se han tomado: función objetivo, costos de transacción, capacidad,
+  benchmarks y protocolo de evaluación. Son decisiones de criterio de inversión
+  más que de programación, y es donde su experiencia vale más. La sección 9 es
+  una lista de preguntas concretas.
+
+No hay resultados de desempeño todavía, y es deliberado: el protocolo de
+evaluación se fija ANTES de entrenar, para no elegir la métrica después de ver
+los resultados. Esa decisión sigue abierta y es una de las que se consultan.
+
+Se omite todo detalle de implementación. Donde una decisión técnica tiene
+consecuencia económica, se explica la consecuencia, no el mecanismo.
+
+
+================================================================================
+1. LA TESIS EN UNA PÁGINA
+================================================================================
+
+PREGUNTA. ¿Puede un agente de aprendizaje por refuerzo profundo (DRL) construir
+y rebalancear un portafolio de acciones de la BVL que supere, fuera de muestra y
+de forma robusta, a estrategias de referencia pasivas y clásicas?
+
+QUÉ ES UN AGENTE DRL, EN TÉRMINOS DE PORTAFOLIO. Es una función que observa un
+vector de estado del mercado en la fecha t y devuelve un vector de pesos del
+portafolio para t+1. La diferencia con una optimización de media-varianza es que
+los pesos no salen de resolver un problema de optimización sobre momentos
+estimados, sino de una política aprendida por prueba y error sobre la serie
+histórica, maximizando una recompensa acumulada. No estima retornos esperados ni
+la matriz de covarianzas de forma explícita.
+
+POR QUÉ LA BVL Y NO UN MERCADO DESARROLLADO. Porque es donde la pregunta no está
+contestada. La literatura de DRL en portafolios trabaja casi siempre sobre S&P
+500, cripto o futuros — mercados profundos, con datos abundantes y costos de
+transacción bajos. La BVL es lo contrario: pocos emisores líquidos, sesiones sin
+negociación, spreads amplios y cobertura informativa desigual. La tesis toma esas
+fricciones como OBJETO DE ESTUDIO, no como estorbo.
+
+EL CRITERIO DE ÉXITO, FIJADO DE ANTEMANO. El objetivo mínimo defendible NO es
+"ganar dinero": es superar de forma robusta y fuera de muestra a los baselines,
+con un estudio de ablación limpio que muestre qué canal de información aporta.
+Está escrito que si el canal de sentimiento no supera al baseline en la ablación,
+el canal no se usa. Lo mismo para fundamentales y macro.
+
+EL APORTE METODOLÓGICO, MÁS ALLÁ DEL RESULTADO. Buena parte del trabajo hecho
+hasta hoy es la construcción de un panel diario point-in-time para la BVL que
+reúne mercado, fundamentales, prensa y macro sobre 14 años. Ese panel y las
+decisiones documentadas para armarlo son reutilizables con independencia de si
+el agente gana o pierde.
+
+
+================================================================================
+2. EL UNIVERSO: SIETE ACCIONES, Y POR QUÉ ESAS
+================================================================================
+
+  Ticker BVL   Emisor                        Sector
+  -----------  ----------------------------  --------------------------
+  CREDITC1     Banco de Crédito del Perú     Banca
+  ALICORC1     Alicorp                       Consumo masivo
+  INRETC1      InRetail Perú                 Retail (supermercados,
+                                             farmacias, centros comerciales)
+  CPACASC1     Cementos Pacasmayo            Cemento
+  FERREYC1     Ferreycorp                    Bienes de capital (Caterpillar)
+  MINSURI1     Minsur (acción de inversión)  Minería (estaño, cobre)
+  LUSURC1      Luz del Sur                   Distribución eléctrica
+
+Horizonte: 2 de enero de 2012 a 31 de diciembre de 2025. 3,513 sesiones.
+
+CRITERIO DE SELECCIÓN. El universo se eligió en julio de 2026 con tres filtros
+simultáneos: liquidez, disponibilidad de estados financieros trimestrales en la
+SMV, y cobertura de prensa suficiente. Se reemplazaron tres emisores del universo
+inicial (Saga Falabella, Aceros Arequipa, Buenaventura) porque su iliquidez hacía
+el ejercicio inviable.
+
+LA MÉTRICA DE LIQUIDEZ QUE SE USÓ, Y POR QUÉ ESA. En lugar del volumen reportado
+—que se verificó poco confiable para tickers de Lima— se usó el PORCENTAJE DE
+SESIONES CON PRECIO DISTINTO AL DE LA SESIÓN HÁBIL ANTERIOR. Un precio que no se
+movió porque nadie transó no es información; es el precio anterior arrastrado.
+
+  Emisor      % sesiones con precio nuevo (2012-2025)
+  ----------  ---------------------------------------
+  ALICORC1    75.9%
+  FERREYC1    73.5%
+  CPACASC1    72.1%
+  MINSURI1    64.9%
+  CREDITC1    58.6%
+  LUSURC1     56.5%
+  INRETC1     97.5%*   (*cotiza en USD; ver nota)
+  ----------
+  SALIERON:   SAGAC1 4.1%  ·  CORAREC1 20.8%  ·  BUENAVC1 23.7%
+
+El piso del universo subió de 4.1% a 56.5%. LÍMITE QUE SE DECLARA: ninguno de los
+siete es líquido en el sentido de un mercado desarrollado. El techo observado
+para un nombre BVL-nativo es ~75%. Uno de cada tres o cuatro días, el precio de
+cierre de la mitad de la cartera no refleja una transacción de ese día.
+
+DOS EXCLUSIONES DELIBERADAS QUE CONVIENE DISCUTIR.
+  - Se evaluó y descartó reemplazar BCP por Credicorp (BAP en NYSE). BAP negocia
+    ~1,200 veces lo que CREDITC1 en Lima, pero se forma su precio en Nueva York:
+    incluirlo rompería la premisa del trabajo, que es un mercado ralo. Además son
+    valores distintos (Credicorp incluye Pacífico, Prima AFP, Mibanco).
+  - Pacasmayo tiene ADR en NYSE (CPAC), pero está prácticamente muerto: negocia
+    US$47 mil/día contra ~US$235 mil/día en Lima. El 82% se transa localmente.
+
+  >> DUDA PARA EL ESPECIALISTA: ¿siete nombres es un universo defendible para un
+     ejercicio de portafolio, o el resultado va a estar dominado por la
+     idiosincrasia de dos o tres papeles? ¿Habría que incluir un instrumento de
+     renta fija o el efectivo remunerado como octavo activo?
+
+
+================================================================================
+3. LAS CUATRO FUENTES DE INFORMACIÓN
+================================================================================
+El agente observa cuatro bloques. Cada uno se construyó por separado, se auditó
+por separado, y en la evaluación final se prueba por separado (ablación).
+
+--------------------------------------------------------------------------------
+3.1. MERCADO
+--------------------------------------------------------------------------------
+Fuente primaria: la propia BVL. Yahoo Finance se usó solo como validación
+cruzada, nunca como reemplazo — se midió que su volumen para tickers de Lima no
+reconcilia con el oficial.
+
+Se construyeron tres series de precio, separadas a propósito:
+  - PRECIO CRUDO — el efectivamente negociado. Es el que se usa para valorizar
+    posiciones y para calcular ratios contemporáneos como el P/E.
+  - PRECIO AJUSTADO POR SPLITS — para continuidad de series técnicas.
+  - PRECIO DE RETORNO TOTAL — reinvirtiendo dividendos. Es el que mide desempeño.
+
+Dividendos y acciones liberadas provienen del registro oficial de la BVL, no de
+un proveedor externo. Los importes en dólares se convierten a soles con el tipo
+de cambio del BCRP a la fecha de corte.
+
+Indicadores técnicos incluidos: medias móviles (20 y 50), MACD, RSI de 14 días,
+volatilidad de 20 días, retorno diario.
+
+DOS BANDERAS QUE ACOMPAÑAN A CADA FILA, y que importan para la evaluación:
+  - SIN NEGOCIACIÓN: la sesión existe en el calendario pero el papel no operó.
+  - PRECIO ARRASTRADO: el cierre es idéntico al de la sesión anterior. Es un
+    conjunto más amplio que el anterior y captura los tramos estancados.
+Se guardan como señal cruda; qué hace el agente con ellas es una decisión abierta
+(ver sección 8).
+
+--------------------------------------------------------------------------------
+3.2. FUNDAMENTALES
+--------------------------------------------------------------------------------
+Fuente: estados financieros trimestrales de la SMV, 2012-2025, para los siete
+emisores. De ahí se derivan ROE, ROA, margen neto, deuda/patrimonio y
+deuda/activos; y con el precio diario, P/E y dividend yield.
+
+TRES DECISIONES QUE VALE LA PENA REVISAR CON USTED:
+
+(a) EL P/E SE CALCULA CON UTILIDAD DE DOCE MESES MÓVILES, reconstruida desde la
+    serie acumulada del ejercicio para ser robusta a reexpresiones. No se reporta
+    P/E cuando la utilidad de doce meses es negativa: en pérdidas el múltiplo no
+    es informativo.
+
+(b) EL CONTEO DE ACCIONES EN CIRCULACIÓN es híbrido. Se toman las acciones
+    emitidas y listadas del registro de la BVL (que tiene la fecha correcta de
+    reconocimiento) menos las acciones en tesorería reportadas a la SMV (que la
+    BVL no descuenta). Cada fuente aporta lo que la otra no tiene. La tesorería
+    llegó a ser material —hasta 10% en un emisor— así que no netearla habría
+    distorsionado la capitalización.
+
+(c) INRETAIL SE CONSUME CONSOLIDADO Y NO INDIVIDUAL, porque es un holding cuyo
+    estado individual reporta pérdida. Esto tiene una consecuencia de fechas que
+    se detalla abajo.
+
+EL PUNTO DE LA FECHA DE CONOCIMIENTO — es el más importante de esta sección.
+
+Un estado financiero del cierre de junio no es información pública el 30 de
+junio. Si el agente lo "ve" en la fecha del período, está operando con
+información que el mercado todavía no tenía: sesgo de anticipación, y el backtest
+queda inflado.
+
+  - CUANDO EXISTE, se usa la FECHA REAL DE PRESENTACIÓN, tomada del hecho de
+    importancia que el emisor registra en la BVL. Si el registro es después de
+    las 15:00 hora de Lima, la información se considera conocida recién al día
+    siguiente, porque no era operable en el cierre del propio día.
+  - CUANDO NO EXISTE, se aplica un rezago. La cobertura de fecha real empieza
+    hacia 2018, así que el rezago aplica sobre todo a 2012-2017.
+
+  Cobertura de fecha real, medida:
+      2005-2017     0%
+      2019-2024   ~96%
+  Sobre el panel diario, con la partición temporal prevista:
+      entrenamiento   31.9% fecha real
+      validación     100%
+      prueba         100%
+
+  ESTO NO ES UN FALTANTE ALEATORIO: ES UN CAMBIO DE RÉGIMEN ALINEADO CON LA
+  PARTICIÓN. La variable significa una cosa en entrenamiento y otra en prueba.
+
+  QUÉ SE HIZO CON ESO. Su asesor planteó una alternativa razonable: si buena
+  parte de los datos tiene la fecha estimada, quizá convenga ELIMINAR la señal
+  ahí en vez de darla con un rezago que puede ser ruido y hacer que el agente
+  descarte los fundamentales en general. Se midió y se resolvió así:
+
+    1. El rezago mediano que introduce la estimación es de 10 días. Como los
+       fundamentales entran al panel como NIVEL que se arrastra hasta el
+       trimestre siguiente (no como sorpresa en el anuncio), un corrimiento de
+       10 días sobre un escalón de ~90 deja ~11% de los días con el valor del
+       trimestre previo. DILUYE, no destruye.
+    2. ELIMINAR vaciaría el ENTRENAMIENTO, no la prueba: pasaría de 231 a 75
+       observaciones trimestrales. Se entrenaría un agente que casi no vio
+       fundamentales y se lo evaluaría donde los fundamentales sí están y están
+       bien fechados. El remedio sería peor.
+    3. SE OPTÓ POR MARCAR: cada observación lleva una bandera que indica si la
+       fecha es real o estimada. El agente puede condicionar, y la propuesta de
+       eliminar queda registrada como un brazo del estudio de ablación, para
+       decidirla con evidencia en vez de a priori.
+
+  UN HALLAZGO COLATERAL QUE SÍ ERA UN ERROR. Al revisar esto se encontró que el
+  rezago estimado estaba calibrado contra el universo ANTERIOR. InRetail entró
+  después y presenta sus estados entre 43 y 47 días después del cierre, cuando el
+  resto lo hace hacia los 30. El rezago genérico le ADELANTABA la información
+  entre cinco y siete días en cada trimestre del tramo estimado — sesgo de
+  anticipación real. Se corrigió calibrando el rezago por emisor con su propia
+  distribución histórica. El sesgo pasó de 12.6% a 1.9% de los períodos, y lo que
+  queda son las prórrogas de emergencia por COVID, que están documentadas.
+
+  >> DUDA PARA EL ESPECIALISTA: en su experiencia, ¿un rezago de 10 días en un
+     indicador trimestral es material para una decisión de portafolio, o el
+     mercado ya lo tenía descontado por otras vías (guidance, reportes de la
+     competencia, datos sectoriales)?
+
+--------------------------------------------------------------------------------
+3.3. SENTIMIENTO DE PRENSA
+--------------------------------------------------------------------------------
+Es el canal más laborioso y el más incierto. Se explica con algo de detalle
+porque es donde la tesis se juega su componente de inteligencia artificial.
+
+QUÉ SE RECOLECTÓ. 19,528 titulares de prensa peruana (Gestión, El Comercio, La
+República) entre 2012 y 2025, para los siete emisores.
+
+CÓMO SE CLASIFICA CADA TITULAR. Un modelo de lenguaje de código abierto,
+ejecutado localmente, clasifica cada titular en una de QUINCE CATEGORÍAS DE
+EVENTO — resultados, fusiones y adquisiciones, crisis, cambio regulatorio,
+inversión, dividendos, gobierno corporativo, mención incidental, crónica de
+índice, publicidad, etc. — y, solo si la categoría es un hecho de la empresa,
+indica la polaridad esperada sobre el valor de la acción.
+
+  LA DECISIÓN DE DISEÑO CENTRAL, Y POR QUÉ IMPORTA. Al modelo se le pide una
+  tarea OBJETIVA (¿de qué tipo es este evento?) y NO una tarea de juicio
+  (¿qué tan importante es?). La importancia la fija el autor por adelantado,
+  asignando cada categoría a un tramo de relevancia. Razones:
+    - La clasificación de tipo es auditable en la sustentación; un juicio de
+      importancia emitido por un modelo no lo es.
+    - Se midió que la autoevaluación del modelo no discrimina: su "confianza"
+      es prácticamente igual en aciertos que en errores.
+    - Recalibrar la relevancia después no obliga a reprocesar el corpus.
+
+  LAS CATEGORÍAS DE RELEVANCIA CERO SON EL FILTRO. En vez de un "no sé", las
+  categorías que no son hechos de la empresa (mención incidental, crónica de
+  bolsa, publicidad, nota sectorial) tienen relevancia cero por construcción, y
+  se les fuerza polaridad nula aunque el modelo opine otra cosa. Esto eliminó por
+  diseño el error dominante de la primera versión: 49% de las etiquetas con signo
+  provenían de noticias que no hablaban de la empresa.
+
+CUÁNTO DE ESE CORPUS ES REALMENTE INFORMACIÓN. Poco, y conviene decirlo con
+franqueza. Sobre una muestra de 550 titulares anotada a mano por el autor, a
+ciegas, la tasa poblacional de titulares que son un hecho concreto del emisor es
+de 7.2% (±2.8 puntos). El resto es cobertura de tipo de cambio, crónicas de
+sesión, publicidad y menciones de paso.
+
+RESULTADO DE LA CLASIFICACIÓN COMPLETA (corrida terminada el 1 de septiembre de
+2026, los 19,513 titulares). El modelo etiqueta 2,237 titulares como hecho de la
+empresa, es decir 11.5% del corpus. Ese número está por encima del 7.2% porque el
+modelo sobre-declara relevancia: su precisión en esa tarea se midió en 59.3%.
+Corrigiendo por ella, las dos vías de estimación convergen:
+
+    por el modelo       2,237 x 0.593  =  1,327 eventos verdaderos
+    por la anotación   19,513 x 0.072  =  1,405 eventos verdaderos
+    diferencia: 6%
+
+Que dos caminos independientes —uno estadístico sobre una muestra anotada a mano,
+otro por conteo directo del clasificador corregido por su precisión— den el mismo
+orden de magnitud es la validación más fuerte que tiene el canal hoy.
+
+  Eventos etiquetados por emisor, y su frecuencia anual:
+
+    Emisor      Artículos   Eventos   Eventos/año   Días con evento
+    ----------  ---------   -------   -----------   ---------------
+    CREDITC1       10,025       889          63.5             631
+    INRETC1         3,199       499          35.7             363
+    ALICORC1        1,719       258          18.4             205
+    LUSURC1         1,055       217          15.5             184
+    MINSURI1          920       154          11.0             141
+    FERREYC1        1,752       123           8.8             116
+    CPACASC1          843        97           6.9              89
+    ----------  ---------   -------   -----------
+    TOTAL          19,513     2,237         159.8
+
+  El reparto de polaridad de esos 2,237 eventos: 46.0% positivo, 34.9% negativo,
+  19.2% neutro. Los neutros son eventos que en el diseño anterior no entraban a
+  ninguna columna y se perdían.
+
+UN HALLAZGO QUE CAMBIÓ EL DISEÑO: SOLO EL 16% DE LOS TITULARES NOMBRA A LA
+EMPRESA. La búsqueda opera sobre el cuerpo del artículo, así que entra todo el que
+mencione al emisor en cualquier parte —como fuente, como dato, como ejemplo—. El
+estrato que sí nombra a la empresa en el titular tiene 63.8% de relevancia contra
+2.1% del resto, y de él proviene solo el 17% del ruido con signo. Decisión: se
+MARCA el estrato pero no se descarta, y qué hacer con él se decide en la ablación.
+
+CÓMO ENTRA LA TEMPORALIDAD — es la pregunta que más interesa a un practicante.
+
+  Un evento no vale lo mismo el día que ocurre que tres semanas después, pero
+  tampoco desaparece de un día para otro. El tratamiento es:
+
+  (i) LOS EVENTOS SE ACUMULAN CON DECAIMIENTO EXPONENCIAL, en tres escalas
+      simultáneas: vidas medias de 5, 20 y 60 días hábiles. El agente recibe las
+      tres y aprende cuánto pesa cada una. La razón de usar tres y no una es que
+      una mezcla de exponenciales representa más formas de decaimiento que una
+      sola —por ejemplo, caída rápida con cola larga— y los pesos entran de forma
+      lineal, que es un problema mucho mejor condicionado que estimar una
+      constante de decaimiento libre.
+
+  (ii) POSITIVO, NEUTRO Y NEGATIVO VIAJAN EN CANALES SEPARADOS. Una serie con
+      signo colapsa: una buena y una mala noticia el mismo día se cancelan y dan
+      cero, indistinguible de "no pasó nada". Separadas permiten además reacción
+      asimétrica, que es un hecho estilizado bien establecido.
+
+  (iii) LAS NOTICIAS DE DÍA NO HÁBIL SE TRASLADAN AL SIGUIENTE DÍA DE
+      NEGOCIACIÓN, no al anterior.
+
+  (iv) NO SE RE-FECHA NINGUNA NOTICIA. Si un medio publicó tarde, se registra
+      tarde. Mover una noticia al momento "real" del evento sería introducir
+      información que el lector no tenía.
+
+  UNA LIMITACIÓN RECONOCIDA Y NO RESUELTA. La clasificación identifica el TIPO de
+  evento pero es muda sobre si el evento es NUEVO. La prensa cubre el mismo hecho
+  varias veces —anuncio, avance, cierre— y las tres veces se clasifican igual. El
+  caso medido: la venta de Luz del Sur en 2019 aparece en siete titulares entre
+  enero y octubre, todos "fusiones y adquisiciones", todos con la misma
+  relevancia; pero el precio subió 43% ANTES del anuncio oficial y el titular que
+  confirma la operación llegó diez sesiones DESPUÉS del salto de 41% en un día.
+  Está registrado como decisión abierta.
+
+  >> DUDA PARA EL ESPECIALISTA: en su experiencia en mesa, ¿la prensa local
+     ANTICIPA o solo REGISTRA los movimientos de precio en la BVL? Si solo
+     registra, el canal de sentimiento tiene un techo bajo por construcción y
+     conviene saberlo antes de invertirle más trabajo.
+
+--------------------------------------------------------------------------------
+3.4. FACTORES MACROECONÓMICOS
+--------------------------------------------------------------------------------
+Cinco series diarias o mensuales del BCRP, iguales para los siete activos en cada
+fecha: precio del cobre, tipo de cambio USD/PEN, EMBI+ Perú, tasa de referencia e
+inflación (IPC Lima).
+
+EL CRITERIO DE INCLUSIÓN CAMBIÓ A MITAD DEL TRABAJO, y es un resultado en sí
+mismo. Originalmente los factores se eligieron por argumento económico y
+literatura. Luego se midió su efecto sobre los siete activos vigentes con una
+regresión multifactor con errores estándar de Newey-West, y con los factores
+rezagados un día (que es la especificación relevante si se opera al día
+siguiente). De ahí:
+
+  - EL ORO SE ELIMINÓ. Estaba justificado por Buenaventura, que salió del
+    universo; ninguno de los siete produce oro, y no tiene efecto propio medible
+    en ninguno (0 de 7). Control de que el método funciona: sobre Buenaventura el
+    oro sale con t = +5.57.
+  - EL ESTAÑO SE RECHAZÓ, pero por una razón distinta de la aparente. Minsur es
+    el segundo productor mundial, así que la hipótesis era natural. La medición
+    la rechaza, y a Minsur lo mueve el COBRE (t = +5.62). Pero el resultado
+    correcto no es "el estaño no le importa a Minsur": es que el BCRP solo publica
+    estaño como promedio mensual, y una escalera de doce peldaños al año no puede
+    explicar retornos diarios.
+  - EL HALLAZGO DE FONDO: el esqueleto macro de la BVL NO son los precios de
+    commodities sino EL TIPO DE CAMBIO Y EL RIESGO PAÍS. El cobre tiene efecto
+    propio solo en 4 de 7 activos; en los demás lo absorben el TC y el EMBI. Es
+    coherente con el mecanismo conocido: el cobre mueve al sol y el sol mueve a
+    la bolsa.
+  - EL PETRÓLEO QUEDÓ EN EVALUACIÓN. Aparece en Minsur y Ferreycorp, que son
+    exactamente los dos que uno predeciría; pero 2 de 8 al 5% es lo esperable por
+    azar con ~48 pruebas. Se probará como brazo de ablación, no se da por bueno.
+
+SE DESCARTÓ UN FEED DE NOTICIAS GEOPOLÍTICAS. El argumento es que el canal ya
+llega por precio: una guerra o una crisis política se refleja en el EMBI, el tipo
+de cambio y el precio del cobre antes de que se pueda clasificar la noticia.
+
+  >> DUDA PARA EL ESPECIALISTA: ¿faltan factores? Se consideró y no se incluyó
+     un índice de términos de intercambio, la curva de rendimientos soberana, ni
+     el flujo de inversionistas no residentes. ¿Alguno de esos sería, en su
+     experiencia, más informativo que los cinco actuales?
+
+
+================================================================================
+4. EL PANEL: LO QUE EL AGENTE VE
+================================================================================
+Todo lo anterior se combina en un panel diario único.
+
+  24,591 filas (7 emisores x 3,513 sesiones) x 118 columnas
+  2 de enero de 2012 a 31 de diciembre de 2025
+  Construido y verificado. Es el insumo cerrado sobre el que corre el agente.
+
+Las columnas se agrupan en conjuntos de señales que se prueban por separado. Esa
+es la estructura del ESTUDIO DE ABLACIÓN, que es la forma de responder "¿qué
+canal aporta y cuál no?" en vez de entrenar un modelo con todo y no saber por qué
+funciona:
+
+  Solo mercado                      precio, técnicos, banderas de liquidez
+  Mercado + sentimiento             + los 9 canales de prensa
+  Mercado + fundamentales           + ratios, P/E, DY, bandera de fecha
+  Mercado + macro                   + las 5 series del BCRP
+  Completa                          todo
+  ── variantes pre-registradas ──
+  Sentimiento por tramo             desagregado por magnitud del evento
+  Sentimiento restringido           solo titulares que nombran a la empresa
+  Fundamentales con fecha real      la propuesta de eliminar en vez de marcar
+
+Que las variantes estén PRE-REGISTRADAS —definidas antes de ver resultados—
+importa: evita elegir después la especificación que mejor se ve.
+
+
+================================================================================
+5. DISCIPLINA CAUSAL: LO QUE MÁS PUEDE INVALIDAR EL TRABAJO
+================================================================================
+Un backtest de aprendizaje automático es fácil de inflar sin darse cuenta. Las
+reglas que se fijaron:
+
+  1. TODA INFORMACIÓN ENTRA EN SU FECHA DE CONOCIMIENTO PÚBLICO, no en la fecha
+     a la que se refiere. Aplica a fundamentales (sección 3.2) y a prensa.
+  2. LA EJECUCIÓN ES AL DÍA SIGUIENTE. Lo que se observa al cierre de t se opera
+     en t+1. Nada se decide y ejecuta el mismo día.
+  3. NINGUNA TRANSFORMACIÓN MIRA HACIA ADELANTE. Las normalizaciones se calculan
+     solo con información hasta la fecha, nunca con la media de toda la muestra.
+     (Esta decisión está formalmente abierta; ver sección 8.)
+  4. LA PARTICIÓN ES TEMPORAL Y SIN BARAJAR: entrenamiento, validación y prueba
+     en ese orden cronológico.
+
+VERIFICACIÓN HECHA SOBRE EL PANEL FINAL: ninguna fila tiene un dato fundamental
+cuya fecha de conocimiento sea posterior a la fecha de la fila.
+
+SE APLICA EL MISMO ESTÁNDAR A LOS ERRORES ENCONTRADOS. Durante la auditoría
+aparecieron tres casos de "decisión tomada, código no actualizado" — entre ellos
+el rezago de InRetail de la sección 3.2, que era sesgo de anticipación real.
+Están corregidos y registrados como riesgo de proceso, porque ninguno hacía
+fallar nada: el pipeline corría y los números salían.
+
+
+================================================================================
+6. LO QUE SE MIDIÓ Y SE DESCARTÓ
+================================================================================
+Se incluye porque el criterio de descarte dice más del rigor del trabajo que los
+resultados positivos, y porque son lugares donde usted puede decir "midieron lo
+que no era".
+
+  (a) AGREGAR UN EJE DE "ALCANCE" A LA CLASIFICACIÓN DE NOTICIAS. Descartado: no
+      aumentaba la información del canal y empeoraba la desigualdad de cobertura
+      entre emisores.
+
+  (b) DEDUCIR LA POLARIDAD DE UNA FUSIÓN SEGÚN EL PAPEL DE LA EMPRESA
+      (comprada, compradora, vendedora). La REGLA es buena: asignando el papel a
+      mano, el acierto direccional duplica al del método actual. Pero el modelo no
+      logra identificar el papel — en el caso de la compra de Pacasmayo por Holcim
+      lo clasificó mal en las dos formulaciones probadas. Descartado en su forma
+      automática; queda la opción de asignarlo a mano sobre ~130 artículos.
+
+  (c) INCORPORAR LOS HECHOS DE IMPORTANCIA DE LA BVL COMO SEGUNDA FUENTE. Esta es
+      la más interesante para discutir. La hipótesis era que la divulgación
+      obligatoria corregiría la desigualdad de cobertura, porque todo emisor
+      listado está obligado a informar mientras que la prensa cubre a quien
+      quiere. Se anotaron a mano 140 hechos contra un criterio fijado de
+      antemano. Resultado: NO SE ADOPTA.
+        - La fuente es buena: 53.4% de los hechos son materiales, contra 7.2% de
+          la prensa. Siete veces más densa en señal.
+        - Pero no resuelve lo que se le pidió: la desigualdad entre emisores baja
+          de 16.8 a 6.4 veces, no por debajo de 6 como se había fijado; y
+          Pacasmayo no triplica sus eventos bajo ningún criterio razonable.
+        - El 14% de los hechos es texto administrativo sin contenido legible
+          ("Acuerdos de sesión de directorio del 18 de abril"), y eso es ADEMÁS
+          de 2,007 hechos ya excluidos por venir vacíos.
+        - Donde SÍ son superiores es en la FECHA, que es justo lo que el criterio
+          no midió: son point-in-time por construcción. Queda anotado como
+          propuesta reducida para después.
+
+  >> DUDA PARA EL ESPECIALISTA: ¿vale la pena insistir con los hechos de
+     importancia como ancla de fecha, o en la práctica el mercado ya se enteró
+     por otras vías antes de que el emisor formalice?
+
+
+================================================================================
+7. LIMITACIONES QUE NO TIENEN SOLUCIÓN DENTRO DEL ALCANCE
+================================================================================
+Van al capítulo de limitaciones tal cual.
+
+  (a) LA COBERTURA DE PRENSA ES MUY DESIGUAL ENTRE EMISORES. Medido sobre la
+      clasificación completa: BCP produce 63.5 eventos por año y Pacasmayo 6.9.
+      La razón entre el más cubierto y el menos cubierto es de 9.2 veces. No
+      existe fuente disponible que lo resuelva: es una propiedad de la prensa
+      peruana, no del método (se probó y descartó una segunda fuente, ver
+      sección 6). Es lo que puede hacer que el canal de sentimiento no pase la
+      ablación, y por eso el criterio de abandono está fijado de antemano.
+      MATIZ QUE CONVIENE DECIR: la desigualdad medida (9.2x) resultó ser
+      SENSIBLEMENTE MENOR que la estimada antes de correr (16.8x), y el volumen
+      total de eventos casi cuadruplicó el presupuesto previsto. El canal tiene
+      más masa de la que se temía; lo que sigue sin resolverse es el reparto.
+
+  (b) EL MERCADO ANTICIPA LO QUE NINGUNA FUENTE PÚBLICA MUESTRA. Luz del Sur
+      subió 43% antes del hecho de importancia que anunció su venta. Ninguna
+      señal construida sobre información pública captura eso.
+
+  (c) SE CLASIFICA SOBRE TITULARES, SIN EL CUERPO DEL ARTÍCULO. El proveedor de
+      prensa no entrega el texto completo. La anotación humana de referencia se
+      hizo con la misma información, así que la tarea es alcanzable, pero el
+      techo es el titular.
+
+  (d) EL VOLUMEN NEGOCIADO NO ES CONFIABLE a nivel diario para tickers de Lima.
+      Se usó la frecuencia de negociación oficial de los informes bursátiles
+      mensuales de la BVL como sustituto para medir capacidad.
+
+  (e) LA MUESTRA ES CHICA PARA APRENDIZAJE PROFUNDO. ~3,500 días por siete
+      activos. Es el argumento principal para favorecer arquitecturas simples y
+      regularización fuerte, y para desconfiar de cualquier resultado que dependa
+      de una sola corrida.
+
+
+================================================================================
+8. LO QUE ESTÁ ABIERTO — DONDE SU OPINIÓN VALE MÁS
+================================================================================
+Siete decisiones del entorno y el agente NO se han tomado. Están deliberadamente
+abiertas porque son juicios de inversión antes que de programación.
+
+  (1) FUNCIÓN OBJETIVO. ¿Qué maximiza el agente? Opciones consideradas: retorno
+      acumulado simple, Sharpe, Sortino, retorno penalizado por drawdown, o
+      retorno en exceso sobre un benchmark. Cada una produce un comportamiento
+      distinto y ninguna es obviamente correcta.
+
+  (2) COSTOS DE TRANSACCIÓN Y SLIPPAGE. Se observaron spreads de compra-venta
+      entre 8 y 220 puntos básicos de ida y vuelta, según el papel. Cruzar el
+      spread de Luz del Sur una vez cuesta ~110 pbs. Con esos números, la
+      frecuencia de rebalanceo deja de ser un detalle y pasa a ser la decisión
+      central: un agente que rebalancea a diario probablemente no puede ganar.
+
+  (3) CAPACIDAD DEL PORTAFOLIO. Con la liquidez observada, el tamaño realista de
+      cartera está acotado en el orden de S/ 1.8 millones, y el activo que lo
+      limita es BCP. ¿Es un tamaño defendible para el ejercicio?
+
+  (4) QUÉ HACER EN DÍAS SIN NEGOCIACIÓN. ¿Se le impide al agente operar ese
+      activo ese día, o se le permite y se le penaliza el intento?
+
+  (5) TASA LIBRE DE RIESGO Y BENCHMARK. Si la recompensa usa Sharpe o exceso de
+      retorno hace falta una tasa libre de riesgo, y hoy no está en el panel.
+      ¿Cuál usaría: la tasa de referencia del BCRP, un depósito, un bono
+      soberano corto?
+
+  (6) NORMALIZACIÓN DE LAS SEÑALES. Debe ser causal (solo con datos hasta la
+      fecha) y probablemente por activo, dado que los siete tienen escalas muy
+      distintas. Falta fijar la ventana.
+
+  (7) PROTOCOLO DE EVALUACIÓN, a fijar ANTES de entrenar. Baselines previstos:
+      comprar y mantener, equiponderado 1/N, momentum y media-varianza
+      (Markowitz). Métricas: retorno acumulado, Sharpe, Sortino, máximo drawdown,
+      rotación. Múltiples semillas y una medida de significancia, para no
+      concluir sobre una corrida afortunada.
+
+
+================================================================================
+9. PREGUNTAS CONCRETAS PARA LA REUNIÓN
+================================================================================
+Ordenadas por lo que más cambiaría el trabajo si la respuesta es inesperada.
+
+  P1. FRECUENCIA DE REBALANCEO. Con spreads de 8 a 220 pbs, ¿a qué frecuencia
+      tiene sentido rebalancear una cartera de siete nombres de la BVL? ¿Diaria
+      es directamente inviable? ¿Semanal, mensual?
+
+  P2. FUNCIÓN OBJETIVO. ¿Qué optimiza realmente un director de portafolios en un
+      mercado como este? ¿Sharpe, drawdown, tracking error contra un índice?
+      ¿Tiene sentido que un agente maximice Sharpe diario?
+
+  P3. BENCHMARK JUSTO. ¿Los cuatro baselines previstos son los que un profesional
+      exigiría, o falta alguno? ¿Contra qué índice se compara honestamente una
+      cartera de siete acciones peruanas?
+
+  P4. RESTRICCIONES REALISTAS. Se asume solo posiciones largas, sin
+      apalancamiento. ¿Es lo correcto para la BVL? ¿Hay límites de concentración
+      por emisor que un mandato real impondría y que deberíamos replicar?
+
+  P5. SENTIMIENTO DE PRENSA. ¿La prensa local anticipa o registra? ¿Vale la pena
+      el canal, o el flujo de no residentes y el precio del cobre explican
+      prácticamente todo?
+
+  P6. FUNDAMENTALES Y TIEMPO. ¿Un rezago mediano de 10 días en un indicador
+      trimestral cambia una decisión de portafolio, o es irrelevante en la
+      práctica?
+
+  P7. QUIEBRES DE RÉGIMEN. El horizonte 2012-2025 incluye el ciclo de commodities,
+      la crisis política 2016-2023, la pandemia y el gobierno de Castillo. ¿Hay
+      subperíodos que usted excluiría, o que trataría aparte en la evaluación?
+
+  P8. EL UNIVERSO. ¿Siete nombres alcanzan? ¿Agregaría efectivo remunerado o
+      renta fija como activo, para que el agente pueda "salirse" del mercado?
+
+  P9. CAPACIDAD. ¿S/ 1.8 millones es un tamaño con el que un resultado sería
+      creíble, o es tan pequeño que el ejercicio pierde interés práctico?
+
+  P10. LO QUE NO ESTAMOS VIENDO. Con lo descrito acá, ¿qué supuesto le parece más
+      frágil? Es la pregunta más valiosa de la lista.
+
+
+================================================================================
+ANEXO — GLOSARIO DE TÉRMINOS TÉCNICOS USADOS
+================================================================================
+  APRENDIZAJE POR REFUERZO PROFUNDO (DRL). Familia de métodos donde un agente
+    aprende una política —una regla que mapea estado a acción— maximizando una
+    recompensa acumulada, sin que se le den ejemplos de la acción correcta.
+
+  ABLACIÓN. Entrenar el mismo modelo quitando un bloque de información por vez,
+    para atribuir el desempeño a un canal concreto en vez de al conjunto.
+
+  POINT-IN-TIME. Disciplina de reconstruir, para cada fecha, solo la información
+    que era pública en esa fecha.
+
+  SESGO DE ANTICIPACIÓN (LOOK-AHEAD). Usar en una decisión histórica información
+    que en ese momento no existía. Infla el backtest y lo invalida.
+
+  VIDA MEDIA (de un decaimiento exponencial). Número de días tras el cual el peso
+    de un evento pasado se reduce a la mitad.
+
+  FUERA DE MUESTRA. Evaluado sobre datos que no se usaron para ajustar el modelo.
+
+  PARTICIÓN WALK-FORWARD. División temporal en entrenamiento, validación y
+    prueba, respetando el orden cronológico y sin barajar.
+
+================================================================================
+FIN
+================================================================================

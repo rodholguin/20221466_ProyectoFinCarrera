@@ -1,0 +1,312 @@
+########################################################################
+#  SUPERSEDIDO EL 2026-08-31 — YA NO HAY NADA ABIERTO AQUI.            #
+#                                                                      #
+#  Todo lo que este archivo tenia pendiente esta decidido y registrado:#
+#    D16 (rol de M&A)      -> descartada. decisiones_pendientes_OE1 D16#
+#    Perimetro de BCP      -> D17, y la bandera de titular con el.     #
+#    Materialidad (140)    -> D18 + docs/materialidad_hechos_R5.txt    #
+#    Problema del eco      -> D19 (abierta, diferida a R8)             #
+#                                                                      #
+#  El handoff vigente es docs/PENDIENTES_R5.txt.                       #
+#  Este archivo se conserva solo por trazabilidad de la deliberacion.  #
+#  SE PUEDE BORRAR.                                                    #
+########################################################################
+
+ARCHIVO TEMPORAL — LEER PRIMERO AL RETOMAR. BORRAR DESPUÉS DE DECIDIR.
+Creado: 2026-08-29. Ampliado: 2026-08-30.
+NO es documentación del proyecto: lo que ya quedó cerrado está en
+docs/decisiones_pendientes_OE1.txt y docs/hallazgos_saltos_y_fuentes_R5.txt.
+========================================================================
+
+DÓNDE RETOMAR — LO PRIMERO
+------------------------------------------------------------------------
+  [ ] TRABAJO DEL AUTOR, ~40 min, y es lo que destraba todo:
+      data/interim/validacion_humana/muestra_hechos_materialidad.xlsx
+      140 filas, orden aleatorio (se puede parar en cualquier momento).
+      Llenar `categoria` y —solo si no es Z— `polaridad`.
+      Después:  python scripts/evalua_materialidad_hechos.py
+
+  [X] D16 (polaridad de M&A por `rol`) — CERRADA el 2026-08-30, medida y
+      descartada en su forma automática. Evidencia completa en D16 de
+      docs/decisiones_pendientes_OE1.txt §MEDICIÓN. En una línea: la REGLA
+      vale (rol a mano da 62% de acierto de dirección contra 31% del pipeline
+      actual), pero gemma3:12b no extrae el rol — con dos formulaciones del
+      prompt detecta 1/3 y 0/3 de los `objetivo`, y manda Pacasmayo (+61%,
+      z=22) a `neutral`. El prompt de producción SIGUE EN v2.1.
+      Quedan dos caminos, ninguno bloqueante: (1) asignar el rol a mano sobre
+      ~130 artículos (~1 h), (2) piloto Gemini (10 min, falta API key).
+
+  [X] Perímetro de BCP — CERRADO el 2026-08-30 como D17. El activo es el
+      BANCO y la ventana de noticias es el GRUPO: la query NO cambia (quitar
+      `Credicorp` perdería el Helm Bank y la sanción de Indecopi; son 505
+      titulares, 5% del corpus, no el 51.4% que se le atribuía).
+      LO QUE APARECIÓ EN SU LUGAR, y es más grande: MediaCloud matchea sobre
+      el CUERPO, así que SOLO EL 16.2% DEL CORPUS —de los 7 activos, no de
+      BCP— nombra a la empresa en el titular. Ese estrato tiene 63.8% de
+      relevancia contra 2.1%, y el 83% de la polaridad espuria del canal sale
+      del estrato anónimo. DECISIÓN: se MARCA con una bandera determinista
+      `titular_nombra_empresa`, NO se filtra; el LLM corre sobre todo y la
+      restricción se decide en R6 como brazo de ablación de R8.
+      Diccionario de nombres+marcas por activo: D17 §DICCIONARIO.
+
+  >> YA NO QUEDA NINGÚN PENDIENTE DE DECISIÓN. Lo único abierto es la
+     ANOTACIÓN DE LOS 140 HECHOS, y después de eso todo es implementación.
+
+  [!] CORRECCIÓN QUE SALIÓ DEL PILOTO DE D16 y afecta a lo escrito de D15:
+      el 57.9% de masa `neutral` está medido sobre la ANOTACIÓN HUMANA (que
+      aplica la convención "M&A siempre neutral"), no sobre la salida del
+      pipeline, que sí da polaridad libre al GRUPO A. Contra la salida real
+      del modelo la masa `neutral` es 23.3%. D15 NO se reabre —el argumento
+      del asesor es independiente del tamaño— pero al escribir la tesis hay
+      que citar 23.3%, no 57.9%. Registrado en D15 §CORRECCIÓN DE LA PREMISA.
+
+CIERRE DE LA SESIÓN DEL 2026-08-29/30
+------------------------------------------------------------------------
+  DECIDIDO:
+    D14 (eje `alcance`)  MEDIDA Y DESCARTADA — no engorda el canal (masa 0.98x)
+                         y empeora la heterogeneidad de 16.5x a 30.0x.
+    D15 (codificación)   DECIDIDA, del feedback del asesor — 9 columnas
+                         categóricas, la magnitud deja de ser multiplicador,
+                         `neutral` entra (57.9% de la masa).
+    D12                  ABSORBIDA por D15.   D11 ENMENDADA por D15.
+    Universo             CONSISTENTE, verificado (H6): el ADR de Pacasmayo está
+                         muerto (US$47 mil/día) y el 82% se negocia en Lima.
+  ABIERTO:
+    Materialidad         la anotación de los 140 hechos.
+    Perímetro de BCP     sin decidir.
+  CERRADO DESPUÉS (2026-08-30):
+    D16                  MEDIDA Y DESCARTADA en su forma automática. La regla
+                         vale (oráculo 62% vs 31%), la extracción no.
+    Premisa de D15       corregida: masa `neutral` real 23.3%, no 57.9%.
+                         La decisión no cambia; cambia su tamaño.
+  HALLAZGOS NUEVOS:      docs/hallazgos_saltos_y_fuentes_R5.txt (H1 a H6).
+                         H1 es material para la tesis por sí solo.
+
+  SCRIPTS NUEVOS DE LA SESIÓN (todos reproducibles):
+    scripts/mide_impacto_d14.py            evidencia que descarta D14
+    scripts/muestra_materialidad_hechos.py arma la muestra de 140
+    scripts/evalua_materialidad_hechos.py  criterio de decisión PRE-REGISTRADO
+    scripts/valida_polaridad_ma.py         los 13 M&A contra el precio (D16)
+    scripts/diag_saltos_vs_fuentes.py      qué explica los saltos
+    scripts/diag_saltos_sin_fuente.py      los saltos sin fuente atribuible
+
+  NADA SE COMMITEÓ. Sigue todo sin versionar, como estaba.
+
+  CRITERIO DE DECISIÓN DE LA MATERIALIDAD, PRE-REGISTRADO ANTES DE VER LOS
+  DATOS (docstring de scripts/evalua_materialidad_hechos.py). Se ADOPTA la
+  fuente solo si se cumplen las tres:
+    (1) la razón max/min de eventos/año entre los 7 activos baja de 16.8x a
+        MENOS DE 6x;
+    (2) FERREYC1 y CPACASC1 AL MENOS TRIPLICAN sus eventos/año;
+    (3) el filtro de rutina no descarta ningún material.
+
+  DOS CORRECCIONES DE DISEÑO REGISTRADAS EN ESTA SESIÓN:
+    - NO es "prensa para los activos con cobertura y hechos para los que no".
+      Es AMBAS FUENTES PARA LOS 7. Partir la fuente por activo haría que el
+      canal significara cosas distintas según el ticker con una red de pesos
+      COMPARTIDOS, y rompería la ablación de R8. Lo cierto —y es por qué la
+      unión funciona— es que cada fuente es fuerte donde la otra es débil.
+    - NO se re-fechan las noticias al momento "real" del evento (H3, planteado
+      por el autor). Si salió tarde, salió tarde: moverla es LOOK-AHEAD. El
+      hecho es otra observación con su propia fecha; ambas conviven.
+
+
+ESTADO AL CIERRE DE LA SESIÓN (2026-08-29)
+------------------------------------------------------------------------
+  HECHO: D14 (eje `alcance`) MEDIDA Y DESCARTADA. Evidencia completa en D14 de
+         docs/decisiones_pendientes_OE1.txt §MEDICIÓN. Reproducible con
+         `python scripts/mide_impacto_d14.py`. Clasificaciones auditables en
+         data/interim/validacion_humana/clasif_alcance_*.csv
+         En una línea: al factor 0.3 NO aumenta la masa de magnitud (0.98x)
+         porque lo que entra se cancela con lo que el propio eje degrada, y la
+         heterogeneidad entre activos empeora de 16.5x a 30.0x.
+  HECHO: la regla (iii) de la fila 68 ("que el titular NOMBRE a la empresa") se
+         retira del texto de anotación. Las filas 247 y 320 se quedan en
+         C_analisis_opinion con magnitud 0.3 (decisión del autor).
+  HECHO: D15 registrada y DECIDIDA — codificación categórica, 9 columnas
+         (pos/neutral/neg x 3 escalas), la magnitud deja de ser multiplicador.
+         Viene del feedback del asesor. D11 marcada como enmendada.
+  HECHO: D12 ABSORBIDA por D15.
+  PENDIENTE: la decisión de arriba, sobre la evaluación integral que sigue.
+
+
+########################################################################
+#  EVALUACIÓN INTEGRAL DE R5 — SALIDA VERBATIM DE LA SESIÓN            #
+########################################################################
+
+
+1. EL ESTADO REAL DEL CANAL, EN UN NÚMERO
+========================================================================
+Reconstruí el embudo completo con los números medidos:
+
+  19,349 artículos recolectados (7 activos, 2012-2025)
+     ↓  prefiltro regex  −19.8%
+  15,518 llamadas al LLM
+     ↓  relevancia 7.2%
+   1,387 eventos
+     ↓  59% son `neutral` y D11(iii) los descarta
+    ~564 eventos llegan a las 6 columnas
+
+EL 2.9% DEL CORPUS LLEGA A LAS FEATURES. Son 5.8 eventos con signo por
+activo-año — y para Ferreycorp, 0.9 POR AÑO. Ese es el canal que se iba a
+entrenar.
+
+D15 sube eso a 1,387 (14.2/activo-año) sin tocar el LLM. Pero Ferreycorp queda
+en 2.4/año. EL PROBLEMA DE FONDO NO ES LA CODIFICACIÓN: ES QUE LA PRENSA
+PERUANA NO CUBRE A MEDIA CARTERA.
+
+
+2. EL HALLAZGO: LOS HECHOS DE IMPORTANCIA DE LA BVL
+========================================================================
+Buscando alternativas encontré que EL REPO YA DESCARGA Y CACHEA el feed oficial
+de Hechos de Importancia (POST /v1/corporate-actions, en fundamentals_client.py)
+— pero solo lee de él la fecha de presentación de los EEFF. Todo lo demás se
+tira.
+
+Traje los cuatro emisores que faltaban (Minsur, Pacasmayo, Ferreycorp, Luz del
+Sur; la descarga es gratis y ya está cacheada). 5,493 HECHOS para los 7 activos,
+2012-2025. Filtrando rutina de calendario por código oficial y por texto (46.4%
+es rutina: EEFF mensuales, convocatorias, posiciones en derivados):
+
+  activo      prensa  hechos    suma      x
+  INRETC1       38.6     8.6    47.2    1.2
+  CREDITC1      18.1    13.6    31.7    1.8
+  LUSURC1       15.6    17.9    33.5    2.1
+  MINSURI1      13.8     6.9    20.7    1.5
+  ALICORC1       6.8    23.1    29.9    4.4
+  CPACASC1       3.9    26.8    30.7    7.9
+  FERREYC1       2.3    13.8    16.1    7.0
+
+  razón max/min:  prensa 16.8x -> hechos 3.9x -> prensa+hechos 2.9x
+  total/año:      prensa 99.1  ·  hechos 110.6  ·  suma 209.7
+
+Tres cosas que hacen que esto importe más que todo lo demás:
+
+(a) ARREGLA LA HETEROGENEIDAD, QUE ES EL RIESGO DECLARADO DE D11. De 16.8x a
+    2.9x. Y no por casualidad: la prensa cubre a quien le da la gana, pero TODO
+    EMISOR LISTADO ESTÁ LEGALMENTE OBLIGADO A DIVULGAR. La cobertura es uniforme
+    por construcción.
+    COROLARIO DE SIMPLICIDAD: D11 tiene el *embedding por activo* como último
+    recurso ("riesgo real: memoriza identidad del activo y sobreajusta"). Con la
+    dispersión en 2.9x, ESE ÚLTIMO RECURSO DEJA DE HACER FALTA. Esto simplifica
+    la arquitectura, no la complica.
+
+(b) LA GANANCIA VA JUSTO DONDE FALTA. Pacasmayo 7.9x, Ferreycorp 7.0x, Alicorp
+    4.4x — los tres famélicos. InRetail casi no gana (1.2x) porque ahí la prensa
+    ya funciona. Son fuentes COMPLEMENTARIAS, no sustitutas.
+
+(c) ES 5x MÁS BARATO POR EVENTO. La prensa cuesta 15,518 llamadas de LLM para
+    1,387 eventos (11 llamadas/evento). Los hechos son 1,549 candidatos tras el
+    filtro de rutina — que además es un filtro determinista, sin LLM.
+
+Y TRAE VENTAJAS QUE LA PRENSA NO PUEDE DAR: `registerDate` es el timestamp
+exacto de divulgación (point-in-time perfecto, y el manejo correcto con corte
+horario YA ESTÁ IMPLEMENTADO Y VALIDADO en fundamentals_client); trae un CÓDIGO
+OFICIAL DE TIPO DE EVENTO asignado por el emisor, no por un LLM; y no tiene el
+problema de perímetro de query.
+
+LAS LIMITACIONES, Y SON REALES:
+  - 34% son `L37 — Otros Hechos de Importancia`. El código oficial no alcanza;
+    hay que leer el campo `observation`. El LLM no desaparece, cambia de trabajo.
+  - NO TRAE POLARIDAD. El código dice qué, nunca si es bueno o malo.
+  - Aun tras filtrar rutina, queda mucha plomería financiera: actualizaciones de
+    prospectos de bonos, tenedores de ADRs, actas de sesión de directorio. La
+    estimación de 1,549 es GENEROSA; la tasa de materialidad real dentro de ellos
+    hay que medirla. <- ESTO ES LO QUE SE ESTÁ MIDIENDO AHORA.
+    AJUSTE 2026-08-29: al inspeccionar los candidatos aparecieron reportes
+    PERIÓDICOS que el filtro no atrapaba (tenedores mensuales de ADRs,
+    transacciones trimestrales con ADRs, reporte de buen gobierno). Se
+    agregaron al filtro y los candidatos bajaron de 1,549 a 1,321. Además
+    2,007 hechos tienen `observation` vacía o casi: NO son anotables por
+    texto y quedan fuera del muestreo, declarados como límite.
+  - SOLAPA CON R4 Y R3: los EEFF (E05) ya son el known_date de fundamentales, y
+    los dividendos (L14) ya están en el panel desde R3. Alimentarlos otra vez
+    como sentimiento sería DOBLE CONTEO. Hay que declararlo y excluirlos.
+  - COSTO DE COLUMNAS: CERO si entran por el mismo encoding de D15 (es otra
+    fuente de eventos con tipo y fecha); +9 solo si se quieren separar para la
+    ablación de R8, que es lo que yo haría.
+
+
+3. LAS DEMÁS OPORTUNIDADES, ORDENADAS POR RELACIÓN VALOR/COSTO
+========================================================================
+  #1 HECHOS DE IMPORTANCIA (arriba)
+     costo: 1-2 días, sin LLM caro
+     compra: heterogeneidad 16.8x->2.9x; +112% eventos
+
+  #2 PERÍMETRO DE BCP
+     costo: 1 h
+     compra: `Credicorp` en la query hace que CREDITC1 sea el 51.4% DEL CORPUS
+     con 2.5% de relevancia. Decidir si el activo es el banco o el holding
+     libera ~la mitad del presupuesto de LLM y sube la precisión.
+
+  #3 PILOTO FRONTIER (GEMINI)
+     costo: código listo, falta API key
+     compra: el bloqueante #1 YA SE RESOLVIÓ (hay 550 anotaciones humanas), así
+     que ahora sí se puede medir si un modelo frontier rompe el anidamiento.
+     Antes no era medible.
+
+  #4 TRUNCAMIENTO DE TITULARES
+     costo: 30 min
+     compra: 1.26% de titulares cortados a 70 caracteres — y golpea justo a los
+     de sección (`Negocios:`, `Mercados:`), que son los financieros. Regex
+     trivial, pero hay que medir si el sesgo es material.
+
+  #5 ESPACIO DE ETIQUETAS 15 -> MENOS
+     costo: 2-3 h de GPU
+     compra: hipótesis testeable — 6 categorías Z son conductualmente idénticas
+     (todas magnitud 0) y consumen la mitad del espacio de decisión de un modelo
+     chico. NO HACERLO A CIEGAS: nombrar los bins fue justamente lo que arregló
+     el "basurero" (+18pp de precisión). Es un experimento barato, no un cambio.
+
+
+4. LO QUE NO HARÍA — PARA PROTEGER LA SIMPLICIDAD
+========================================================================
+  - No pasar de 9 columnas (18 solo como brazo de ablación).
+  - No al embedding por activo. Con los Hechos deja de justificarse.
+  - No al ensemble. Ya está medido y cerrado: los 5 modelos están ANIDADOS
+    (unión = el más inclusivo, intersección = el más excluyente). No aportan
+    información distinta.
+  - No volver sobre D14.
+  - No pedirle nada más al LLM. Ni magnitud, ni `alcance`, ni confianza. Cada vez
+    que se le pidió una autoevaluación, se midió que era ruido.
+
+
+5. DOS TRAMPAS ENCONTRADAS DE PASO
+========================================================================
+  (1) docs/PENDIENTES_R5.txt ESTÁ DESACTUALIZADO Y CONTRADICE EL ESTADO ACTUAL.
+      Dice que "qwen2.5:32b lidera el criterio principal" — pero la anotación
+      humana de agosto INVIRTIÓ EL RANKING y ahora gana gemma3:12b. Ese doc es el
+      handoff que se lee primero al retomar. Hay que corregirlo o va a inducir
+      el error. (Se le agregó un aviso al inicio el 2026-08-29.)
+
+  (2) BUG LATENTE YA ANOTADO Y SIN ARREGLAR: `_align_sentiment_to_calendar`
+      PROMEDIA por n_articles al hacer roll-forward; las columnas de conteo de
+      eventos deben SUMARSE, no promediarse. Si se implementa D15 sin tocar eso,
+      las 9 columnas salen mal EN SILENCIO.
+
+
+6. ORDEN QUE PROPONGO
+========================================================================
+  1. Medir la tasa de materialidad real dentro de los 1,549 hechos candidatos
+     (misma anotación a ciegas, ~100 filas, ~40 min del autor). ES LA QUE DECIDE
+     SI #1 VA. No comprometer un día de trabajo sin ese número — es exactamente
+     el error que casi se cometió con D14.
+  2. Decidir el perímetro de BCP (#2).
+  3. Implementar D15 + el fix del roll-forward.
+  4. Piloto Gemini (#3) mientras corre lo demás.
+
+
+========================================================================
+CÓMO REPRODUCIR LOS NÚMEROS DE ESTE DOCUMENTO
+========================================================================
+  D14 y el §5 de polaridad:  python scripts/mide_impacto_d14.py
+  Hechos de Importancia:     el fetch está cacheado en data/raw/smv_cache/
+                             bvl_hechos_{rpj}_2012_2025.json para los 7 activos.
+                             RPJ en config.yaml (campo smv_rpj). La función es
+                             src/fundamentals/fundamentals_client._bvl_fetch_hechos
+  Embudo (19,349 / 7.2% / 59% neutral): las 550 anotaciones + clave_muestra_r5.csv
+                             (bloque B reponderado, estimador de Hájek).
+
+========================================================================
+FIN — BORRAR ESTE ARCHIVO DESPUÉS DE DECIDIR
+========================================================================

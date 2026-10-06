@@ -14,35 +14,228 @@ R6 entrega datos limpios/crudos, causales y alineados; OE1 les DA FORMA
 Las 4 "vistas" (feature_views: solo_mercado / +sentimiento / +fundamentales /
 completa) son el ablation study de R8.
 
-Este documento SOLO registra las decisiones abiertas y sus opciones. No fija
-ninguna todavía. Marcar la elección y su justificación a medida que se resuelvan.
+Este documento registra las decisiones, sus opciones y la evidencia con que se
+resolvieron. CONVENCIÓN DEL REGISTRO: nada se borra. Una decisión que cambia se
+marca ENMENDADA o SUPERSEDIDA y se conserva el texto original debajo, porque el
+razonamiento descartado es parte de la trazabilidad de la tesis. Lo mismo con
+los riesgos (ver docs/riesgos_transversales_datos.txt).
 
 ========================================================================
-DECISIONES ABIERTAS (en orden sugerido de resolución)
+ÍNDICE — ESTADO AL 2026-09-12
+------------------------------------------------------------------------
+Se agrega para poder ver el estado de un vistazo: el documento pasó de ser una
+lista de pendientes a un registro de ~1,400 líneas, y el detalle de cada entrada
+ya no cabe en la cabeza.
+========================================================================
+  #    tema                                    estado
+  ---  --------------------------------------  --------------------------------
+  D1   alcance del agente                      CERRADA — portafolio
+  D2   espacio de acción                       CERRADA — ENMENDADA: acción relativa
+  D3   algoritmo                               CERRADA — PPO primario
+  D4   función de recompensa                   REABIERTA 09-19 — el tamiz reprueba a las 3
+  D5   observación: ventana y recurrencia      CERRADA — ventana apilada, sin RNN
+  D6   normalización causal                    CERRADA — expanding por activo
+  D7   costos de transacción y slippage        CERRADA en forma — falta tarifario
+  D8   manejo de is_no_trade                   CERRADA — máscara dura
+  D9   tasa libre de riesgo / benchmark        CERRADA — tasa BCRP / 365
+  D10  protocolo de evaluación                 CERRADA en forma — falta el split
+  D11  representación del canal de sentimiento CERRADA — ENMENDADA por D15
+  D12  magnitud fija vs aprendida               CERRADA — ABSORBIDA por D15
+  D13  momento de ejecución                    CERRADA — t+1
+  D14  eje `alcance` en la taxonomía           CERRADA — medida y DESCARTADA
+  D15  codificación del canal (categorías)     CERRADA — 9 columnas · IMPLEMENTADA
+  D16  polaridad de M&A por campo `rol`        CERRADA — medida y DESCARTADA
+  D17  perímetro BCP + bandera de titular      CERRADA — se marca, no se filtra
+  D18  Hechos de Importancia como 2da fuente   CERRADA — medidos, NO adoptados
+  D19  eje de novedad / etapa del evento       ABIERTA — diferida a la ablación R8
+  D20  fecha de conocimiento de fundamentales  CERRADA — lag por activo + bandera
+  D21  MVP piloto sin tocar el tramo de prueba CERRADA — 2026-09-03
+  D22  escala de exploración de PPO           CERRADA — log_std=-2, por rotación
+  D23  esquema de ventana (expanding/rolling)  ABIERTA — medida, falta pre-registrar
+  D24  condición inicial del episodio          ABIERTA — hoy arranca 100% en caja
+  D25  presupuesto de pasos de entrenamiento   MEDIDA — entrenar MAS EMPEORA fuera de muestra
+  D26  parámetros del baseline Markowitz       ABIERTA — implementado, falta pre-registrar
+  D27  escala de la sorpresa fundamental       CERRADA — winsorizada, enmienda D6
+  D28  estado de las corridas por vista        AUDITADA — integradas SI, corridas NO
+  D29  tamiz de recompensas sin entrenar       NUEVA 09-19 — criterio pre-registrado, 0 del contador
+  D30  sorpresas macro del calendario ECO      NUEVA 09-19 — 935 eventos disponibles, NO adoptados
+
+  >> EVENTO DE DATOS DEL 2026-09-12, y condiciona la lectura de TODO lo de
+     arriba: se descubrió que el endpoint share-values de la BVL etiquetaba
+     cada cierre con el SIGUIENTE día de negociación. El panel iba un día
+     rancio. Corregido, regenerado y revalidado contra Bloomberg (7/7). Ver la
+     sección EVENTO DE DATOS más abajo y docs/hallazgos_desfase_fecha_bvl.txt.
+     NINGUNA decisión se reabre por esto —las cualitativas sobrevivieron
+     todas— pero las CIFRAS de D21 y D22 se rehicieron.
+
+  LO QUE BLOQUEA HOY (actualizado 2026-09-12): NADA bloquea CONSTRUIR el
+  entorno, y desde hoy tampoco bloquea R8 (la mezcla de macro en las vistas
+  quedó resuelta). Lo que queda abierto son PARÁMETROS (cifras del tarifario),
+  la SERIE HISTÓRICA DE PUNTAS —ya bajada de Bloomberg, falta engancharla al
+  CostModel— y tres decisiones nuevas (D23, D24, D25) que hay que
+  PRE-REGISTRAR antes de la corrida definitiva, no resolver mirando
+  validación. Ver D21 y el ACTA del 2026-09-02.
+
+  DÓNDE VIVE LA EVIDENCIA de las que se midieron:
+    D14, D16  scripts/mide_impacto_d14.py · scripts/piloto_rol_d16.py
+    D15, D17  scripts/test_d15_d17.py · src/sentiment/emisores.py
+    D18       docs/materialidad_hechos_R5.txt · scripts/evalua_materialidad_hechos.py
+    D20       src/fundamentals/fundamentals_client.py `_calibra_lag`
+              docs/riesgos_transversales_datos.txt §3(a)
+    D21-D25   docs/resultados_entorno_OE1.txt · notebooks/OE1_entorno_y_agente.ipynb
+              scripts/genera_artefactos_oe1.py (artefactos y registro)
+    evento    docs/hallazgos_desfase_fecha_bvl.txt · tests/test_desfase_fecha_bvl.py
+
+  INCONSISTENCIAS CON EL DOCUMENTO DE TESIS (E3): barrido completo del PDF el
+  2026-09-03 en **docs/inconsistencias_documento_vs_implementacion.txt**. Nueve
+  entradas: 5 se corrigen en el documento (FinRL, gemma3:4b, "scores" de
+  sentimiento, "API de LLM", intervalos de confianza), 2 son decisiones
+  pendientes (algoritmos PPO/DDPG/SAC contra D3; configuraciones de señales) y 2
+  son faltantes de código (baseline Markowitz; Sortino y retorno anualizado).
+  >> RESUELTO EL 2026-09-12 (era el BLOQUEANTE PARA R8): las vistas mezclaban
+  macro con sentimiento y con fundamentales, así que la ablación habría sido
+  INATRIBUIBLE. Corregido en src/env/features.py — cada brazo de la ablación
+  agrega UN SOLO canal sobre la misma base, y las vistas combinadas quedan
+  aparte para medir interacción. Ver la sección TRABAJO DEL 2026-09-12.
+
+  TRES DECISIONES QUE ESTABAN TOMADAS Y NO IMPLEMENTADAS, corregidas el
+  2026-09-01: el lag de InRetail, `macro_oro` y el `llm_model` del config.
+  Se registró como riesgo transversal PROPIO (riesgos §Tier 1 punto 0), porque
+  el patrón es reutilizable y ninguna prueba lo atrapa.
+
+========================================================================
+DECISIONES (en orden de resolución sugerido)
 ========================================================================
 
-[ ] D1. ALCANCE DEL AGENTE — la decisión raíz (define casi todo lo demás)
-    Opción A: Agente de PORTAFOLIO. Asigna pesos sobre los 5 activos + caja
-              (∑=1). Coherente con "1 empresa por sector para evaluar
-              diversificación". Es el ángulo natural de la tesis.
-    Opción B: Agente MONO-ACTIVO (uno por activo, o un solo activo). Más simple,
-              más data-eficiente por modelo, pero pierde el eje de diversificación.
-    Impacto: condiciona espacio de acción (D2), algoritmo (D3) y reward (D4).
+[X] D1. ALCANCE DEL AGENTE — DECIDIDA (2026-08-17): **AGENTE DE PORTAFOLIO** (A).
+    Opción A [ELEGIDA]: Agente de PORTAFOLIO. Asigna pesos sobre los 7 activos +
+              caja (∑=1). Es el EJE CENTRAL de la tesis (evaluar diversificación);
+              esa es la razón de la elección, por encima de la conveniencia
+              estadística.
+    Opción B [descartada]: Agente MONO-ACTIVO (uno por activo, o un solo activo).
+              Más simple y más data-eficiente por modelo, pero pierde el eje de
+              diversificación, que es justamente lo que la tesis quiere medir.
+    Impacto: condiciona espacio de acción (D2 -> vector de pesos CONTINUO),
+    algoritmo (D3 -> familia de acción continua: PPO / SAC / TD3) y reward (D4).
+    CONSECUENCIA HEREDADA (ver D11): la red es UNA SOLA y comparte pesos entre los
+    7 activos, que son muy heterogéneos en cobertura de prensa (BCP 577 eventos de
+    entrenamiento vs Minsur ~74 estimados). Sin tratamiento explícito, el agente
+    aplicaría el mismo decaimiento de noticias a un banco muy cubierto y a una
+    minera de la que casi no se habla. Mitigación decidida en D11 (normalización
+    causal POR ACTIVO + feature de régimen de cobertura).
 
-[ ] D2. ESPACIO DE ACCIÓN — depende de D1
+[X] D2. ESPACIO DE ACCIÓN — CERRADA (2026-09-03); **ENMENDADA EL MISMO DÍA**.
+    >> ENMIENDA (2026-09-03, decidida por el autor tras el piloto de D21): la
+       acción pasa a ser un **AJUSTE SOBRE LOS PESOS ACTUALES**, no un objetivo
+       absoluto. El destino sigue siendo un punto del símplex; cambia cómo se
+       expresa.
+           antes:  a  ->  w_objetivo = softmax(a)
+           ahora:  a  ->  w_objetivo = normaliza( max(w_actual + s·tanh(a), 0) )
+       con `s = action_scale` (0.05 por defecto: 5 pp de desplazamiento máximo
+       por activo y por paso, que es una restricción de mandato y no un botón
+       de desempeño).
+       POR QUÉ, y la razón es una medición, no una preferencia: con la acción
+       absoluta, QUEDARSE QUIETO exigía que la red reprodujera exactamente su
+       salida anterior. Eso es un accidente, no un estado alcanzable. Con costos
+       de 111 a 323 pbs, el estado más valioso del espacio era justamente el que
+       la parametrización volvía inalcanzable, y el agente terminó pagando 4.6
+       veces más peaje que el 1/N para llegar al mismo retorno bruto (ver D22).
+       Con la enmienda, **a = 0 devuelve w_actual al bit** y "no operar" es
+       barato. Queda además alineado con la banda de D7 y con la predicción
+       pre-registrada del especialista sobre baja rotación.
+       El modo `logits` original se CONSERVA en el código como brazo de
+       comparación; no se borra.
+       Contrato fijado en `tests/test_portfolio_env.py`
+       (`test_delta_accion_cero_no_opera_nunca`: con a=0 la rotación es cero, el
+       costo es cero y el patrimonio es exactamente la caja capitalizada).
+       ARTEFACTO DECLARADO: el episodio arranca 100% en caja, así que con 5 pp
+       por paso el agente tarda ~20 sesiones en invertirse, mientras el 1/N está
+       invertido desde el día 1. Sobre 252 días de validación es ~8% del
+       episodio con la posición en construcción. Se declara; si resulta
+       material, la alternativa es arrancar en 1/N, que mete un supuesto.
+
+    TEXTO ORIGINAL DE LA DECISIÓN (se conserva): SÍMPLEX CONTINUO DE 8.
+    Vector continuo de 8 dimensiones (los 7 activos + caja) sobre el símplex,
+    producido por softmax sobre logits, de modo que ∑w=1 y w≥0 por construcción
+    (long-only sin apalancamiento, sin necesidad de penalización).
+    INTERACCIÓN CON D8 (hay que escribirla bien o la suma deja de dar 1): el
+    activo enmascarado CONSERVA su peso anterior —que igual deriva con el
+    precio— y el agente reparte únicamente el presupuesto remanente. La
+    renormalización es sobre el remanente, no sobre el total.
+    Se descarta el espacio discreto {vender, mantener, comprar}: pierde la
+    noción de asignación, que es el eje de D1.
+    DELIBERACIÓN ORIGINAL (se conserva):
     - Continuo: vector de pesos (portafolio) o fracción invertida (mono-activo).
     - Discreto: {vender, mantener, comprar} por activo.
     Trade-off: continuo modela asignación real pero es más difícil de entrenar;
     discreto es más estable pero grosero.
 
-[ ] D3. ALGORITMO — depende de D2
+[X] D3. ALGORITMO — CERRADA (2026-09-03): PPO PRIMARIO, SAC COMO ROBUSTEZ.
+    PPO es on-policy y bastante menos propenso a explotar errores del entorno
+    que un off-policy con replay: con un simulador escrito a mano, esa
+    diferencia importa más que la eficiencia de muestra. Y con ~3,500 pasos por
+    episodio, la ventaja de muestra de SAC no compensa su fragilidad bajo no
+    estacionariedad.
+    SAC entra como UNA verificación de robustez, no como brazo de la grilla:
+    cada brazo adicional castiga el Sharpe deflactado (ver D10).
+    DELIBERACIÓN ORIGINAL (se conserva):
     - Acción continua: PPO, SAC, DDPG/TD3.
     - Acción discreta: DQN (y variantes).
     Considerar: PPO como baseline robusto; SAC si se busca eficiencia de muestra
     (relevante por el poco dato). Política recurrente (LSTM/GRU) si se trata el
     problema como POMDP en vez de apilar ventana (ver D5).
 
-[ ] D4. FUNCIÓN DE RECOMPENSA — núcleo del diseño
+[X] D4. FUNCIÓN DE RECOMPENSA — CERRADA (2026-09-03): SHARPE DIFERENCIAL (DSR).
+    >> HISTORIA DE LA DECISIÓN, en dos pasos, y se conservan los dos:
+       (a) 2026-09-02, propuesta llevada a la reunión: PRIMARIA = retorno log
+           neto MENOS λ·semidesviación incremental (DDR, forma aditiva).
+       (b) 2026-09-03, ENMENDADA tras la reunión: PRIMARIA = DSR, y la DDR baja
+           a brazo de sensibilidad. El texto de (a) vive en
+           docs/propuesta_funcion_riesgo_OE1.txt §3 y en las láminas 18-19 del
+           PPT; no se borra.
+
+    FORMA ADOPTADA — DSR de Moody-Saffell. Con R_t = retorno NETO DE COSTOS del
+    portafolio y η la tasa de adaptación:
+        A_t = A_{t-1} + η·(R_t − A_{t-1})            media exponencial
+        B_t = B_{t-1} + η·(R_t² − B_{t-1})           segundo momento exponencial
+        r_t = [ B_{t-1}·(R_t − A_{t-1}) − ½·A_{t-1}·(R_t² − B_{t-1}) ]
+              / (B_{t-1} − A_{t-1}²)^(3/2)
+
+    LOS TRES BRAZOS (y no más; cada uno castiga el Sharpe deflactado):
+      PRIMARIA  DSR (varianza completa, SIN λ).
+      V1        DDR (misma mecánica, semivarianza). Era la primaria.
+      V0        log-retorno neto puro. Control: sin él no se puede afirmar que
+                el ajuste por riesgo aportó algo.
+
+    POR QUÉ SE ENMENDÓ. El especialista sostuvo que Sharpe es lo que se usa y
+    que el Sortino es de fondos apalancados. EL ARGUMENTO LITERAL ES
+    INCORRECTO —el Sortino es solo desviación a la baja, no tiene relación con
+    apalancamiento—, pero la conclusión se adopta por tres razones mejores:
+      1. Es el estándar de la literatura y de la práctica local; el jurado lo
+         va a pedir y la evaluación va a reportar Sharpe de todos modos.
+      2. Con cartera long-only y sin apalancamiento, Sharpe y Sortino ordenan
+         casi igual: el argumento original ("no castigar los saltos del cobre")
+         era más débil de lo que sonaba.
+      3. GANANCIA REAL: el DSR ELIMINA λ. El ajuste por riesgo está dentro de
+         la forma funcional, no como término ponderado. Toda la calibración de
+         λ por escala (25% de la magnitud media del 1/N) deja de ser necesaria
+         en el brazo primario y sobrevive solo en V1. Un grado de libertad
+         menos que defender.
+    COSTO HONESTO DEL CAMBIO: no desaparece un parámetro, se cambia por η. Pero
+    η es una vida media interpretable que se pre-registra por razonamiento
+    económico, no se ajusta contra resultados.
+
+    LO QUE NO CAMBIA:
+      - R_t es NETO de costos, así que D7 queda intacta.
+      - A_t y B_t DEBEN entrar en el vector de observación. Cualquier término
+        que dependa de la historia rompe Markov; los estadísticos exponenciales
+        son el estado suficiente que lo repara. Es la razón de fondo para
+        preferir la forma diferencial a "calcular el Sharpe al final del
+        episodio", y lo que descarta el drawdown máximo como recompensa
+        (path-dependent, se activa poquísimas veces en 14 años).
+      - NO se agrega penalizador de rotación además del costo: sería cobrar dos
+        veces por lo mismo (ver D7).
+    DELIBERACIÓN ORIGINAL (se conserva):
     Componentes a combinar:
     - Retorno log del portafolio (usar ret_1d sobre close_total_return, que YA
       incluye dividendos — correcto).
@@ -52,31 +245,310 @@ DECISIONES ABIERTAS (en orden sugerido de resolución)
       (recompensa incremental de Sharpe, común en trading RL); (c) retorno puro.
     Decidir la forma y los pesos/λ.
 
-[ ] D5. OBSERVACIÓN — ventana y recurrencia
+    ================================================================
+    ENMIENDA PENDIENTE (2026-09-19) — EL TAMIZ REPRUEBA A LOS TRES BRAZOS
+    ================================================================
+    Medido en §7.11 y §7.12 de docs/resultados_entorno_OE1.txt, con
+    scripts/d4_diagnostico_recompensas.py y scripts/d4_tamiz_recompensas.py.
+    NINGUNA CORRIDA DE AGENTE: 0 configuraciones al contador de D10.
+
+    LO QUE SE MIDIÓ DE LA PRIMARIA (DSR):
+      · Reordenando, r_t ∝ (R−A) − (A/2B)·(R²−B). El precio de la varianza es
+        A/(2B), PROPORCIONAL a la media móvil del retorno: con A≈0 degenera y
+        con A<0 CAMBIA DE SIGNO. En train eso pasa en 44% de los días.
+      · El término de riesgo explica 7-10% de la señal.
+      · Su acumulado NO ORDENA: rho de Spearman +0.11 (train) y +0.36 (val)
+        contra el Sharpe del periodo, sobre 18 estrategias reales. En train le
+        paga 5.7x más a Markowitz, que pierde plata, que al 1/N, que gana.
+      · Inflar la volatilidad a media constante le SUBE el acumulado en 44% de
+        las 36 celdas.
+      >> ESO EXPLICA D25: el agente cumple cada vez mejor un objetivo que, en el
+         tramo donde entrena, no es el desempeño.
+
+    LO QUE SE MIDIÓ DE V1 (DDR), Y CAMBIA LA RECOMENDACIÓN:
+      · Ordena AL REVÉS: rho −0.63 (train) y −0.38 (val).
+      · Paga por ruido en 83% de las celdas.
+      · Un lastre de costo le SUBE la recompensa (−4.69% por bp/día).
+      >> LA DDR NO DEBERÍA CORRERSE. Se iba a correr con la hipótesis de que,
+         al castigar semivarianza, corregiría la rotación. Está medido que haría
+         lo contrario. Es la única recomendación inequívoca del ejercicio.
+         Correrla igual cuesta 30 corridas del contador para confirmar lo que
+         un tamiz de tres minutos ya dijo.
+
+    LO QUE SE MIDIÓ DE V0 (log-retorno): pasa T1 POR TAUTOLOGÍA —su acumulado
+    ES el retorno— y reprueba T3 por construcción: no tiene término de riesgo.
+    Sigue sirviendo para lo que D4 lo puso, que es ser el control, y para nada
+    más.
+
+    TRES CANDIDATOS NUEVOS, YA IMPLEMENTADOS Y EN TAMIZ (src/env/rewards.py):
+      C1 `mv`         log-retorno − λ·(R−A)². Es D4(a), la propuesta del 09-02.
+                      El precio del riesgo vuelve a ser una CONSTANTE, que es
+                      justo lo que al DSR le falta.
+      C2 `logret_dd`  log-retorno − λ·(incremento del drawdown). Forma por paso
+                      del objetivo tipo Calmar / E(MDD) de Almahdi y Yang
+                      (2017). Es el único con hipótesis previa a favor: §7.7
+                      dejó medido que la ventaja del agente contra el 1/N es el
+                      DRAWDOWN, no el retorno.
+      C3 `dsr_rot`    DSR − κ·rotación. REABRE D7 (ver ahí). MEDIDO: sale PEOR
+                      que el DSR pelado — se vuelve ciego al costo real (0.09%
+                      por bp contra 2.03%) e invierte el orden en val (−0.52).
+                      Esta vía NO funciona.
+
+    NI `mv` NI `logret_dd` PASAN EL TAMIZ TAMPOCO, y el porqué es el hallazgo:
+    λ fija cuánto pesa el riesgo contra el retorno, y subirlo mejora T3 y
+    empeora T1 monótonamente. Barrido completo en §7.12. [Decía "NO EXISTE λ
+    QUE CUMPLA LAS DOS, en ninguna de las dos formas": TACHADO el 2026-09-26,
+    ver abajo.] A frecuencia diaria y sin deriva, "ordenar como ordena el
+    Sharpe" y "que el riesgo pese" son exigencias en conflicto: el retorno
+    diario es ~1e-3 y su cuadrado ~1e-6.
+
+    CORRECCIÓN DEL 2026-09-26 — SÍ EXISTE, PARA `logret_dd`. La grilla del
+    barrido saltaba de 0.5 a 1.0 veces el λ de referencia, y el cruce caía en
+    el hueco. Barrido fino (§7.12): en el pliegue 0, `logret_dd` con
+    λ ∈ [0.63, 0.68] PASA LOS CUATRO CRITERIOS tal como se pre-registraron
+    (T1 rho .52-.59 / .89-.90, T2 0/36, T3 20.1-21.3%, T4 12.5-13.8%/bp).
+    Para `mv` no hay ninguno. Calificaciones: la ventana es angosta (~6% del
+    λ calibrado); en el pliegue 1 la ventana es [0.65, 0.95]; en el pliegue 2
+    NO hay ningún λ (T1 en val nunca llega a .50). Y el brazo corrido en
+    §7.15 usó λ=1.02, que reprueba T1: el tamiz todavía NO se ha contrastado
+    con un brazo que lo PASE.
+
+    LO MÁS CERCA: `logret_dd` con λ=0.51 — rho 0.74/0.93 (pasa T1 holgado) y
+    peso del riesgo 16.8% contra el umbral de 20%. Y su fidelidad de orden
+    contra el DRAWDOWN se queda en +0.82/+0.78 ESTABLE EN TODO EL BARRIDO.
+
+    LO QUE HAY QUE DECIDIR (es del autor, y las cuatro son defendibles):
+      (a) Bajar el umbral de T3 a 15% y adoptar `logret_dd` con λ=0.51. Es
+          mover un umbral DESPUÉS de ver el resultado; se registra como tal.
+          >> SUPERADA EL 2026-09-26. (a') Adoptar `logret_dd` con λ en
+             [0.65, 0.68] (la intersección de los pliegues 0 y 1; p. ej. 0.66)
+             SIN mover ningún umbral. Reparos: la ventana se encontró después
+             de ver el tamiz y no estaba pre-registrada, y el pliegue 2 no
+             admite ningún λ. Si se elige (a'), el brazo que habría que
+             correr es ESTE, no el de λ=1.02 que ya se corrió.
+      (b) Medir T1 contra el DRAWDOWN en vez del Sharpe, con el argumento de
+          §7.7. Mismo reparo: se decide después de ver.
+      (c) Quedarse con el DSR por ser el estándar de la literatura y REPORTAR
+          EL TAMIZ COMO RESULTADO NEGATIVO. Es la opción más honesta y
+          probablemente la más publicable: dice que el objetivo estándar del
+          área no ordena estrategias en un mercado sin deriva.
+      (d) Correr `mv` y `logret_dd` a 3 semillas x 3 pliegues (18 corridas,
+          ~45 min, 6 configuraciones) para ver si el tamiz PREDICE el desempeño
+          del agente. Eso valida el TAMIZ COMO MÉTODO, que vale más que el
+          resultado de cualquier brazo suelto.
+
+    LO QUE NO CAMBIA: η sigue pre-registrada en 1/60; R_t sigue siendo neto de
+    costos; los estadísticos suficientes de la recompensa que se elija siguen
+    yendo al vector de observación (Markov). `logret_dd` expone DD_t por eso.
+
+[X] D5. OBSERVACIÓN — CERRADA (2026-09-03): VENTANA APILADA + MLP, SIN RNN.
+    RAZÓN, y no es solo "hay poco dato": LA MEMORIA YA ESTÁ EN LAS FEATURES.
+    Las EWMAs de 5/20/60 días de D11/D15 cargan explícitamente la persistencia
+    que una recurrente tendría que aprender por descenso de gradiente. Meter
+    una LSTM sería pagar parámetros y varianza por representar de nuevo algo
+    que ya está codificado en una base fija — el mismo argumento con que se
+    eligió la opción C sobre la A en D11.
+    La recurrencia queda como brazo de robustez SOLO si el cronograma lo
+    permite, nunca como diseño base.
+    OBLIGATORIO EN EL VECTOR (por D4): los estadísticos A_t y B_t del DSR.
+    Las 4 vistas de R8 entran por la misma arquitectura, sin cambiarla.
+    DELIBERACIÓN ORIGINAL (se conserva):
     - Ventana de lookback de N días (apilar) vs política recurrente (POMDP).
     - Qué vista(s) de features entran (las 4 se comparan en R8, pero la
       arquitectura base debe soportarlas todas por igual).
 
-[ ] D6. NORMALIZACIÓN CAUSAL — riesgo de look-ahead
+[X] D6. NORMALIZACIÓN CAUSAL — CERRADA (2026-09-03): EXPANDING POR ACTIVO.
+    Media y desviación EXPANDING calculadas POR ACTIVO con información solo
+    hasta t. Es causal aunque se aplique dentro del tramo de prueba, porque
+    nunca mira hacia adelante; lo prohibido es el z-score sobre toda la
+    muestra, no el uso de datos del test para estandarizar su propio pasado.
+    PARÁMETROS FIJADOS:
+      - Winsorización a ±5σ (evita que un salto único domine la escala).
+      - Calentamiento mínimo de 250 días antes de emitir la primera
+        observación: con menos historia la desviación expanding es inestable.
+      - Los acotados por construcción (rsi_14) NO se estandarizan: se escalan a
+        [0,1] y se dejan.
+      - log1p(days_since_news), ya decidido conceptualmente en R6.
+    POR ACTIVO Y NO GLOBAL: es el mecanismo 1 de D11 —el de costo cero— que
+    convierte "intensidad absoluta" en "intensidad relativa a la propia
+    historia del activo" y resuelve el grueso de la heterogeneidad de cobertura
+    entre BCP y Minsur con una sola red de pesos compartidos.
+    DELIBERACIÓN ORIGINAL (se conserva):
     Las features tienen escalas dispares (precio vs rsi 0-100 vs days_since_news
     0-400). Normalización OBLIGATORIA y CAUSAL: estadísticas ajustadas SOLO en
     train (rolling/expanding), nunca z-score sobre toda la muestra. Confirmar
     también el log1p(days_since_news) ya decidido conceptualmente en R6.
 
-[ ] D7. COSTOS DE TRANSACCIÓN Y SLIPPAGE — parámetro del entorno, no dato
+    >> ENMENDADA EL 2026-09-18 POR D27. La winsorización de ±5σ NO se estaba
+       aplicando a `sue_*` ni a `pico_sue_*`: esas columnas caían en la rama de
+       PASSTHROUGH, que hacía `nan_to_num` y nada más. El canal fundamental era
+       el único que entraba al agente sin acotar, con valores de hasta −22.46.
+       Corregido; ver D27.
+
+[~] D7. COSTOS — CERRADA EN FORMA (2026-09-03); FALTAN CIFRAS DE FUENTE PRIMARIA.
+    >> REABIERTA Y RESUELTA EN SU PARTE NUEVA (2026-09-19). §7.9 pedía
+       reabrirla porque el DSR parecía premiar la volatilidad que la
+       operación genera. Se implementó el brazo `dsr_rot` (DSR − κ·rotación)
+       y SE MIDIÓ QUE NO FUNCIONA: con el castigo escalado localmente la
+       recompensa se vuelve CIEGA al costo real (0.09% por bp contra 2.03%
+       del DSR pelado) e invierte el orden en val (rho −0.52). EL ARGUMENTO
+       ORIGINAL DE D7 —no cobrar dos veces— SE SOSTIENE, y ahora con una
+       medición detrás y no solo con el razonamiento. Ver §7.12.
+    ESTRUCTURA (cerrada):
+      c_i = comisión SAB + derechos (BVL+Cavali+SMV) + medio spread OBSERVADO
+            del activo, por lado. Impacto de mercado ≈ 0 POR CONSTRUCCIÓN: el
+            tope de capacidad mantiene la participación baja; se declara, no se
+            estima.
+      COSTO POR ACTIVO, NO ÚNICO. El spread va de 8 pbs (Alicorp) a 220 pbs
+      (Luz del Sur): un orden de magnitud. Un costo único haría que el agente
+      no distinga entre rotar uno y otro, que es justo la decisión que importa.
+      Se descuenta DENTRO de V_neto, sin penalizador de rotación adicional.
+    CIFRAS VERIFICADAS EL 2026-09-03 (búsqueda web; PENDIENTE confirmarlas en
+    el tarifario primario antes de que entren a la tesis):
+      - Derechos SMV+BVL+Cavali ≈ 0.00755% por lado (0.76 pbs) según nota de
+        prensa SMV/BVL/Cavali. Despreciables. El PDF de la SMV devolvió 403.
+      - Comisión SAB: Renta 4 Perú publica 0.43% con MÍNIMO DE S/40 para
+        mercado local web. Rango de mercado citado: 0.25% a 1.5%.
+      => El "0.4% por operación" del especialista NO era una exageración: es el
+         centro del rango retail publicado.
+      - PENDIENTE: (a) si el IGV 18% se suma sobre la comisión (0.43% -> 0.507%
+        por lado, o sea ~101 pbs de ida y vuelta); (b) si "por operación"
+        significa por lado o ida y vuelta; (c) si una cuenta de S/1.8 MM
+        negocia por debajo del 0.43% retail — esta última es la única que no
+        está publicada y cambia el resultado más que cualquier decisión de
+        arquitectura.
+    CORRECCIÓN A LA PROPUESTA DEL 2026-09-02 — SE RETIRA LA GRILLA HASTA 400 pbs.
+      Estaba mal compuesta, por dos errores:
+        1. Sumaba el peor spread (220, Luz del Sur) como si fuera el del
+           PORTAFOLIO. El costo de la cartera es el promedio ponderado por lo
+           que el agente EFECTIVAMENTE rota, y el agente va a evitar Luz del
+           Sur precisamente porque es cara. 220 es la esquina, no el centro.
+        2. El costo se aplica a la ROTACIÓN, no al patrimonio. 300 pbs de ida y
+           vuelta solo pegan como 300 pbs de arrastre a rotación del 100%; con
+           rotación del 5% el arrastre es 15 pbs.
+      Techo real del universo bien compuesto, CALCULADO por el modelo de costos
+      (scripts/smoke_env_oe1.py, órdenes de S/250k):
+        ALICORC1 111 · INRETC1 116 · MINSURI1 117 · CPACASC1 166 · FERREYC1 173
+        · CREDITC1 268 · LUSURC1 323   (pbs de ida y vuelta)
+      >> CORRIGE una cuenta errada del 2026-09-03 que decía "~306 pbs (101 de
+         comisión + 220 de spread)": esa suma da 321, y con derechos el modelo
+         da 323. Se anota en vez de podarse (convención del registro).
+    LO QUE REEMPLAZA A LA GRILLA: el costo de equilibrio c* se calcula CONTINUO,
+    por bisección, como el costo al que el agente empata con el 1/N. La grilla
+    queda solo como ilustración, con escenarios citables en vez de números
+    redondos: sin fricción (control) / institucional negociado ~0.15% por lado /
+    RETAIL PUBLICADO 0.43%+IGV (caso base) / estrés con spread duplicado.
+    BANDA DE NO-OPERACIÓN — YA NO ES UN PARÁMETRO ELEGIDO A MANO.
+      Se DERIVA del mínimo por orden. Con S/1.8 MM en 7 posiciones (~S/257k
+      cada una) la comisión porcentual solo supera el mínimo de S/40 por encima
+      de S/40/0.0043 ≈ S/9,300 por orden = 0.52% del portafolio. Debajo de ese
+      umbral se paga una tarifa fija que domina: mover S/2,000 cuesta S/40, o
+      sea 200 pbs sobre el monto transado. La banda se fija en ese piso
+      económico y se cita; δ=0 se conserva solo como diagnóstico de que el
+      modelo de costos está haciendo algo.
+    DELIBERACIÓN ORIGINAL (se conserva):
     Modelo y valores realistas para la BVL (comisiones + impacto de mercado, alto
     en nombres ralos). Si se ponen a cero, el agente sobre-opera de forma irreal.
 
-[ ] D8. MANEJO DE is_no_trade
+[X] D8. MANEJO DE is_no_trade — CERRADA (2026-09-03): MÁSCARA DURA, NO MULTA.
+    Confirmada por el especialista con la formulación más simple posible: "si
+    nadie quiere jugar, no juega". En días con is_no_trade=1 la acción sobre
+    ese activo se ENMASCARA y el peso se arrastra (ver la interacción con D2).
+    No se penaliza un intento imposible: se impide. Una restricción se cumple
+    siempre; una penalización solo en promedio y si entrenó bien.
+    is_stale (precio repetido, no cero cotización) NO se prohíbe: entra como
+    recargo sobre c_i. Medido en docs/ejecutabilidad_y_costos_OE1.txt: el proxy
+    1−is_stale subestima la ejecutabilidad entre 23 y 34 pp contra la
+    frecuencia oficial de la BVL; el piso real del universo es 90.5% de las
+    sesiones, no 56.5%. Prohibir por is_stale le quitaría al agente ~1/3 de
+    días genuinamente operables.
+    DATO NUEVO MEDIDO EL 2026-09-03 que refuerza la decisión: solo 328 de 3,513
+    fechas (9.3%) tienen a los 7 activos transando el mismo día con el proxy
+    is_stale. Casi todos los días hay al menos un nombre no operable, así que
+    la máscara no es un caso de borde: es el régimen normal del entorno.
+    DELIBERACIÓN ORIGINAL (se conserva):
     En días sin operación de un activo (precio stale) el agente no puede operar
     de verdad: ¿enmascarar la acción sobre ese activo o penalizar el intento?
 
-[ ] D9. TASA LIBRE DE RIESGO / BENCHMARK
+[X] D9. TASA LIBRE DE RIESGO — CERRADA (2026-09-03): TASA BCRP / 365 A LA CAJA.
+    Propuesta por el autor el 2026-09-02 y confirmada por el especialista en la
+    misma forma: la tasa del banco central, que cambia cada mes, dividida entre
+    365. Ya está en el panel como `macro_tasa_ref`, serie causal.
+    RAZÓN DE FONDO (no es un detalle contable): la caja DEBE rendir. Si rinde
+    cero mientras la tasa de referencia no lo hace, el entorno castiga
+    estructuralmente al agente por defenderse y sesga la política a estar
+    siempre invertido. La misma rf se usa como sustraendo en Sharpe/Sortino.
+    MATIZ AL ESPECIALISTA: dijo "ponerla a largo plazo", que sugiere depósito a
+    plazo. Un depósito a plazo no es líquido a diario y choca con un agente que
+    puede rebalancear. Se remunera la caja a la tasa de referencia diaria
+    (líquida) y se DECLARA que un inversionista real obtendría más a plazo, a
+    costa de liquidez.
+    DELIBERACIÓN ORIGINAL (se conserva):
     Si el reward usa Sharpe o exceso de retorno, hace falta una rf. NO está en el
     panel; se puede traer del BCRP (como el TC en src/market/fx.py). Definir
     fuente/serie y si la caja rinde rf.
 
-[ ] D10. PROTOCOLO DE EVALUACIÓN — fijar ANTES de entrenar (evita autoengaño)
+[~] D10. PROTOCOLO DE EVALUACIÓN — CERRADA EN FORMA (2026-09-03); FALTA EL SPLIT.
+    BASELINES (ampliados tras la reunión). A los cuatro previstos —buy&hold,
+    1/N, momentum 12-1, media-varianza— se agregan:
+      - Media-varianza CON ENCOGIMIENTO Ledoit-Wolf. Sin encogimiento y con 7
+        activos es un hombre de paja.
+      - Paridad de riesgo / inversa a la volatilidad.
+      - ÍNDICE LOCAL (S&P/BVL Perú General) y ETF DE PERÚ (EPU), ambos
+        sugeridos por el especialista. El EPU tiene la virtud de ser
+        INVERTIBLE de verdad, con sus propias comisiones: es la vara más
+        honesta que existe.
+      - BANDA NULA DE CARTERAS ALEATORIAS: 1,000 portafolios Dirichlet con las
+        mismas restricciones y los mismos costos. Si el agente cae dentro de la
+        banda, no hay hallazgo.
+    REQUISITO DE EQUIDAD (sale de la reunión y no es un desvío): CADA BASELINE
+    CORRE CON SU PROPIA FRECUENCIA DE REBALANCEO ÓPTIMA, elegida en
+    train/validación. El especialista señaló que el 1/N es "casi invencible sin
+    costos"; comparar contra un 1/N rebalanceado a diario bajo 0.43%+spread
+    sería ganarle a un baseline mal implementado.
+    SIGNIFICANCIA:
+      - ≥10 semillas. Se reporta MEDIANA y rango intercuartil. La mejor semilla
+        no se reporta sola nunca.
+      - Bootstrap por bloques sobre los retornos del test (respeta la
+        autocorrelación).
+      - SHARPE DEFLACTADO (Bailey y López de Prado), con CONTADOR DE
+        CONFIGURACIONES desde la PRIMERA corrida. Contarlas al final no es
+        honesto. El contador incluye los brazos de D3, D4 y las vistas de R8.
+    MÉTRICAS: retorno acumulado y anualizado, Sharpe, Sortino, drawdown máximo,
+    Calmar, CVaR 95%, volatilidad, rotación anual, días operados, peso medio en
+    caja, concentración media, y c* (costo de equilibrio, ver D7).
+    ATRIBUCIÓN TIMING vs SELECCIÓN (nuevo, sale del punto del 70%): se
+    descompone el resultado en exposición al mercado y pesos relativos. Si el
+    factor común domina, el margen está en el timing y hay que poder decirlo
+    con evidencia en vez de suponerlo.
+    CRITERIO DE ÉXITO PRE-REGISTRADO: superar al 1/N en Sharpe fuera de
+    muestra, neto de costos al caso base, con Sharpe deflactado > 0 y mediana
+    sobre semillas por encima del baseline. Si no se logra, se reporta como
+    resultado negativo y la contribución pasa a ser c* y la ablación por canal.
+    LO QUE FALTA — EL DISEÑO DEL SPLIT. Recomendación del asistente, PENDIENTE
+    DE DECISIÓN DEL AUTOR: walk-forward con 3-4 pliegues expandiendo, cada uno
+    probando ~2 años, con embargo de ~20 días entre tramos.
+    IMPLEMENTADO COMO VALOR POR DEFECTO (no como decisión) en `src/env/folds.py`
+    el 2026-09-03: 3 pliegues, validación 252 días, prueba 504, embargo 20,
+    entrenamiento EXPANDIENDO desde el primer índice utilizable. Los pliegues
+    que salen sobre el panel real son:
+      0: train 2013-01..2018-10 | val 2018-11..2019-11 | test 2019-12..2021-12
+      1: train 2013-01..2020-10 | val 2020-11..2021-11 | test 2021-12..2023-12
+      2: train 2013-01..2022-10 | val 2022-11..2023-11 | test 2023-12..2025-12
+    Los tres tramos de prueba cubren, respectivamente, pandemia, Castillo y la
+    normalización posterior: la pregunta del especialista sobre quiebres de
+    régimen queda contestada por construcción y no hay que excluir subperíodos.
+    EL EMBARGO NO ES ADORNO: las features llevan ventanas de 20/50/60 días y los
+    fundamentales son escalones trimestrales; sin hueco entre tramos, la última
+    observación de entrenamiento y la primera de validación comparten insumos.
+    Si algún día entra una feature con ventana mayor a 20 días, hay que subirlo.
+    Contrato fijado en `tests/test_folds.py` (6 tests). Usa mejor los datos
+    que un corte único y resuelve gratis la pregunta del especialista sobre
+    quiebres de régimen: cada pliegue ES un régimen y se reportan todos, en vez
+    de discutir cuál excluir. El corte único obvio (train 2012-2019, val
+    2020-2021, test 2022-2025) mete pandemia y Castillo enteros en validación,
+    que es el régimen más raro de los catorce años.
+    DELIBERACIÓN ORIGINAL (se conserva):
     - Split TEMPORAL walk-forward (train→val→test, sin barajar).
     - Baselines obligatorios: buy&hold, 1/N equiponderado, momentum,
       media-varianza (Markowitz). El agente "vale" solo si los supera
@@ -84,6 +556,2315 @@ DECISIONES ABIERTAS (en orden sugerido de resolución)
     - Múltiples semillas + medida de significancia (evitar concluir sobre una
       corrida afortunada).
     - Métricas: retorno acumulado, Sharpe/Sortino, max drawdown, turnover.
+
+[X] D11. REPRESENTACIÓN DEL CANAL DE SENTIMIENTO — planteada 2026-07-31,
+    >> ENMENDADA POR D15 (2026-08-29): los apartados (ii) y (iii) de la
+       DECISIÓN de abajo quedan SUPERSEDIDOS en dos puntos — la magnitud
+       deja de ser multiplicador (solo puerta de relevancia) y las 6
+       columnas pos/neg pasan a 9 con `neutral` incluido. El MECANISMO
+       (EWMAs de base fija con pesos aprendidos) y el criterio de
+       abandono siguen VIGENTES tal como están escritos aquí.
+    **DECIDIDA POR EL AUTOR EL 2026-08-17**. Surge de
+    docs/validacion_etiquetado_r5.txt. Afecta a D3 y D5, y define qué se corre en
+    R5, así que se cerró ANTES de la corrida (como estaba previsto).
+    Abajo se conserva ÍNTEGRA la deliberación original (propuesta, evaluación,
+    evidencia y alternativas) por trazabilidad; la decisión va primero.
+
+    ────────────────────────────────────────────────────────────────────────
+    DECISIÓN (2026-08-17)
+    ────────────────────────────────────────────────────────────────────────
+    (i)  POLARIDAD CATEGÓRICA — ADOPTADA. Se abandona el score continuo. El
+         canal se representa con polaridad {positivo, neutral, negativo}.
+    (ii) MAGNITUD POR TAXONOMÍA DE EVENTOS, ex-ante — ADOPTADA. Se descarta
+         pedirle la magnitud al LLM (su `confidence` está medido y no discrimina:
+         0.750 en errores vs 0.730 en aciertos). El modelo clasifica el TIPO de
+         evento —tarea objetiva, factible para un modelo chico— y la magnitud la
+         fija el autor por categoría. La taxonomía ES TAMBIÉN el filtro de
+         relevancia: las categorías de magnitud CERO son la abstención.
+    (iii) DECAIMIENTO POR k EWMAs PONDERADAS — ADOPTADO (opción C). Se descarta
+         el coeficiente exponencial libre aprendido por la red (opción A).
+         RAZÓN, y es doble —no es solo falta de datos—:
+           1. ESTIMABILIDAD. Un τ libre entra NO LINEALMENTE (dentro del
+              exponente): superficie de pérdida con zonas planas y mínimos
+              locales, alimentada por gradientes de RL de alta varianza y por
+              solo los días con evento vivo. Los pesos sobre EWMAs fijas entran
+              LINEALMENTE en la primera capa — bien condicionado.
+           2. EXPRESIVIDAD. Una mezcla w1·e^(-t/5)+w2·e^(-t/20)+w3·e^(-t/60)
+              representa MÁS formas que una exponencial sola: por ejemplo caída
+              rápida con cola larga, que un τ único NO puede. O sea la opción C
+              domina a la A en las dos dimensiones a la vez; no es un premio de
+              consuelo. Misma lógica que usar una base fija (Fourier/wavelets)
+              en vez de aprender el filtro.
+         El agente SIGUE APRENDIENDO EL DECAIMIENTO: aprende cuál, dentro de una
+         base fija, en vez de estimar τ por descenso de gradiente.
+
+    FORMA CONCRETA DEL FEATURE (fusiona (i)+(ii)+(iii) en un mecanismo):
+      Cada evento aporta como PESO su magnitud ex-ante de la taxonomía, y se
+      acumula en EWMAs SEPARADAS por signo y por escala temporal:
+        sent_pos_ewma_{5,20,60}  y  sent_neg_ewma_{5,20,60}   -> 6 columnas.
+      POR QUÉ SEPARAR POS/NEG en vez de una sola serie firmada:
+        - Una serie firmada COLAPSA: una buena y una mala noticia el mismo día
+          dan 0, indistinguible de "no pasó nada". Separadas dan (1,1), que es un
+          estado distinto y aprendible.
+        - Permite REACCIÓN ASIMÉTRICA (las malas noticias pesan más y decaen más
+          lento), que una serie firmada prohíbe por construcción.
+        - NO reintroduce la falsa precisión rechazada en (i): el 0.333 problemático
+          venía de PROMEDIAR DENTRO DEL DÍA. Una EWMA sobre el tiempo de eventos
+          ponderados por magnitud es intensidad acumulada, no un matiz de opinión.
+      Se CONSERVAN las 4 columnas crudas actuales (sentiment_score_last,
+      days_since_news, has_news, n_articles): `days_since_news` es probablemente
+      informativa por sí sola y sirve de baseline del canal.
+      DÓNDE SE CALCULA: en build_dataset (R6), a partir del output de R5. Es
+      causal por construcción (la EWMA solo mira hacia atrás) y cuesta
+      milisegundos -> las vidas medias se pueden recalibrar SIN re-correr el LLM.
+
+    HETEROGENEIDAD ENTRE ACTIVOS (problema abierto por D1 = portafolio, resuelto
+    aquí). Con un agente de portafolio la red es una sola y los pesos de las EWMAs
+    son COMPARTIDOS por los 7 activos, que van de 577 eventos (BCP) a ~74 (Minsur).
+    Requisito fijado por el autor: si el canal no logra distinguir la relevancia de
+    la noticia entre activos, NO SE TOMA. Mecanismos adoptados, en orden de costo:
+      1. NORMALIZACIÓN CAUSAL POR ACTIVO (coste CERO: ya es obligatoria por D6).
+         Estandarizar las 6 columnas con estadísticas expanding CALCULADAS DENTRO
+         DE CADA ACTIVO convierte "intensidad absoluta" en "intensidad relativa a
+         la propia historia del activo". Un día de mucha prensa para Minsur y uno
+         para BCP pasan a significar lo mismo para los pesos compartidos. Esto
+         resuelve el grueso del problema por sí solo.
+      2. FEATURE DE RÉGIMEN DE COBERTURA (barato): una columna causal por activo
+         con su intensidad de cobertura (p. ej. eventos relevantes en ventana
+         expanding). Permite que la red compartida CONDICIONE su respuesta según
+         si el activo es muy o poco cubierto — aprende f(sentimiento, régimen) con
+         un solo juego de pesos.
+      3. EMBEDDING POR ACTIVO (último recurso, 7 x ~4 = ~28 parámetros): deja que
+         la red se especialice. RIESGO REAL con esta muestra: memoriza identidad
+         del activo y sobreajusta. No usar salvo que 1 y 2 se muestren
+         insuficientes, y solo con evidencia out-of-sample.
+    CRITERIO DE ABANDONO (explícito, decidido por el autor): si tras la limpieza y
+    con estos mecanismos el canal no supera al baseline en la ablación de R8
+    (vista mercado vs mercado_sentimiento), EL CANAL NO SE TOMA. Ver la ADVERTENCIA
+    al final de la deliberación: "la señal de sentimiento de prensa no aporta valor
+    explotable en la BVL para este universo" es un resultado legítimo y reportable.
+
+    PENDIENTE DE CALIBRACIÓN (no bloquea la corrida de R5): las vidas medias
+    exactas (5/20/60 d es la propuesta inicial) y el corte final de magnitudes de
+    la taxonomía. Ambos se recalculan sobre el output de R5 sin re-pagar el LLM.
+
+    >> LA TAXONOMÍA Y EL TRATAMIENTO DE LA RELEVANCIA VIVEN EN SU PROPIO
+       DOCUMENTO: **docs/taxonomia_eventos_R5.txt** (creado 2026-08-18). Ahí están
+       las 15 categorías con su magnitud ex-ante, los 3 fixes previos a la corrida,
+       las dos decisiones estructurales (polaridad condicionada a magnitud>0;
+       categorías cero = abstención), y §6 con lo que queda abierto y CÓMO se
+       decide después. Este item (D11) fija el MECANISMO; ese doc fija el CONTENIDO.
+    ────────────────────────────────────────────────────────────────────────
+
+    PROPUESTA DEL AUTOR (3 piezas):
+      (i)   dejar de usar un score continuo y quedarse con la POLARIDAD
+            {positivo, neutral, negativo};
+      (ii)  añadir una MAGNITUD {alto, medio, bajo};
+      (iii) que el valor DECAIGA en el tiempo, con los coeficientes exponenciales
+            APRENDIDOS por el agente DRL en vez de fijados a mano.
+
+    EVALUACIÓN (evidencia, no opinión):
+    (i) POLARIDAD CATEGÓRICA — respaldada. Con kappa 0.32 un score continuo es
+        falsa precisión: un promedio de {+1,-1,0} que da 0.333 comunica un matiz
+        que la medición no tiene. Encoding: polaridad y magnitud como features
+        SEPARADAS; NO multiplicarlas en un escalar (pos x alto = +3 reintroduce la
+        precisión falsa e impone que "alto" valga exactamente el triple).
+    (ii) MAGNITUD — la idea es correcta, LA FUENTE PROPUESTA NO. El pipeline ya le
+        pide al modelo una autoevaluación (`confidence`) y está medido que NO
+        discrimina: 0.750 de media en los errores contra 0.730 en los aciertos.
+        Pedirle a gemma3:4b un "impacto alto/medio/bajo" es pedir una segunda
+        autoevaluación al mismo modelo cuya única autoevaluación existente resultó
+        ruido. Además duplica la carga de validación.
+        ALTERNATIVA RECOMENDADA: TAXONOMÍA DE EVENTOS (resultados / dividendo /
+        M&A / regulatorio / conflicto laboral / expansión / patrocinio-RSE /
+        mención en índice) con magnitud asignada EX-ANTE por categoría. Clasificar
+        el TIPO es una tarea objetiva y mucho más fácil para un modelo chico que
+        juzgar importancia, y es auditable en la sustentación ("definí que unos
+        resultados pesan más que un patrocinio" en vez de "el LLM dijo alto").
+        BENEFICIO EXTRA: la taxonomía ES TAMBIÉN el filtro de relevancia
+        (patrocinio-RSE y mención en índice -> magnitud cero). Un mecanismo
+        resuelve los dos problemas.
+        DESCARTADA por medición: usar el nº de medios que cubren el hecho como
+        proxy objetivo de importancia. Con 3 medios en el allowlist, 80-97% de los
+        eventos aparecen en uno solo. Solo sería viable ampliando el allowlist, lo
+        que reintroduce el ruido que ese filtro evita.
+    (iii) DECAIMIENTO — la idea corrige un defecto REAL: hoy no hay decaimiento
+        CERO sino memoria infinita. `build_dataset` hace
+        `sentiment_score_last = ffill()`, así que una noticia rige intacta hasta
+        que llega otra. Y la infraestructura básica YA EXISTE: el panel tiene
+        `sentiment_score_last` y `days_since_news`, y una red que reciba ambas
+        puede representar cualquier f(valor, antigüedad) — eso ES un decaimiento
+        aprendido de forma libre. Lo que NO puede así es ACUMULAR varios eventos
+        pasados: solo decae el último.
+
+    LÍMITE DURO — LA MUESTRA. Días con evento de la empresa en el split de
+    entrenamiento (~70%), medidos sobre el corpus real:
+        CREDITC1 577 | ALICORC1 131 | BUENAVC1 69 | SAGAC1 41 | CORAREC1 33
+
+    >> CORRECCIÓN AL UNIVERSO VIGENTE (2026-08-17). La tabla de arriba es del
+       UNIVERSO VIEJO. De esos 5 activos, TRES YA NO ESTÁN: BUENAVC1 (69),
+       SAGAC1 (41) y CORAREC1 (33) — justamente los tres peores. Sobreviven solo
+       CREDITC1 (577) y ALICORC1 (131) como valores MEDIDOS. Se conserva la tabla
+       original por trazabilidad (convención del registro: se anota, no se poda).
+       Para los 5 activos NUEVOS el número NO ESTÁ MEDIDO. Lo que sí existe es el
+       CONTEO BRUTO de artículos con que se decidió el universo (scripts
+       probe_mc_new / probe_mc_candidatos / probe_mc_candidatos_total /
+       probe_mediacloud_volume): los cuatro llaman a `story_count`, que devuelve
+       un ENTERO — ninguno llama a `story_list` ni descarga el corpus. O sea:
+       data/raw/news_*.parquet existe solo para el universo viejo.
+       Extrapolando con ALICORC1 como regla de tres (3.9 art/sem -> 131 eventos):
+         CPACASC1 ~480 | INRETC1 ~400 | FERREYC1 ~170 | LUSURC1 ~95 | MINSURI1 ~74
+       ESTA EXTRAPOLACIÓN ES OPTIMISTA Y HAY QUE TRATARLA COMO TAL: los 131 de
+       Alicorp son eventos anotados a mano, mientras que los art/sem son volumen
+       CRUDO de las mismas queries sueltas cuyo ruido se cuantificó después
+       (26% de relevancia global; 61% del corpus de CORAREC eran resúmenes del
+       índice BVL). Las queries de descubrimiento lo hacen explícito: Pacasmayo
+       es '"Cementos Pacasmayo" OR "Pacasmayo"' — el segundo término matchea la
+       PROVINCIA y la CIUDAD; InRetail incluye "Plaza Vea" e "InkaFarma", que
+       aparecen en notas de consumo, promociones y aperturas de local. Volumen
+       alto en un nombre industrial de bajo perfil es precisamente la firma de la
+       contaminación por resúmenes de índice.
+       NO INVALIDA LA DECISIÓN DE UNIVERSO: esos conteos respondían "¿hay materia
+       prima suficiente para que valga la pena?" (10.4k sí, 0.5k de Casa Grande
+       no), y ese juicio se sostiene. Lo que ya no alcanzan es para fijar (iii).
+       CÓMO SE MIDE DE VERDAD, Y BARATO: el filtro de relevancia y la
+       deduplicación operan sobre TÍTULOS (regex/strings), sin LLM. Descargar
+       MediaCloud de los 5 nuevos (paso 1 de R5 igual) + filtrar + contar días con
+       evento en el split de train da el número real SIN gastar un segundo de
+       Ollama. Hacerlo ANTES de lanzar la clasificación.
+    Con 33 eventos no se aprenden coeficientes de decaimiento: se aprende el ruido
+    de 33 observaciones. Y eso es ANTES de repartirlos entre las celdas de la
+    grilla de magnitud. Solo CREDITC1 tiene régimen de datos para un decaimiento
+    libre. Para el resto el decaimiento hay que IMPONERLO como prior.
+    Cómo aprender decaimiento según arquitectura (entra en D3/D5):
+      - MLP sobre un paso: aprende f(último evento, days_since). Costo cero, ya
+        disponible. No acumula eventos.
+      - MLP + ventana de N rezagos: pesos libres por rezago; con 33-577 eventos
+        sobreajusta.
+      - LSTM/GRU: acumula, pero es el más caro en muestra — el peor candidato aquí.
+      - MLP + k EWMAs precalculadas (vidas medias 5/20/60 d): el agente aprende a
+        PONDERARLAS (3 parámetros). Cede pureza (elige entre coeficientes en vez
+        de aprenderlos) pero es lo único que la muestra sostiene fuera de BCP.
+
+    OBSERVACIÓN DE DISEÑO: la grilla 3x3 no tiene 9 estados útiles. En los 32
+    casos de categoría "empresa" anotados, "neutral" y "bajo impacto" resultaron
+    ser lo mismo (un how-to de Yape, un patrocinio escolar): la celda
+    (neutral, alto) está conceptualmente vacía. La grilla efectiva es de ~5
+    estados: neg-alto, neg-bajo, neutro, pos-bajo, pos-alto. Con 33-577 eventos
+    esa reducción no es cosmética.
+
+    ALTERNATIVAS EN LA MESA:
+      A. Solo limpiar datos y dejar el score continuo. Mínimo cambio; mantiene la
+         falsa precisión y la memoria infinita. Sirve de baseline, no de destino.
+      B. Taxonomía de eventos con magnitud ex-ante (recomendada para (ii)).
+      C. k EWMAs precalculadas + peso aprendido (recomendada para (iii)).
+      D. Enfoque de EVENTO en vez de score diario: días desde el último evento de
+         signo X + su magnitud. Es lo que la escasez sugiere naturalmente
+         (0.1-1.6 noticias/semana) y `days_since_news` ya existe.
+      E. Nº de medios como magnitud — DESCARTADA por medición (ver arriba).
+
+    RECOMENDACIÓN REGISTRADA (2026-07-31): (1) limpiar ANTES de codificar —con 74%
+    de irrelevancia cualquier esquema elegante decae ruido con más estilo—;
+    (2) polaridad categórica, sí; (3) magnitud por taxonomía (B), colapsada a ~5
+    estados; (4) decaimiento por EWMAs ponderadas (C) más `days_since_news`,
+    dejando el decaimiento libre como EXPERIMENTO solo en CREDITC1 —si ahí
+    funciona, es un resultado reportable sobre para qué régimen de datos alcanza—.
+
+    ADVERTENCIA A CONSIDERAR AL DECIDIR: nada de esto crea información que no esté
+    en el corpus. Si tras la limpieza el canal sigue sin predecir nada —posible,
+    dado que hoy lo único que correlacionaba eran los titulares de índice— el
+    resultado reportable es "la señal de sentimiento de prensa no aporta valor
+    explotable en la BVL para este universo". Es legítimo y publicable, pero
+    conviene decidir de antemano cuánta ingeniería se está dispuesto a invertir
+    antes de aceptar esa posibilidad.
+
+[X] D12. MAGNITUD FIJA (ex-ante) vs APRENDIDA POR TRAMO — planteada por el autor
+    >> ABSORBIDA POR D15 (2026-08-29). Con los tramos como CANALES
+       SEPARADOS (brazo de 18 columnas de la ablación de R8), "aprender
+       los pesos de tramo" deja de ser una decisión pendiente: es lo que
+       hace la red en su primera capa. La deliberación se conserva abajo
+       porque su evidencia de conteos de eventos sigue siendo la que fija
+       el presupuesto de columnas.
+    el 2026-08-18. DIFERIDA A DATOS, no bloquea la corrida de R5.
+
+    LA PREGUNTA: en vez de fijar yo las magnitudes (1.0 / 0.6 / 0.3 / 0.0), ¿no se
+    puede etiquetar solo el TRAMO de relevancia y que el agente aprenda cuánto
+    pesa cada uno?
+
+    ES COHERENTE, y hay que reconocerlo: es EXACTAMENTE el mismo principio que se
+    aceptó en D11(iii) para el decaimiento, aplicado un nivel más arriba. Allí se
+    argumentó que aprender PESOS LINEALES sobre una base fija está bien
+    condicionado (a diferencia de estimar un τ no lineal). Aquí los pesos de tramo
+    también entrarían LINEALMENTE en la primera capa. No se puede aceptar el
+    argumento para el decay y rechazarlo aquí sin una razón adicional.
+
+    FORMA CONCRETA: en vez de una pareja de EWMAs ponderada por magnitud, una
+    pareja POR TRAMO. 3 tramos con polaridad x 2 signos x 3 escalas = **18
+    columnas** por activo (en vez de 6). Los pesos aprendidos SON las magnitudes.
+
+    LO QUE CAMBIA PORQUE D1 = PORTAFOLIO (y es lo que la vuelve viable):
+    con un agente de portafolio la red es UNA SOLA y los pesos de tramo se estiman
+    con los eventos de los 7 activos AGRUPADOS, no activo por activo. El total del
+    universo ronda ~1,900 eventos pre-limpieza (577 BCP + 131 Alicorp + ~480
+    Pacasmayo + ~400 InRetail + ~170 Ferreycorp + ~95 LuzSur + ~74 Minsur). Aun
+    perdiendo la mitad en la limpieza, quedan ~950 repartidos en 6 celdas
+    (3 tramos x 2 signos) = ~160 por celda, para estimar UN PESO LINEAL. Eso SÍ es
+    estimable. La objeción de muestra, que era decisiva en D11(iii), aquí se
+    debilita mucho.
+
+    ACTUALIZACIÓN 2026-08-26 — LA ARITMÉTICA DE ARRIBA QUEDA SUPERADA POR MEDICIÓN.
+    Los conteos de este párrafo eran extrapolaciones. La anotación de las 550
+    (docs/auditoria_anotacion_humana_R5.txt §2.3) da la tasa de relevancia real
+    por activo y, con ella, los eventos esperados sobre TODO 2012-2025 (el split
+    de train es un subconjunto temporal, así que son COTAS SUPERIORES):
+        INRETC1 ~540 · CREDITC1 ~253 · LUSURC1 ~218 · MINSURI1 ~193 ·
+        ALICORC1 ~96 · CPACASC1 ~54 · FERREYC1 ~33      TOTAL ~1,390
+    Dos correcciones fuertes respecto de la estimación previa:
+      - FERREYC1 pasa de ~170 a ~33 (≈2.4 eventos POR AÑO). Con vidas medias de
+        5/20/60 días sus columnas de sentimiento van a ser cero casi siempre.
+      - CPACASC1 pasa de ~480 a ~54.
+    El argumento de agrupación de D1=portafolio SOBREVIVE (~1,390 eventos
+    agrupados dan ~230 por celda en 3 tramos x 2 signos, suficiente para estimar
+    un peso lineal), pero la HETEROGENEIDAD entre activos es mucho mayor de lo
+    supuesto: dos de los siete activos aportan casi nada al canal. Eso alimenta
+    directamente el criterio de abandono de la taxonomía §6.
+
+    EL COSTO REAL, Y ES UNO SOLO PERO IMPORTA — PARTICIÓN vs AGRUPACIÓN:
+    con magnitud FIJA todos los eventos van a las MISMAS dos columnas (pos/neg),
+    así que cada evento contribuye a estimar los mismos pesos: se AGRUPA.
+    Con tramos aprendidos los eventos se REPARTEN entre 6 celdas, y cada peso ve
+    solo su fracción. Y el reparto es desbalanceado: los eventos de tramo ALTO
+    (M&A, crisis) son intrínsecamente raros, así que esa celda será la más flaca
+    justo cuando es la que más importa. Además, en el vector de observación del
+    agente de portafolio, 18 columnas x 7 activos = 126 entradas de sentimiento
+    (vs 42), sobre ~2,450 días de entrenamiento.
+
+    LO QUE SE GANA, ADEMÁS DE PUREZA: si los pesos aprendidos salen sensatos
+    ("el agente recuperó por su cuenta que unos resultados pesan más que una
+    opinión de analista"), es un RESULTADO REPORTABLE más interesante que
+    afirmarlo por decreto, y se lee directamente de la primera capa. Si salen
+    absurdos, también es diagnóstico.
+
+    CÓMO SE DECIDE (y por qué se puede diferir sin costo):
+    R5 emite la CATEGORÍA por artículo en ambos escenarios. Colapsarla a una
+    magnitud fija (6 columnas) o mantenerla como canales por tramo (18 columnas)
+    es una elección RÍO ABAJO, en build_dataset, sobre la MISMA corrida del LLM.
+    O sea: NO hay que elegir ahora, y se pueden tener LAS DOS.
+      Paso 1. Obtener los conteos reales de eventos por activo y por tramo
+              (docs/taxonomia_eventos_R5.txt §6.1, sin LLM).
+      Paso 2. Si alguna celda tramo x signo queda por debajo de ~50 eventos
+              AGRUPADOS en todo el universo, esa celda no sostiene un peso libre:
+              se colapsa con su vecina o se cae a magnitud fija.
+      Paso 3. Llevar AMBAS versiones como brazos de la ablación de R8. La fija es
+              el baseline auditable; la aprendida es el experimento. Gana la que
+              gane out-of-sample, con el protocolo de D10 (múltiples semillas +
+              significancia), no la que sea más elegante.
+    RECOMENDACIÓN REGISTRADA: magnitud fija como DEFAULT (defendible en la
+    sustentación y robusta con poca muestra), tramo aprendido como brazo de
+    ablación. Es el mismo patrón que se acordó en D11(iii) para el decaimiento
+    libre en CREDITC1: el diseño conservador manda, el ambicioso se mide.
+
+[X] D13. MOMENTO DE EJECUCIÓN — DECIDIDA (2026-08-18): **EJECUCIÓN EN t+1**,
+    >> NOTA DEL 2026-09-12: uno de los respaldos de esta decisión —el
+       hallazgo de que "la BVL reacciona con UN DÍA de rezago"— QUEDA EN
+       REVISIÓN. Se midió sobre el panel que iba un día rancio, así que un
+       factor macro en t-1 que "explicaba" el retorno en t podía estar
+       explicando el de t-1, o sea ser CONTEMPORÁNEO. La decisión NO se
+       reabre: su argumento principal es la EJECUTABILIDAD (no se puede
+       operar al cierre que se acaba de observar), no el rezago empírico.
+       Pero hay que RE-MEDIR el rezago antes de volver a citarlo. Ver
+       EVENTO DE DATOS (2026-09-12).
+    vinculante. El agente OBSERVA el sentimiento del día T pero solo puede operar
+    al precio de T+1.
+
+    CAUSA: `publish_date` de MediaCloud es una FECHA SIN HORA (verificado: 100% de
+    los artículos en la hora 00). No se puede saber si una nota salió antes o
+    después del cierre de la BVL (15:00 Lima), así que permitir operar el mismo
+    día T sería potencialmente look-ahead.
+
+    EVIDENCIA DE QUE EL FIX NO CUESTA NADA (scripts/analiza_t1_noticias.py, detalle
+    en docs/taxonomia_eventos_R5.txt §7.4). Se midió con |retorno| y la BANDERA de
+    noticia, NUNCA con la polaridad -> independiente del etiquetado roto:
+      - La ventana de evento T-2..T+2 es PLANA, no tiene pico en T:
+          CREDITC1 0.0101 0.0101 0.0100 0.0100 0.0101 (base 0.0069)
+          ALICORC1 0.0094 0.0100 0.0102 0.0103 0.0100 (base 0.0086)
+        Los días con noticia no son días de salto: son días dentro de PERIODOS de
+        volatilidad elevada. En ALICORC1 el máximo cae en T+1, no en T.
+      - |ret| en T+1 tras noticia / base = 1.45x (CREDITC1) y 1.22x (ALICORC1),
+        contra 1.45x y 1.18x el mismo día T: indistinguible.
+      - Elevación global moderada: 0.0064 -> 0.0087 (1.36x). No hay "disparada".
+    LÍMITE DECLARADO: son magnitudes (|ret|), no dirección. Sostiene que el
+    CONJUNTO DE OPORTUNIDAD de T+1 iguala al de T; no prueba que la señal
+    direccional sobreviva — eso se mide tras la corrida limpia.
+    PENDIENTE ASOCIADO: re-correr el test de look-ahead (corr sent_t ~ ret_t)
+    DESPUÉS de la limpieza. El de julio dio ~0 pero se midió sobre un corpus 74%
+    ruido, donde una correlación nula no prueba nada.
+    Se conecta con D7 (costos) y D8 (is_no_trade): t+1 es también el supuesto
+    realista de ejecución para un mercado ralo.
+
+[X] D14. EJE DE `alcance` EN LA TAXONOMÍA DE R5 — planteada por el autor el
+    2026-08-26 al terminar la anotación de las 550. Detalle completo y casos:
+    docs/auditoria_anotacion_humana_R5.txt §5. NO bloquea la corrida.
+
+    **MEDIDA Y DESCARTADA POR EL AUTOR EL 2026-08-29.** La deliberación se
+    conserva íntegra abajo por trazabilidad; el veredicto y su evidencia van al
+    final del ítem, en la sección MEDICIÓN.
+
+    LA PREGUNTA: la taxonomía de 15 categorías pregunta QUÉ TIPO DE HECHO ES y
+    usa la respuesta como proxy de CUÁNTO IMPORTA. Son dos preguntas distintas y
+    el proxy falla en las colas. ¿Se separa el eje?
+
+    EVIDENCIA QUE LA MOTIVA (todo medido sobre la anotación del autor):
+      - Un robo en una tienda Plaza Vea (fila 478) y una toma de control
+        (fila 391) reciben la MISMA magnitud 1.0.
+      - Toda la regulación SECTORIAL (filas 13, 332, 460, 541) cae en
+        Z_sector_macro con magnitud CERO: se trata igual que una nota de
+        farándula.
+      - La regla que separaba C_analisis_opinion de Z ("que el titular nombre a
+        la empresa") ya se estaba violando en la práctica (filas 247, 320).
+      - La duda del anotador se concentra 100% en A_regulatorio_material, 71% en
+        A_crisis y 67% en C_analisis_opinion, y cae a 2% en Z_indice_bursatil.
+        El titular corto NO es el problema; la definición lo es.
+
+    LA PROPUESTA, Y ES UN SOLO CAMPO NUEVO, NO TRES:
+        alcance : unidad | empresa | sector | mercado
+        magnitud = base(tipo) x factor(alcance)
+        factor propuesto: unidad 0.3 · empresa 1.0 · sector 0.3 · mercado 0.0
+    Más un campo `rol` (comprador/objetivo/vendedor) SOLO para M&A, del que se
+    DERIVA la polaridad en vez de pedírsela al modelo.
+
+    POR QUÉ UN SOLO EJE Y NO "materialidad alta/media/baja": el §3 de
+    docs/taxonomia_eventos_R5.txt argumenta —y sigue teniendo razón— que pedirle
+    al LLM que juzgue IMPORTANCIA es una segunda autoevaluación, y la única
+    autoevaluación existente (`confidence`) resultó ruido MEDIDO (0.750 en los
+    errores vs 0.730 en los aciertos). `alcance` NO es una opinión sobre
+    importancia: es una pregunta observable en el titular ("¿a qué nivel apunta
+    el hecho?"). No reintroduce el modo de falla.
+
+    LO QUE VUELVE URGENTE LA PARTE DE `rol`: el 58% de los eventos relevantes
+    —y el 58% de la masa de magnitud— quedó en `neutral`, y los 13 M&A (la
+    categoría A más frecuente del corpus) son TODOS neutrales por regla. En el
+    diseño de D11(iii) `neutral` no entra a sent_pos_ewma NI a sent_neg_ewma:
+    EL EVENTO MÁS MATERIAL DEL CORPUS ES HOY INVISIBLE EN LAS SEIS COLUMNAS.
+
+    COSTO: re-anotar `alcance` en ~167 filas (las 54 relevantes + las 113 de
+    Z_sector_macro) y `rol` en 13. NO las 550: los 15 códigos actuales ya dan el
+    eje `tipo`. Río abajo el costo es CERO (taxonomía §5: todo se calcula en
+    build_dataset, ninguna recalibración re-paga el LLM).
+
+    CONDICIÓN PARA ADOPTARLA: hay que MEDIR que un modelo chico responde
+    `alcance` mejor de lo que hoy elige entre 15 códigos. Si no, se cambió una
+    taxonomía mala por otra. Mismo protocolo, mismos 120 ítems del bloque A.
+
+    LÍMITE DECLARADO: `alcance` aproxima la materialidad, no la resuelve. La
+    fila 382 (denuncia ambiental contra Pucamarca) sería alcance=unidad y
+    saldría 0.3, pero Pucamarca es una de las DOS minas de Minsur, mientras que
+    un Plaza Vea es una de cientos de tiendas de InRetail. El mismo `unidad`
+    vale fracciones muy distintas del negocio según el activo, y eso no se sabe
+    desde el titular. Se acepta, se declara, y queda como perilla de
+    recalibración en R6 y como brazo de D12.
+
+    ────────────────────────────────────────────────────────────────────────
+    MEDICIÓN (2026-08-29) — POR QUÉ SE DESCARTA
+    ────────────────────────────────────────────────────────────────────────
+    Reproducible: `python scripts/mide_impacto_d14.py`. Insumos: las 550
+    anotaciones + dos clasificaciones fila-a-fila hechas para esta medición y
+    versionadas para auditoría:
+      data/interim/validacion_humana/clasif_alcance_d14.csv        (113 sector_macro)
+      data/interim/validacion_humana/clasif_alcance_relevantes.csv (54 relevantes)
+    Cada fila lleva su razón. Se reportan DOS lecturas —ESTRICTA (solo los casos
+    inequívocos) y AMPLIA (sumando los de borde)— y la conclusión no cambia entre
+    ellas, que es la prueba de que no depende del juicio del clasificador.
+
+    (1) EL HALLAZGO QUE DECIDE — D14 NO ENGORDA EL CANAL, LO REDISTRIBUYE.
+        Con el factor propuesto (sector = 0.3), sobre las 550:
+
+              medida                      hoy    estricta      amplia
+              relevantes                   54    84 (1.56x)  113 (2.09x)
+              MASA DE MAGNITUD          41.60   40.91 (0.98x) 45.95 (1.10x)
+
+        Entran 30 eventos nuevos que suman +6.87 de masa, y las 13 filas que el
+        propio eje DEGRADA (de `empresa` a `unidad` o a `sector`) restan -7.56.
+        Se cancelan. El conteo sube porque lo que entra vale 0.09-0.30 por evento.
+        La masa es lo que alimenta las EWMAs de D11(iii); el conteo no.
+        Para que la masa subiera de verdad haría falta factor >= 0.5, y con
+        factor 1.0 `sector` deja de distinguirse de `empresa` — o sea se
+        desanda el endurecimiento que dio +18pp de precisión en el Piloto A.
+
+    (2) LAS FILAS QUE ORIGINARON LA PROPUESTA SALEN PERDIENDO. La 247 y la 320
+        están anotadas C_analisis_opinion = magnitud 0.3. Bajo D14 son
+        opinion x sector = 0.09. El autor había decidido que NO debían ser
+        irrelevantes; D14 las deja a un tercio de lo que ya valen.
+
+    (3) LA GANANCIA VA DONDE MENOS SIRVE (eventos/año, lectura estricta):
+              FERREYC1  2.3 ->  2.3     el más famélico, gana CERO
+              ALICORC1  6.8 ->  6.8     gana CERO
+              CPACASC1  3.9 ->  5.2
+              MINSURI1 13.8 -> 19.3
+              LUSURC1  15.6 -> 18.7
+              CREDITC1 18.1 -> 42.1     el que más gana (2.33x)
+              INRETC1  38.6 -> 70.1
+        Las 8 filas Z_sector_macro de Ferreycorp son TODAS macro exportadora
+        genérica (aranceles, Mincetur, APEC): ninguna habla de maquinaria ni de
+        la inversión minera o de construcción que es su demanda. Y el que más
+        gana es el activo cuyo perímetro de query ya se sabe contaminado
+        (Credicorp holding vs. el banco; ver auditoría §4.1).
+
+    (4) EMPEORA EL RIESGO QUE D11 TUVO QUE MITIGAR. La razón max/min de
+        cobertura entre activos pasa de 16.5x a 30.0x (36.0x en lectura amplia).
+        D11 declara esa dispersión como EL problema del canal con una red única
+        de pesos compartidos entre los 7 activos. D14 la duplica.
+
+    (5) LA PREMISA DE D14 NO SE SOSTIENE. D14 afirma que `alcance` "es
+        observable en el titular" y por eso no reintroduce el modo de falla de
+        la autoevaluación. Al hacer la clasificación: de las 59 filas marcadas
+        como sector, 29 (49%) hubo que marcarlas de BORDE. Decidir si el precio
+        de la papa es insumo de Alicorp, si el cobre le importa a una minera de
+        estaño, o si "el sector energético" le importa a un banco no se lee en
+        el titular: se sabe del negocio. Si un anotador con contexto completo
+        duda en la mitad de los casos, un modelo de 12B no lo hará mejor.
+
+    QUÉ SE HACE EN SU LUGAR (costo cero, no toca el LLM):
+      - La regla (iii) de la nota de la fila 68 ("que el titular NOMBRE a la
+        empresa") se retira del texto de anotación por las razones del §2 del
+        análisis original —es un proxy malo de la prueba (ii)— pero SIN eje
+        nuevo y SIN tocar el prompt. Las filas 247 y 320 se quedan en
+        C_analisis_opinion con magnitud 0.3, que es la decisión del autor.
+      - Se conservan las pruebas (i) "¿la empresa es objeto o autor del juicio?"
+        y (ii) "¿el juicio apunta a la empresa o a un conjunto que la incluye?".
+
+    LO QUE ESTA MEDICIÓN DEJA EN PIE Y ES MÁS GRANDE: el 57.9% de la masa de
+    magnitud es `neutral` y no entra a NINGUNA de las 6 columnas de D11(iii)
+    (los 13 M&A solos son el 31.2% de la masa). Eso NO lo arregla D14 y se
+    trata aparte — ver D15.
+
+    VALOR RESIDUAL DE D14 PARA LA TESIS: queda como decisión considerada,
+    medida y rechazada con evidencia, que es reportable. El límite que declaraba
+    (`alcance` aproxima la materialidad pero no la resuelve: Pucamarca es 1 de 2
+    minas de Minsur y un Plaza Vea es 1 de cientos de tiendas) sigue siendo
+    cierto y sigue sin tratamiento; se hereda como limitación declarada.
+
+[X] D15. CODIFICACIÓN DEL CANAL: CATEGORÍAS EN VEZ DE NÚMEROS — planteada por
+    el ASESOR y **DECIDIDA POR EL AUTOR EL 2026-08-29**. ENMIENDA a D11(ii) y
+    D11(iii). No toca R5: todo se calcula río abajo, en build_dataset.
+
+    ────────────────────────────────────────────────────────────────────────
+    DECISIÓN
+    ────────────────────────────────────────────────────────────────────────
+    (a) LA MAGNITUD DEJA DE SER UN MULTIPLICADOR. Los valores 1.0 / 0.6 / 0.3
+        que el autor fijó por categoría ya NO ponderan el evento. La magnitud
+        sobrevive con UNA sola función, que es la que estaba bien: la PUERTA DE
+        RELEVANCIA (magnitud 0 = abstención). Cada evento relevante pesa 1.
+    (b) LA POLARIDAD ENTRA COMPLETA, CON `neutral` INCLUIDO. Tres canales
+        —positivo, neutral, negativo— por tres escalas temporales:
+            sent_pos_ewma_{5,20,60}
+            sent_neu_ewma_{5,20,60}     <- NUEVO
+            sent_neg_ewma_{5,20,60}
+        = 9 columnas, contra las 6 que fijaba D11(iii).
+    (c) BRAZO PRE-REGISTRADO DE LA ABLACIÓN DE R8: 18 columnas (2 tramos ALTO
+        vs MEDIO+BAJO x 3 polaridades x 3 escalas). Se compra esa resolución
+        SOLO si el canal de 9 muestra señal primero.
+
+    ────────────────────────────────────────────────────────────────────────
+    POR QUÉ — EL ARGUMENTO DEL ASESOR
+    ────────────────────────────────────────────────────────────────────────
+    Planteo del asesor: no le corresponde al autor atribuir un número al
+    positivo / neutro / negativo; las categorías textuales no introducen ese
+    sesgo en el agente.
+
+    (1) EL ARGUMENTO YA ESTABA EN EL PROYECTO, Y D11 NO LO APLICÓ ENTERO.
+        D11(iii) rechazó que la red estimara tau por descenso de gradiente y
+        adoptó BASE FIJA + PESOS APRENDIDOS ("el agente sigue aprendiendo el
+        decaimiento: aprende cuál, dentro de una base fija"). Ese mismo
+        principio NO se aplicó a la magnitud, que quedó con base fija Y pesos
+        fijos. Es una inconsistencia interna de D11. El asesor la señala.
+
+    (2) DÓNDE ESTÁ REALMENTE EL SESGO — EN EL COLAPSO, NO EN LOS NÚMEROS.
+        Cada categoría tiene magnitud CONSTANTE dentro de su tramo, así que las
+        columnas que hoy emite aggregate_daily son conteos escalados:
+            mag_alto_pos  == 1.0 x n_alto_pos
+            mag_medio_pos == 0.6 x n_medio_pos
+            mag_bajo_pos  == 0.3 x n_bajo_pos
+        Y D6 obliga a normalización causal POR COLUMNA, que es invariante a un
+        factor de escala positivo (z-score de c*x == z-score de x). Es decir: si
+        el agente consumiera los tramos POR SEPARADO, los números 1.0/0.6/0.3
+        no tendrían ningún efecto sobre el modelo — se borran.
+        El sesgo existe SOLO en la suma que D11(iii) mandaba alimentar:
+            mag_pos = 1.0*n_alto + 0.6*n_medio + 0.3*n_bajo
+        Esa combinación lineal es FIJA y la red no puede deshacerla.
+        CONSECUENCIA DE DISEÑO: no hacía falta inventar una codificación nueva.
+        Hacía falta DEJAR DE COLAPSAR.
+        CAVEAT DECLARADO: la invariancia vale para una tubería LINEAL
+        (EWMA -> z-score). Si se introduce un log1p o un clip antes de
+        normalizar, el factor de escala vuelve a importar y habría que
+        declararlo. Las 9 columnas se normalizan sin transformación previa.
+
+    (3) LO QUE SIGUE SIENDO ATRIBUCIÓN DEL AUTOR, Y POR QUÉ SE ACEPTA. Dos
+        cosas, ambas defendibles bajo "base fija, pesos aprendidos":
+          - qué categoría cae en qué tramo (que `crisis` sea alta y
+            `analisis_opinion` baja). Es juicio, pero ORDINAL y auditable, y es
+            el que define la puerta de relevancia.
+          - las vidas medias 5/20/60, ya justificadas en D11(iii) como base fija.
+        Lo que DESAPARECE es la única atribución CARDINAL: cuánto vale un tramo
+        respecto de otro.
+
+    (4) UN ARGUMENTO ADICIONAL A FAVOR, QUE EL ASESOR NO MENCIONÓ. La polaridad
+        es la parte MENOS confiable de toda la medición: kappa 0.618 sobre n=13,
+        y los 3 desacuerdos de polaridad vinieron enteros de una convención
+        ("M&A siempre neutral"). Hoy el signo está HORNEADO EN LA ESTRUCTURA
+        —pos y neg son columnas distintas por construcción— y la red no puede
+        cuestionarlo. Con tres canales separados la red puede APRENDER A
+        DESCONTAR la polaridad si resulta ser ruido. La codificación categórica
+        no solo quita el sesgo del autor: hace auditable el error de medición
+        del LLM.
+
+    ────────────────────────────────────────────────────────────────────────
+    EVIDENCIA MEDIDA (scripts/mide_impacto_d14.py §5, y conteo de celdas)
+    ────────────────────────────────────────────────────────────────────────
+    MASA DE MAGNITUD ACTUAL POR POLARIDAD (sobre las 550 anotaciones):
+        negativo   12 eventos   masa 10.90   26.2%
+        neutral    32 eventos   masa 24.10   57.9%   <- NO ENTRA A NINGUNA COLUMNA
+        positivo   10 eventos   masa  6.60   15.9%
+    El 57.9% de la masa es invisible en las 6 columnas de D11(iii). Los 13 M&A
+    solos son el 31.2% de la masa total, y son TODOS neutrales por regla: el
+    evento más material del corpus no llega a las features. Esto es lo que
+    arregla (b), y arreglarlo cuesta CERO en LLM.
+
+    >> CORRECCIÓN DE LA PREMISA (2026-08-30, medida en el piloto de D16). LA
+       DECISIÓN NO CAMBIA; CAMBIA SU TAMAÑO, Y HAY QUE DECLARARLO ASÍ EN LA
+       TESIS.
+       La tabla de arriba —y con ella el 57.9%— está medida sobre la ANOTACIÓN
+       HUMANA, no sobre la salida del pipeline. Son dos cosas distintas y se
+       confundieron al redactar esta decisión:
+         - la anotación aplica la convención del autor "M&A siempre neutral"
+           (los 13 M&A de la muestra están anotados `neutral`, los 13);
+         - el prompt v2.1 en cambio PIDE polaridad libre a las categorías del
+           GRUPO A, y el modelo se moja. Sobre las mismas 550, de los 11
+           artículos que v2.1 clasificó como M&A dio 7 `positivo` y 4 `neutral`.
+       Masa de polaridad entre eventos relevantes, ponderada Hájek, medida de
+       las dos formas (scripts/piloto_rol_d16.py + análisis de masa):
+             según la ANOTACIÓN          según la SALIDA DEL MODELO v2.1
+             neutral    62.0%                positivo   45.7%
+             negativo   20.9%                negativo   31.0%
+             positivo   17.1%                neutral    23.3%
+       O SEA: lo que hoy se pierde por no tener columna `neutral` es el 23.3%
+       de la masa relevante, no el 57.9%. El premio de (b) es ~2.5x menor que
+       el que quedó escrito arriba.
+       POR QUÉ (b) SIGUE EN PIE DE TODAS FORMAS: 23.3% de la masa relevante
+       tirada a la basura sigue siendo mucho, el costo de la columna es cero, y
+       el argumento del asesor —que la atribución cardinal no le corresponde al
+       autor— es independiente del tamaño de la masa. No se reabre.
+       LO QUE SÍ HAY QUE CORREGIR AL ESCRIBIR: no citar el 57.9% como "masa que
+       el pipeline pierde". Es la masa que perdería si la anotación fuera la
+       fuente de las features, y no lo es.
+       >> CIFRA DEFINITIVA (2026-09-01, corrida completa de los 19,513 titulares):
+          la masa `neutral` real es 19.2%, no 57.9% ni el 23.3% que se estimó
+          desde la muestra. Reparto medido de los 2,237 eventos etiquetados:
+              positivo  1,028  46.0%
+              negativo    780  34.9%
+              neutral     429  19.2%
+          D15 SIGUE JUSTIFICADA —429 eventos que antes no entraban a ninguna
+          columna no son poco, y el argumento del asesor es independiente del
+          tamaño— pero AL ESCRIBIR LA TESIS EL NÚMERO ES 19.2%.
+       PENDIENTE MENOR QUE ABRE: la tabla de "eventos esperados por celda" de
+       abajo hereda el mismo problema (está construida sobre la anotación). Los
+       1,387 eventos y el reparto 39/407/232... hay que rehacerlos contra la
+       salida del modelo cuando exista la corrida definitiva de los 7 activos.
+       No bloquea nada: el presupuesto de columnas se decidió por el ORDEN de
+       magnitud de las celdas, y ese no se mueve.
+
+    EVENTOS ESPERADOS 2012-2025 POR CELDA (7 activos, bloque B reponderado):
+                 positivo   neutral  negativo    TOTAL
+        alto           39       407       232      678
+        medio         130       327        49      506
+        bajo           82       101        19      202
+                                                  1387
+    Dos lecturas que fijan el presupuesto de columnas:
+      - `alto x neutral` = 407 = 29% de TODO el corpus, y es la celda que el
+        diseño actual descarta entera.
+      - `alto x positivo` = 39 eventos en 14 años y 7 activos (2.8/año en todo
+        el universo), sostenida por n=2 filas de la muestra. Esa celda NO
+        aguanta un peso propio -> por eso 9 celdas x 3 escalas = 27 columnas se
+        descarta, y el brazo de ablación colapsa medio+bajo en vez de abrir 3
+        tramos.
+
+    ────────────────────────────────────────────────────────────────────────
+    QUÉ CAMBIA EN EL TRABAJO
+    ────────────────────────────────────────────────────────────────────────
+    NO CAMBIA NADA DE R5. No se re-corre el LLM, no se re-anota, la selección de
+    modelo se mantiene. Y las 6 columnas de D11(iii) NUNCA SE IMPLEMENTARON
+    (no aparecen en el código): no hay nada que deshacer.
+      [X] aggregate_daily (llm_sentiment.py): emite CONTEOS por celda
+          tramo x polaridad INCLUYENDO neutral. DOS tramos (alto / resto), no
+          tres: la celda `alto x positivo` tiene ~39 eventos en 14 años y 7
+          activos, sostenida por n=2 filas — no aguanta peso propio. Todo
+          duplicado con sufijo `_nom` para el brazo restringido de D17.
+      [X] universe.py: SENTIMENT_SCHEMA v3, + SENTIMENT_COUNT_COLS y
+          SENTIMENT_HALFLIVES (5,20,60) para que R6 y R8 no se desincronicen.
+          Se ELIMINARON mag_pos/mag_neg y mag_{alto,medio,bajo}_{pos,neg}: no
+          tenían consumidor río abajo y D15 los dejó sin sentido.
+      [X] build_dataset (R6): `_sentiment_ewmas` construye las 9 del canal base,
+          las 18 del brazo por tramos y las 9 del brazo restringido. Se calculan
+          DESPUÉS del reindexado al calendario completo, para que un día sin
+          noticias sea un 0 real (el evento decae) y no un hueco.
+      [X] feature_views expone los brazos como vistas:
+          `mercado_sentimiento` (9) · `..._tramos` (18) · `..._restringido` (9).
+      [X] FIX DEL ROLL-FORWARD (era el bug latente): las columnas de conteo se
+          SUMAN; solo `sentiment_score` se promedia ponderado por n_articles.
+          Verificado con el caso que lo rompía (evento en sábado que cae sobre
+          un lunes que ya tenía eventos propios).
+      [X] Pruebas: scripts/test_d15_d17.py (24 comprobaciones, exit 0) y
+          scripts/test_r5_v2.py actualizado.
+      [ ] docs/taxonomia_eventos_R5.txt §5 y D11(ii)/(iii): anotar la enmienda.
+    D12 (PESOS DE TRAMO APRENDIDOS) QUEDA ABSORBIDA: con los tramos como canales
+    separados en el brazo de ablación, "aprender los pesos de tramo" deja de ser
+    una decisión pendiente — es lo que hace la red.
+    CAMBIA TAMBIÉN el pendiente de la auditoría "métrica de selección de modelo
+    ponderada por magnitud": pasa a ponderada por tramo, o solo por relevancia.
+
+    LÍMITE DECLARADO: esto NO resuelve que la red comparta pesos entre activos
+    con cobertura de 2.3 a 38.6 eventos/año (ver D11, heterogeneidad). Y el
+    criterio de abandono de D11 sigue mandando: si el canal no supera al
+    baseline en la ablación de R8, el canal no se toma.
+
+[X] D16. POLARIDAD DE M&A: CAMPO `rol` CON EL SIGNO DERIVADO — planteada por el
+    AUTOR el 2026-08-29 ("me preocupa que estos eventos importantes de
+    reestructuración sean neutrales y que no haya ninguna señal").
+    >> MEDIDA Y DESCARTADA EN SU FORMA AUTOMÁTICA (2026-08-30). La REGLA es
+       buena y quedó cuantificada; lo que no funciona es EXTRAER el rol con el
+       modelo elegido. Ver §MEDICIÓN al final de esta entrada.
+       El prompt de la corrida definitiva SIGUE SIENDO v2.1, sin cambios.
+    Es la pieza de D14 que NUNCA SE MIDIÓ POR SEPARADO: D14 empaquetaba dos ejes
+    independientes y solo se midió —y rechazó— el de `alcance`.
+
+    PRECISIÓN DE ARRANQUE: con D15 esos eventos YA PRODUCEN SEÑAL. Entran por
+    `sent_neu_ewma`, o sea el agente ve "pasó algo grande hace N días" con
+    intensidad y decaimiento. Lo que falta NO es señal: es DIRECCIÓN. Eso acota
+    el problema y baja su urgencia.
+
+    LA HIPÓTESIS: "M&A" mezcla tres papeles con signos esperados distintos.
+        objetivo  — se paga prima de control        -> positivo
+        comprador — dilución, riesgo de integración -> ~0
+        vendedor  — foco y caja                     -> ~0
+    Si se sostiene, `neutral` es CORRECTO para el comprador y ESTÁ MAL para el
+    objetivo, que es donde vive el movimiento grande.
+
+    EVIDENCIA MEDIDA (scripts/valida_polaridad_ma.py, los 13 M&A del corpus
+    contra el precio):
+        comprador  n=5   +0.11%, +0.72%, +1.55%, -1.54%, +4.30%  -> MEZCLADO
+        vendedor   n=2   mezclado
+        objetivo   n=3   +61% (z=22), +9% en 5 días, y uno sin nada
+      - `neutral` ESTÁ BIEN para el comprador: los signos se cancelan y hay casos
+        a +4.7 y a -2.2 sigmas. Genuinamente ambiguo desde el titular. La
+        convención acertó en el caso frecuente.
+      - El tercer `objetivo` NO es contraejemplo: es el titular tardío de Luz del
+        Sur (el hecho se divulgó el 30-set, el precio saltó +41% el 1-oct, el
+        titular del corpus es del 15-oct). Los DOS casos de primera divulgación
+        dieron +61% y +9%.
+      - REFUERZO INDEPENDIENTE (docs/hallazgos_saltos_y_fuentes_R5.txt H1):
+        M&A es la categoría MÁS asociada al precio de todo el corpus — 60% con
+        |z|>2, p=0.004 — y es la que va entera a `neutral`.
+
+    POR QUÉ PODRÍA SALIR BIEN DONDE `alcance` SALIÓ MAL: es un campo CONDICIONAL
+    (solo se pregunta si la categoría es M&A, así que no agranda el espacio de
+    etiquetas de las otras 14) y es OBJETIVO — al asignarlo a mano salió sin
+    ambigüedad en 13 de 13, contra el 49% de casos de borde que midió `alcance`.
+    Esa diferencia es exactamente la que hundió a D14.
+
+    LO QUE NO SE HARÍA: dejar que el agente aprenda el signo solo. Son 2 tomas de
+    control en 14 años y 7 activos, y la de Pacasmayo es de diciembre de 2025, o
+    sea que con un split temporal cae en TEST, no en TRAIN. El agente nunca la
+    vería para aprender. Raro-y-enorme es justo lo que esta muestra no enseña:
+    tiene que ser regla ex-ante, no parámetro.
+
+    CAVEAT QUE HAY QUE DECLARAR SI SE ADOPTA: n=2 casos limpios. Es PRUEBA DE
+    EXISTENCIA, no afirmación estadística, y así debe ir a la tesis. Lo que la
+    sostiene no es la significancia sino que z=22 y z~9 no son ruido y que el
+    costo de la regla es casi cero contra el costo de tirar el evento más grande
+    del corpus.
+
+    ADVERTENCIA METODOLÓGICA, YA ESCRITA EN EL SCRIPT: esto valida una REGLA
+    EX-ANTE legible en el titular. NO se etiqueta ningún evento por su retorno
+    realizado — eso sería look-ahead y envenenaría el backtest entero.
+
+    COSTO SI SE ADOPTA: campo condicional en el prompt + re-piloto. Es
+    INDEPENDIENTE de la decisión sobre los Hechos de Importancia y se puede
+    decidir sin esperar la anotación de materialidad.
+    >> CORRECCIÓN AL COSTO (2026-08-30): era CERO llamadas extra, no un
+       re-pago. Se verificó que la corrida definitiva de R5 sobre los 7 activos
+       (19,528 artículos) NO EXISTE todavía: los únicos cachés completos son
+       data/interim/sentiment_cache/cache_*.json del 9-jul, con prompt v1 y el
+       universo VIEJO. Todo lo v2.1 son pilotos de 180 ítems. Así que el campo
+       habría entrado en la corrida que falta. El costo nunca fue el problema.
+
+    ────────────────────────────────────────────────────────────────────────
+    MEDICIÓN (2026-08-30) — scripts/piloto_rol_d16.py, gemma3:12b vía xwing
+    ────────────────────────────────────────────────────────────────────────
+    Se probaron DOS formulaciones del PASO 4 condicional. La segunda se escribió
+    expresamente para arreglar el fallo de la primera. Ambas fracasan, y en
+    direcciones OPUESTAS — que es lo que convierte esto en una conclusión sobre
+    la tarea y no sobre una redacción desafortunada.
+
+    (A) REGRESIÓN SOBRE LA TAREA PRINCIPAL (550 anotadas)
+        métrica                  v2.1     v2.2     v2.3    Δv2.2    Δv2.3
+        exactitud relevancia    93.1%    92.7%    90.9%   -0.4pp   -2.2pp
+        precisión relevancia    61.8%    59.7%    52.6%   -2.0pp   -9.2pp
+        recall relevancia       77.8%    79.6%    75.9%   +1.9pp   -1.9pp
+        categoría exacta (15)   45.5%    46.4%    46.5%   +0.8pp   +1.0pp
+        polaridad espuria       42.6%    42.0%    51.0%   -0.6pp   +8.5pp
+      v2.2 (glosa corta) es un EMPATE: el campo condicional efectivamente no
+      contamina las otras 14 categorías. O sea el modo de falla de D14 NO se
+      repite, y esa parte de la hipótesis se sostuvo.
+      v2.3 (glosa larga, desambiguando objetivo/vendedor) SÍ daña: -9.2pp de
+      precisión y +8.5pp de polaridad espuria. Alargar el PASO 4 empeoró el
+      juicio de relevancia del modelo.
+
+    (B) ACIERTO DEL ROL contra la asignación manual del autor (n=13)
+        v2.2:  8/12 global · objetivos detectados 1/3 · falsos objetivos 1
+        v2.3:  7/11 global · objetivos detectados 0/3 · falsos objetivos 0
+      El acierto global ENGAÑA: los aciertos están en las etiquetas que no
+      cambian nada (comprador/vendedor/tercero, todas -> neutral). En el ÚNICO
+      eje que asigna signo, v2.2 detecta 1 de 3 objetivos y v2.3 ninguno.
+      LOS DOS ERRORES QUE MATAN LA REGLA:
+        - Pacasmayo (n=468, +61% a z=22, el caso que motiva D16 entera):
+          v2.2 lo llama `vendedor`, v2.3 lo llama `comprador`. La regla lo
+          manda a `neutral` en ambos casos. El modelo lee "Holcim adquiere la
+          participación mayoritaria DE Cementos Pacasmayo" y no distingue a la
+          empresa cuyo control se transfiere del accionista que lo transfiere.
+        - Reordenamiento interno de Luz del Sur (n=174, -3.00% a z=-7.7):
+          v2.2 lo llama `objetivo` -> la regla le pone POSITIVO a un evento
+          fuertemente negativo. Falso positivo con el signo invertido.
+      v2.3 arregló los 2 casos a los que apuntaba (36 y 174) y ROMPIÓ TRES que
+      v2.2 tenía bien (75, 191, 391). No corrigió la confusión: la movió.
+
+    (E) HELD-OUT — 456 titulares con léxico de M&A del corpus de los 7 activos,
+        fuera de la muestra anotada y del arco. Sin rol de referencia: mide si
+        la desambiguación INFLA `objetivo`, que es el riesgo que introduce.
+        v2.2:  105/456 M&A · comprador 43 · tercero 26 · vendedor 22 · objetivo 14 (13.3%)
+        v2.3:   96/456 M&A · comprador 55 · vendedor 30 · tercero  5 · objetivo  4 ( 4.2%)
+        titulares que v2.3 volvió `objetivo` y v2.2 no: 0
+      Ocurrió lo CONTRARIO de lo temido: v2.3 colapsa el espacio hacia
+      comprador/vendedor y casi elimina `objetivo`. La deriva es sistemática
+      sobre 456 titulares independientes — no es ruido de los 13.
+      NOTA DE MÉTODO: v2.3 se escribió DESPUÉS de ver fallar a v2.2 sobre los
+      13 anotados, así que su cifra en (B) es IN-SAMPLE respecto del ajuste y no
+      vale como validación. Por eso existe (E). El held-out es el que sostiene
+      la conclusión.
+
+    (C) EL ARCO — la venta de Luz del Sur son 7 titulares de ene a oct de 2019,
+        no un evento puntual, y el precio subió +43% ANTES del anuncio (arco
+        completo: +128.6% en 2019; el salto de +41.10% fue el 1-oct-2019, con el
+        hecho BVL divulgado el 30-set y el titular de prensa recién el 15-oct).
+        RIESGO DESCARTADO: el PASO 1 no rompe el arco. v2.2 mantiene 13/13 como
+        M&A y RESCATA 3 titulares que v2.1 mandaba a `mencion_incidental`.
+        v2.3 baja a 11/13 y de 5 `objetivo` a 1.
+
+    ────────────────────────────────────────────────────────────────────────
+    EL NÚMERO QUE DECIDE — TECHO TEÓRICO CONTRA IMPLEMENTACIÓN REAL
+    ────────────────────────────────────────────────────────────────────────
+    Acierto de DIRECCIÓN sobre los 13 titulares del arco (retorno a +20d,
+    umbral +-2%; la dirección real es 8 positivo / 3 negativo / 2 neutral):
+        oráculo (rol asignado A MANO por el autor)   8/13 = 62%  <- techo de D16
+        D16 con v2.2                                 4/13 = 31%
+        D16 con v2.3                                 2/13 = 15%
+        polaridad LIBRE de v2.1 (lo que ya se hace)  4/13 = 31%
+        convención "M&A siempre neutral"             2/13 = 15%
+    LECTURA: la REGLA de D16 es buena — con el rol correcto la dirección DUPLICA
+    a lo que da el pipeline hoy. Lo que falla es la EXTRACCIÓN: con el rol que
+    produce gemma3:12b, D16 EMPATA CON NO HACER NADA. Y en Pacasmayo es peor que
+    no hacer nada: v2.1 daba `positivo` por su cuenta y v2.2/v2.3 lo bajan a
+    `neutral`.
+    Advertencias sobre esa tabla, para no sobreleerla: n=13 titulares de 2
+    eventos; los tres titulares del 17-dic-2025 rinden -4.1% porque salen
+    DESPUÉS del salto de +64.8% del día 17 (retroceso post-anuncio, no
+    contraejemplo); y el arco es el mejor caso del corpus, elegido justamente
+    por serlo.
+
+    ────────────────────────────────────────────────────────────────────────
+    LA PREMISA ESTABA MAL, Y ESO ES LO MÁS IMPORTANTE QUE SALIÓ
+    ────────────────────────────────────────────────────────────────────────
+    D16 se planteó sobre "los 13 M&A van todos a `neutral`, la categoría más
+    material no aporta dirección". Eso es cierto de la CONVENCIÓN DE ANOTACIÓN
+    del autor, NO del pipeline: v2.1 pide polaridad libre al GRUPO A y sobre las
+    550 dio 7 `positivo` y 4 `neutral` a los 11 M&A que clasificó. El canal
+    nunca estuvo mudo en M&A. Ver la CORRECCIÓN DE LA PREMISA registrada en D15
+    (masa `neutral` real: 23.3%, no 57.9%).
+
+    ────────────────────────────────────────────────────────────────────────
+    QUÉ QUEDA
+    ────────────────────────────────────────────────────────────────────────
+    NO SE ADOPTA el campo `rol` en producción, ni siquiera como ayuda de
+    clasificación: el +4 eventos relevantes de v2.2 se paga con -2.0pp de
+    precisión, y sin la regla de signo no compra nada que justifique el cambio.
+    NO GASTAR MÁS GPU EN PROMPTS LOCALES: dos formulaciones, dos fracasos en
+    direcciones opuestas. La distinción objetivo/vendedor/comprador desde un
+    TITULAR está fuera del alcance de gemma3:12b.
+
+    DOS CAMINOS SI SE QUIERE RECUPERAR EL 62% DEL ORÁCULO. Ambos tienen ahora un
+    criterio de éxito medible y pre-registrado: DETECTAR 3/3 OBJETIVOS SIN
+    FALSOS POSITIVOS sobre los 13 anotados.
+      1. ASIGNAR EL `rol` A MANO sobre los M&A. El held-out dimensiona el
+         trabajo: ~105 M&A en 456 titulares de léxico, y el corpus completo
+         tiene 567 titulares con ese léxico -> ~130 artículos, cerca de 1 h del
+         autor. Es exactamente lo que mide el oráculo, así que la ganancia está
+         cuantificada y no supuesta. COSTO A DECLARAR: no es reproducible sobre
+         datos nuevos — el mismo estatuto que la magnitud por taxonomía, que ya
+         se acepta como atribución ex-ante del autor.
+      2. PILOTO FRONTIER (Gemini). Es la oportunidad #3 del expediente y solo
+         espera una API key. Prueba de 10 min sobre 13 titulares. Si un modelo
+         frontier saca 3/3, D16 revive automatizada; si no, el camino 1 es el
+         único.
+    Ninguno de los dos bloquea nada. D16 queda CERRADA en su forma automática y
+    el trabajo sigue por el perímetro de BCP y la anotación de materialidad.
+
+    REPRODUCIBLE: python scripts/piloto_rol_d16.py --model gemma3:12b
+                  --versiones v22,v23
+    Salidas auditables: data/interim/d16_v21_*.csv, d16_v22_*.csv, d16_v23_*.csv,
+                        d16_heldout_v2{2,3}_*.csv, d16_arco_*.csv
+    Los prompts v2.2 y v2.3 viven DENTRO del script: src/sentiment nunca se
+    tocó, y la producción sigue en v2.1.
+
+[X] D17. PERÍMETRO DE BCP Y BANDERA `titular_nombra_empresa` — planteada como
+    "perímetro de BCP" (el activo es el banco pero la query incluye al holding),
+    MEDIDA Y DECIDIDA el 2026-08-30. La medición encontró que el perímetro NO
+    era el problema, y que el problema real NO es de BCP sino de los 7 activos.
+
+    ────────────────────────────────────────────────────────────────────────
+    PARTE 1 — EL PERÍMETRO: SE CONFIRMA COMO ESTÁ, NO SE TOCA LA QUERY
+    ────────────────────────────────────────────────────────────────────────
+    DECISIÓN: el ACTIVO es el BANCO (CREDITC1) y la VENTANA DE NOTICIAS es el
+    GRUPO. No se quita `Credicorp` de la query.
+    Query vigente, que NO cambia:
+        "Banco de Credito del Peru" OR Credicorp OR (BCP AND (banco OR financiero))
+
+    POR QUÉ NO SE QUITA `Credicorp`. Son 505 titulares (5.0% del corpus de
+    CREDITC1, no el 51.4% que se le atribuía), y ahí vive noticia material del
+    banco: "Credicorp anuncia que BCP adquirirá el 100% de Helm Bank en EE.UU.",
+    "Indecopi sanciona BCP y Credicorp por retiros no autorizados". BCP es
+    ~97.7% de Credicorp y el grueso de sus utilidades; la noticia redactada a
+    nivel holding ES noticia del banco. Quitar el término perdería señal real.
+    LA PARTE QUE DE VERDAD NO ES BCP: `Credicorp Capital` (226 titulares), la
+    mesa de análisis citada como comentarista de mercado. NO se excluye por
+    query: la taxonomía ya la manda a `mencion_incidental`, y excluirla por
+    término se llevaría por delante titulares mixtos.
+    SE MANTIENE LO YA DECIDIDO sobre BAP (Credicorp Ltd, NYSE): descartado como
+    activo — se precia en NYSE (rompe la premisa de baja liquidez BVL) y es otro
+    valor (incluye Pacífico, Prima AFP, Mibanco, Credicorp Capital). Ver
+    docs/hallazgos_saltos_y_fuentes_R5.txt §H6.
+
+    ────────────────────────────────────────────────────────────────────────
+    PARTE 2 — EL HALLAZGO: MEDIACLOUD MATCHEA SOBRE EL CUERPO
+    ────────────────────────────────────────────────────────────────────────
+    Lo que infla el corpus no es el perímetro: es que la búsqueda opera sobre el
+    TEXTO COMPLETO, así que entra todo artículo que mencione al emisor en
+    cualquier parte (como fuente, como dato, "según el BCP").
+    COBERTURA MEDIDA — ¿el TITULAR nombra a la empresa o a una marca suya?
+        ticker      corpus  nombrada       %
+        CREDITC1     10029      1972   19.7%
+        ALICORC1      1725       269   15.6%
+        MINSURI1       921       134   14.5%
+        INRETC1       3202       448   14.0%
+        LUSURC1       1056       123   11.6%
+        CPACASC1       843        87   10.3%
+        FERREYC1      1752       129    7.4%
+        TOTAL        19528      3162   16.2%
+    SOLO EL 16.2% DEL CORPUS NOMBRA A LA EMPRESA EN EL TITULAR. Y el estrato
+    separa la señal del ruido con una nitidez que no tiene ninguna otra variable
+    medida en el proyecto (contra las 550 anotaciones, n=58 nombrados / 420
+    anónimos):
+        estrato    relevancia humana   ponderada   precisión del LLM (v2.1)
+        NOMBRA               63.8%       44.0%              88.6%
+        anónimo               2.1%        1.1%              16.7%
+    30x en relevancia, 5x en precisión. Y LO DECISIVO: el 83% de los falsos
+    positivos y el 83% de la polaridad espuria del canal vienen del estrato
+    anónimo. Es el mismo error que D11 atacó por construcción en julio ("49% de
+    las etiquetas con signo venían de noticias que no hablaban de la empresa");
+    v2.1 lo redujo pero no lo cerró, y ahora se sabe dónde vive el resto.
+    COSTO DE RESTRINGIR: se conserva el 80.4% de los eventos relevantes (83.5%
+    de la masa ponderada). El 19.6% que se pierde NO es basura — incluye el
+    apagón de Surco/Miraflores (LUSURC1, crisis), el inicio del proceso de venta
+    de Sempra (LUSURC1, M&A) y el EIA de Senace (MINSURI1, regulatorio).
+
+    ────────────────────────────────────────────────────────────────────────
+    DECISIÓN: SE MARCA, NO SE FILTRA
+    ────────────────────────────────────────────────────────────────────────
+    (a) R5 emite una columna booleana DETERMINISTA `titular_nombra_empresa`
+        (regex por activo, SIN LLM) junto a la categoría.
+    (b) EL LLM SE CORRE SOBRE EL CORPUS COMPLETO, como estaba previsto. No se
+        descarta ningún artículo en R5.
+    (c) La decisión de RESTRINGIR el canal se toma en R6/build_dataset, donde se
+        construyen las 9 EWMAs, y entra como BRAZO PRE-REGISTRADO DE LA ABLACIÓN
+        DE R8: canal completo vs canal restringido a titulares que nombran.
+    TRES RAZONES:
+      1. No destruye información. La corrida completa son 5-6 h de GPU en un
+         servidor ya montado; el ahorro de 84% de llamadas es real pero la GPU
+         no es el cuello de botella, y el artículo descartado no vuelve.
+      2. ES EL PATRÓN YA ESTABLECIDO. D11 fijó que las features se calculan río
+         abajo para no re-pagar el LLM al recalibrar. Esto es lo mismo: la
+         decisión se mueve a donde es barato revertirla.
+      3. Convierte en pregunta empírica lo que hoy habría que decidir a ojo:
+         ¿vale más 88.6% de precisión o 19.6% más de eventos? Con n=58 en el
+         estrato nombrado, ese juicio NO se puede cerrar hoy — y marcar en vez
+         de filtrar es justamente lo que protege de ese tamaño de muestra.
+    COSTO: cero. Es una regex y una columna. NO hay re-descarga: el corpus ya
+    está bajado y la bandera opera sobre lo que hay.
+
+    ────────────────────────────────────────────────────────────────────────
+    EL DICCIONARIO DE NOMBRES (incluye MARCAS COMERCIALES, no solo razón social)
+    ────────────────────────────────────────────────────────────────────────
+    CREDITC1  banco de credito | bcp | credicorp | yape | mibanco | prima afp |
+              krealo | pacifico seguros
+    ALICORC1  alicorp | primor | sapolio | don vittorio | blanca flor |
+              nicolini | intradevco
+    CPACASC1  pacasmayo | fosfatos del pacifico
+    FERREYC1  ferreycorp | ferreyros | unimaq | orvisa | motored
+    INRETC1   inretail | supermercados peruanos | plaza vea | inkafarma |
+              mifarma | vivanda | real plaza | mass | intercorp | quicorp |
+              economax
+    LUSURC1   luz del sur | tecsur
+    MINSURI1  minsur | mina justa | marcobre | pucamarca | taboca | raura
+
+    EXCLUSIÓN OBLIGATORIA — `ferreyros` ES UN APELLIDO. De sus 74 titulares,
+    cerca de la mitad son personas: Ramón Ferreyros, Andrea Ferreyros y sobre
+    todo el EX-MINISTRO Eduardo Ferreyros (TPP, exportaciones, Dakar). Regla:
+    descartar si el titular contiene `ministro/ramon/andrea/eduardo ferreyros`,
+    SALVO que también nombre a Ferreycorp/Unimaq/Motored. Efecto medido:
+    FERREYC1 baja de 152 a 129 titulares nombrados.
+
+    TRES TÉRMINOS EVALUADOS Y RECHAZADOS, con la medición:
+      - `inland energy` NO es Luz del Sur: es otra empresa (Majes II, Gobierno
+        Regional de Arequipa). 4 titulares, todos ajenos.
+      - `caterpillar` es la marca que Ferreycorp DISTRIBUYE, no Ferreycorp.
+      - `bolivar` (0 hits), `opal` (0 hits) y `casino` (2 hits, y es también
+        casa de juego): no pagan el riesgo.
+    UN TÉRMINO VERIFICADO Y ACEPTADO: `mass` (InRetail) parecía riesgoso; se
+    inspeccionaron los 17 titulares que no nombran otra marca y TODOS son la
+    cadena de descuento (competencia con Tambo+, Tiendas 3A, Ahorra Food Depot).
+    El ancla de la query ya acota el corpus, así que la bandera puede ser más
+    permisiva que la query.
+    NOTA: `pacasmayo` a secas es seguro AQUÍ aunque no lo sea en la query — la
+    bandera opera sobre un corpus YA anclado por `(Pacasmayo AND (cemento OR ...))`.
+
+    DOS JUICIOS DE CONTENIDO DEL AUTOR, REVERSIBLES:
+      1. Se INCLUYEN las MATRICES: `credicorp` para BCP e `intercorp` para
+         InRetail. Coherente con la Parte 1 (el activo es la filial, la ventana
+         es el grupo). Si se decide que la matriz no cuente, se quitan.
+      2. Se INCLUYEN las HERMANAS de BCP (`prima afp`, `pacifico seguros`): son
+         de Credicorp pero no del banco. Son 21 titulares, así que el efecto es
+         despreciable; se incluyen por consistencia con (1).
+
+    HALLAZGO COLATERAL A RESOLVER (barato): `yape` son 607 titulares, el SEGUNDO
+    término más frecuente del corpus de BCP, y NO ESTÁ EN LA QUERY — entraron de
+    rebote porque el cuerpo menciona al BCP. Si existen titulares de Yape cuyo
+    cuerpo nunca nombra al banco, hoy se pierden. Se resuelve con UN `story_count`
+    de MediaCloud (una llamada, gratis) antes de la corrida definitiva. Lo mismo
+    aplica a Plaza Vea / Real Plaza / InkaFarma en INRETC1.
+
+    LÍMITE DECLARADO: los estratos de la validación son n=58 nombrados y n=420
+    anónimos, con 37 y 9 relevantes. El TAMAÑO DEL EFECTO es enorme (30x en
+    relevancia, 5x en precisión) y por eso se cree, pero los intervalos son
+    anchos y así debe ir a la tesis. Marcar en vez de filtrar es la mitigación
+    de ese límite, no un adorno.
+
+    REPRODUCIBLE: el análisis vive en la sesión del 2026-08-30; las cifras se
+    regeneran cruzando data/raw/news_*.parquet con
+    data/interim/validacion_humana/muestra_r5_anotar.xlsx y
+    data/interim/d16_v21_gemma3_12b.csv.
+
+    ────────────────────────────────────────────────────────────────────────
+    ADDENDUM (2026-08-30) — ¿HAY QUE AMPLIAR LA QUERY CON LAS MARCAS?
+    scripts/probe_mc_marcas.py, colección Perú Nacional 2012-2025
+    ────────────────────────────────────────────────────────────────────────
+    El diccionario de la bandera incluye marcas que NO están en la query. Se
+    midió cuánto traerían si se añadieran (`marca AND NOT (query vigente)`), y
+    qué fracción de cada marca aparece junto al nombre de la empresa.
+    CONTROL QUE VALIDA EL PROBE: `Plaza Vea` e `InkaFarma` YA están en la query
+    de INRETC1 y dan 0 fuera de ella, como debe ser.
+        marca          sola   fuera query   ~descargable   % ligado a la empresa
+        Yape         26,355      +23,954        ~12,400          15.5%
+        Real Plaza    7,951       +7,344         ~3,800           7.6%
+        Nicolini      2,114       +2,079         ~1,070           1.7%
+        Prima AFP     2,592       +2,264         ~1,170          13.6%
+        Mibanco       1,841       +1,173           ~610          40.1%
+        Mina Justa    1,148       +1,006           ~520          27.4%
+        Marcobre        478         +403           ~210          15.7%
+    EL FACTOR ~0.5: la query de CREDITC1 devuelve 19,437 en la colección pero el
+    corpus descargado son 10,029. La diferencia es el `source_allowlist`
+    (gestion.pe, elcomercio.pe, larepublica.pe) más la deduplicación: sobrevive
+    el 51.6%. Todo "fuera de la query" hay que escalarlo por ahí.
+    CÓMO SE LEE EL `% ligado`: los artículos que nombran la marca Y la empresa YA
+    ESTÁN en el corpus (la query matchea el nombre en el CUERPO). Ampliar la
+    query añade exactamente el complemento — el material donde la marca aparece
+    SIN la empresa. Un `% ligado` bajo no tranquiliza: mide cuánto del material
+    nuevo nunca menciona al emisor.
+
+    DECISIÓN: NO SE AMPLÍA LA QUERY. Con una excepción condicionada.
+      - `Yape` NO. No es por relevancia (los 5 Yape de la muestra anotada dan 4
+        `marketing_promocion` y 1 `operacional`, y ese 20% es COTA SUPERIOR
+        porque entraron mencionando al BCP). Es porque BCP YA ES EL 51.4% DEL
+        CORPUS: sumarle ~12,400 lo llevaría a ~70% del total de los 7 activos y
+        AGRAVA LA HETEROGENEIDAD DE COBERTURA, que D11 declaró como el riesgo
+        principal del canal. Se pagarían 12,400 llamadas de LLM para empeorar el
+        problema que el proyecto está tratando de resolver.
+      - `Real Plaza` NO, pero queda anotado como hueco real: los malls son uno de
+        los tres segmentos de InRetail. El 92.4% de sus artículos no nombra a la
+        empresa y son referencias de UBICACIÓN ("evento en el Real Plaza de X"),
+        el mismo problema que `Pacasmayo` provincia.
+      - `Mina Justa` + `Marcobre` es el ÚNICO caso limpio: los 16 titulares que ya
+        están en el corpus son genuinamente de la empresa (financiamiento,
+        construcción, producción), y MINSURI1 tiene el corpus MÁS CHICO (921), así
+        que +520 artículos REDUCE la heterogeneidad en vez de agravarla.
+        PERO SE POSPONE, por un costo que no se había considerado: los pesos
+        Hájek de las 550 anotaciones se calcularon sobre el corpus ACTUAL. Si
+        MINSURI1 crece 56%, la muestra deja de representar a esa población y las
+        estimaciones ponderadas de ese activo quedan viciadas. La anotación es el
+        activo más caro del proyecto (cerró el BLOQUEANTE #1) y no se rehace
+        barato.
+        Y HAY OTRA VÍA PARA EL MISMO PROBLEMA, YA EN MARCHA: los Hechos de
+        Importancia. Esta decisión es MÁS BARATA DESPUÉS de la anotación de
+        materialidad que antes: si los hechos cubren a Minsur, no hay que tocar
+        nada; si no, se re-descarga MINSURI1 y se re-pondera.
+
+    UNA LECCIÓN QUE VALE MÁS QUE LA DECISIÓN: `Nicolini` da 2,114 artículos en la
+    colección con solo 1.7% ligado a Alicorp — es el APELLIDO de la familia. Eso
+    invita a quitarlo del diccionario de la bandera, y sería un ERROR: en el
+    CORPUS YA ANCLADO de ALICORC1 hay 3 titulares con `nicolini` y los 3 son la
+    marca de harina. UN TÉRMINO SE JUZGA CONTRA EL CORPUS DEL ACTIVO, NO CONTRA
+    LA COLECCIÓN. Es la misma asimetría de `pacasmayo` y `mass`, y por eso la
+    bandera puede ser más permisiva que la query. Queda documentado en
+    src/sentiment/emisores.py para que nadie lo "arregle".
+
+[X] D18. HECHOS DE IMPORTANCIA DE LA BVL COMO SEGUNDA FUENTE DE R5 — MEDIDOS
+    Y NO ADOPTADOS (2026-08-31). Anotación del autor, a ciegas, 140/140 filas.
+    EXPEDIENTE COMPLETO: docs/materialidad_hechos_R5.txt
+    REPRODUCIBLE: python scripts/evalua_materialidad_hechos.py
+
+    VEREDICTO CONTRA EL CRITERIO PRE-REGISTRADO (fijado el 2026-08-29, antes de
+    ver los datos, en el docstring del script):
+        (1) heterogeneidad < 6.0x            :   6.4x   NO CUMPLE
+        (2) FERREYC1 triplica                :   2.9x   NO CUMPLE
+        (2) CPACASC1 triplica                :   2.1x   NO CUMPLE
+        (3) filtro de rutina sin materiales  :    15    NO CUMPLE
+
+    LO QUE NO ES EL PROBLEMA: la calidad de la fuente. La tasa de materialidad
+    poblacional es 53.4% ±10.2pp contra 7.2% ±2.8pp de la prensa — los hechos
+    son SIETE VECES más densos en señal. El problema es que no arreglan lo que
+    se les pidió: la heterogeneidad entre activos.
+
+    DÓNDE FALLÓ LA ESTIMACIÓN PREVIA. El expediente estimaba 2.9x de
+    heterogeneidad y Pacasmayo con 26.8 hechos/año (7.9x). Lo medido: 6.4x y 4.3
+    hechos/año (2.1x). ERRABA POR MÁS DEL DOBLE en la métrica principal y por 6x
+    en el activo del que más se esperaba. LA PRE-REGISTRACIÓN HIZO SU TRABAJO:
+    frenó una adopción que parecía obvia y estaba mal fundada. Es la práctica que
+    hay que conservar, no la conclusión.
+
+    DOS PROBLEMAS DEL CRITERIO, DECLARADOS Y NO USADOS PARA RESCATAR NADA:
+      - EL (3) ESTÁ MAL ESPECIFICADO. De los 15 "materiales perdidos", CATORCE
+        son `A_resultados` (EEFF) — y el mismo documento dice, escrito antes de
+        anotar, que los EEFF ya son el known_date de fundamentales en R4 y que
+        alimentarlos como sentimiento sería DOBLE CONTEO, "hay que declararlo y
+        excluirlos". El criterio cuenta como fallo la exclusión deliberada. Es un
+        choque entre dos reglas del mismo día, no un poste movido. Da igual para
+        el veredicto: (1) y (2) fallan solos.
+      - EL CRITERIO NO ES ROBUSTO. Dos filas marcadas con `duda` por el anotador
+        —las escrituras públicas— voltean dos de los tres umbrales:
+            etiquetado                        heterog.  FERREYC1  CPACASC1
+            BASE (como se anotó)                 6.4x      2.9x      2.1x
+            escrituras = el acto que formalizan  5.7x      3.3x      2.3x
+        Y hay una asimetría incómoda: EL CRITERIO PREMIA EL ETIQUETADO
+        INCORRECTO (por palabra clave pasa; por materialidad falla).
+        LO ROBUSTO, que no depende de ningún juicio de borde: CPACASC1 NO
+        TRIPLICA BAJO NINGÚN ETIQUETADO RAZONABLE (2.1x-2.5x).
+
+    LO QUE NUNCA SE MIDIÓ, Y ES DONDE LOS HECHOS SÍ SIRVEN. El criterio midió
+    COBERTURA. No midió FECHA — que tras la anotación es la única de las tres
+    ventajas declaradas que sobrevive (el código oficial resultó poco fiable:
+    fila 107, código L21 "Emisiones de valores" para un reporte mensual de
+    tenedores de ADRs; y el 14% de los hechos es texto mudo).
+    PROPUESTA REDUCIDA, DIFERIDA: usar los hechos NO como fuente de eventos sino
+    como ANCLA DE FECHA — el hecho es la primera divulgación obligatoria, la
+    prensa posterior sobre el mismo evento es eco por construcción. Ataca a la
+    vez la prensa tardía y el eco (D19). NO SE HACE AHORA: es medible como un
+    brazo más DESPUÉS de que exista el panel, y ahí sale mucho más barato.
+
+    >> DATO POSTERIOR QUE NO CAMBIA LA DECISIÓN PERO HAY QUE ANOTAR (2026-09-01).
+       Al terminar la corrida completa de R5, la heterogeneidad REAL de la prensa
+       resultó ser 9.2x (63.5 eventos/año de CREDITC1 contra 6.9 de CPACASC1), no
+       la 16.8x estimada con la que se construyó el criterio. Y el volumen total
+       fue de 2,237 eventos etiquetados contra los ~1,387 presupuestados.
+       O SEA: EL PROBLEMA QUE LOS HECHOS VENÍAN A RESOLVER ERA LA MITAD DE GRANDE
+       DE LO QUE SE CREÍA. Con 9.2x de partida, el umbral de "<6x" habría sido
+       otra conversación.
+       LA DECISIÓN NO SE REABRE, y el motivo es de método: el criterio se
+       pre-registró ANTES de ver los datos precisamente para que no se ajustara
+       después. Cambiarlo ahora porque el punto de partida resultó distinto es
+       exactamente lo que la pre-registración existe para impedir. Lo que sí
+       corresponde es DECLARARLO: si en el futuro se reabre la pregunta, el punto
+       de comparación correcto es 9.2x medida, no 16.8x estimada.
+
+    LO QUE SE LLEVA LA ANOTACIÓN AUNQUE LA FUENTE NO SE ADOPTE: las cinco
+    observaciones del anotador, verificadas una por una en
+    docs/materialidad_hechos_R5.txt §5. La más importante para el trabajo que
+    sigue es la 5.2 (materialidad antes que palabra clave), que fija un criterio
+    reutilizable: un acto NOTARIAL no es el evento, y fecharlo ahí sitúa la señal
+    meses después de que el mercado se enteró — el mismo error que ya se rechazó
+    al decidir no re-fechar las noticias tardías.
+
+[ ] D19. EL EJE DE NOVEDAD / ETAPA DEL EVENTO — planteado por el AUTOR el
+    2026-08-31 ("una noticia de anuncio de una compra no es igual que una
+    noticia de la compra; para el momento de la compra el impacto ya pasó").
+    ABIERTA, con propuesta barata. NO BLOQUEA LA CORRIDA.
+
+    EL PROBLEMA. La taxonomía clasifica el TIPO de evento y es MUDA sobre si el
+    evento es NUEVO. Medido en el arco de Luz del Sur: 7 titulares entre enero y
+    octubre de 2019, TODOS `A_ma_reestructuracion`, TODOS magnitud 1.0.
+        2019-02-25  "Sempra iniciará proceso de venta"   <- +43% viene después
+        2019-10-15  "CTG oficializa compra"              <- 10 sesiones tarde,
+                                                            precio ya retrocedido
+    Mismo peso. El segundo no tiene información que operar.
+
+    LA TAXONOMÍA NO ESTÁ MAL: ESTÁ MUDA. Contesta "¿de qué tipo es?", nunca
+    prometió contestar "¿esto es nuevo?". La separación fue deliberada en D11 (el
+    LLM clasifica el tipo, tarea objetiva; el autor fija la magnitud, auditable).
+    La NOVEDAD no es ninguna de las dos: no es propiedad del tipo de evento, es
+    propiedad de LA HISTORIA DE LA SERIE. Por eso no cabe en el esquema actual.
+
+    LO QUE YA FUNCIONA, Y CONVIENE VER ANTES DE INVENTAR NADA. Las EWMA de tres
+    escalas YA cargan la novedad de forma IMPLÍCITA: un evento nuevo llega sobre
+    una base baja, un eco llega sobre una base alta porque los titulares
+    anteriores no decayeron. La red ve el evento Y el nivel previo, así que EN
+    PRINCIPIO puede distinguirlos. El diseño no ignora el problema; lo deja
+    implícito y caro de aprender.
+    EL COSTO REAL, ENTONCES, NO ES UN ERROR DE ETIQUETADO: es ruido en un régimen
+    con pocos datos (0.9 a 14 eventos por activo-año). Es caro, no es fatal.
+
+    PROPUESTA (barata, determinista, en R6, sin LLM):
+      columna `dias_desde_ultimo_evento_misma_categoria` por activo. Hace
+      EXPLÍCITO lo que hoy está implícito en la base de la EWMA. Entra como brazo
+      de ablación en R8, igual que la bandera de D17 y las 18 columnas de D15.
+      Costo: aritmética sobre el panel. Cero LLM, cero re-descarga.
+
+    LO QUE NO SE HARÍA: pedirle al LLM la ETAPA del evento (rumor / anuncio /
+    confirmación / cierre). Es exactamente el campo condicional que D16 acaba de
+    probar DOS VECES y falló las dos, con deriva sistemática verificada sobre 456
+    titulares held-out. Ese camino está medido y cerrado.
+
+    SE DECIDE DESPUÉS DE LA CORRIDA, con el panel en la mano. Registrarlo ahora
+    es lo que evita que se pierda; implementarlo ahora sería más afinación previa
+    de un canal que todavía no se ha probado ni una vez.
+
+[X] D20. FECHA DE CONOCIMIENTO DE LOS FUNDAMENTALES: LAG POR ACTIVO + BANDERA
+    — planteada por el ASESOR ("dependiendo del volumen de casos, quizás lo
+    mejor era eliminar la señal en lugar de que el agente tenga la info con
+    semanas de rezago, lo que podría introducir ruido y desestimar la señal de
+    fundamentales en general"). MEDIDA Y DECIDIDA el 2026-09-01.
+
+    ────────────────────────────────────────────────────────────────────────
+    LO QUE APARECIÓ AL MEDIR: UNA REGRESIÓN POR CAMBIO DE UNIVERSO
+    ────────────────────────────────────────────────────────────────────────
+    Al revisar si el problema ya estaba resuelto (riesgos §3a decía que sí) se
+    REPRODUJO EL BARRIDO ORIGINAL y coincide exacto sobre el universo con el que
+    se calibró — o sea la medición de julio era correcta:
+        universo VIEJO (n=109):  lag 40d ->  4/109 ( 3.7%) look-ahead
+        + INRETC1     (n=130):   lag 40d -> 25/130 (19.2%) look-ahead
+    INRETC1 entró DESPUÉS (reemplazó a SAGAC1 en la decisión de universo de
+    jul-2026) y su comportamiento de presentación nunca se revalidó contra la
+    constante. 21 de los 25 casos son InRetail, repartidos en los 8 años: NO son
+    prórrogas de emergencia, es que presenta a 43-47d cuando el resto va a ~30d.
+    En todo el tramo 2012-2017 su fundamental entraba al panel ~5-7 días ANTES
+    de lo que habría entrado en la realidad. Mismo patrón que el config.yaml que
+    seguía diciendo gemma3:4b: cambió la configuración, la constante calibrada
+    no se re-verificó.
+
+    ────────────────────────────────────────────────────────────────────────
+    LA COBERTURA NO ES ALEATORIA — Y ESE ES EL PUNTO DEL ASESOR
+    ────────────────────────────────────────────────────────────────────────
+        2005-2017      0% con fecha real
+        2018          46%       2019-2024  ~96%       2025  75%
+    Proyectado sobre el split walk-forward 70/15/15:
+        train  2012-01-02 -> 2021-10-18   32.5% real ·  67.5% fallback
+        val    2021-10-18 -> 2023-11-20   93.8% real
+        test   2023-11-20 -> 2025-12-31   85.2% real
+    LA VARIABLE SIGNIFICA COSAS DISTINTAS EN TRAIN Y EN TEST. No es ruido
+    aleatorio: es un cambio de régimen alineado con el split.
+    Retraso que introduce el fallback (donde hay fecha real para comparar):
+        mediana 10d · media 10.4d · >14d en 24.6% · >28d en 7.8%
+
+    ────────────────────────────────────────────────────────────────────────
+    DECISIÓN — TRES PIEZAS
+    ────────────────────────────────────────────────────────────────────────
+    (a) LAG DE FALLBACK POR ACTIVO (`_calibra_lag`). Máximo lag NORMAL observado
+        de ese mismo emisor + 5d de colchón (el mismo criterio con que se eligió
+        40 sobre 35), excluyendo las prórrogas COVID documentadas, y NUNCA por
+        debajo del global. DIRECCIÓN SEGURA: alargar solo retrasa (diluye),
+        acortar adelanta (contamina el backtest); ante la duda se alarga.
+        Con menos de 4 observaciones no calibra — un máximo sobre 2-3 puntos no
+        es una cota, es ruido.
+        Resultado por activo:
+            CREDITC1 40/60 (global)   MINSURI1 41/60   ALICORC1 41/60
+            CPACASC1 40/60 (global)   FERREYC1 40/60   LUSURC1  41/60
+            INRETC1  52/66   <- la corrección grande
+        LOOK-AHEAD MEDIDO: 26/207 (12.6%) -> 4/207 (1.9%). InRetail 22 -> 0.
+        Los 4 residuales son 2020Q1 y 2020Q2 de ALICORC1 y LUSURC1: son
+        EXACTAMENTE las prórrogas COVID que `_calibra_lag` excluye a propósito,
+        y son CONTRAFACTUALES (esos periodos tienen fecha real y la usan).
+
+    (b) BANDERA `known_date_real` en FUNDAMENTALS_SCHEMA, propagada hasta el
+        panel (pivot de compute_ratios y compute_shares_earnings) y expuesta en
+        la vista `mercado_fundamentales`. Sin ella el cambio de régimen es
+        invisible y la ablación que lo mide no se puede correr.
+
+    (c) NO SE ELIMINA LA SEÑAL — pero la propuesta del asesor QUEDA COMO BRAZO
+        DE ABLACIÓN pre-registrado (NaN-ear los fundamentales donde
+        `known_date_real == 0`), para decidirla con datos.
+
+    ────────────────────────────────────────────────────────────────────────
+    POR QUÉ NO SE ELIMINA (el argumento contra, cuantificado)
+    ────────────────────────────────────────────────────────────────────────
+    1. ELIMINAR VACÍA EL TRAIN, NO EL TEST. El train pasaría de 231 periodos a
+       75. El agente casi no vería fundamentales entrenando y luego se evaluaría
+       en un test donde SÍ están y bien fechados. Se cambiaría un desajuste de
+       régimen por uno MAYOR: un modelo que nunca aprendió a usar el canal,
+       juzgado sobre datos donde el canal funciona. Y la ablación de R8 —que es
+       la que decide si los fundamentales valen— quedaría sesgada en contra por
+       construcción.
+    2. EL DAÑO DEL RETRASO DEPENDE DE CÓMO SE USA LA VARIABLE. Como NIVEL (roe,
+       roa, debt_ratio, forward-filled) un corrimiento de 10d sobre una función
+       escalón de ~90d deja ~11% de los días con el valor del trimestre
+       anterior; "cuál es el ROE de esta empresa" no cambia en 10 días. Como
+       EVENTO/sorpresa destruiría la alineación. EL PANEL LOS USA COMO NIVELES,
+       así que el retraso DILUYE, no destruye.
+    3. EL LOOK-AHEAD ES OTRA COSA y no se le aplica ese argumento: contamina el
+       backtest y no lo salva ninguna consideración de "señal lenta". Por eso
+       (a) no es una disyuntiva sino un arreglo.
+
+    LÍMITE DECLARADO: el fallback sigue siendo optimista en trimestres con
+    prórroga de emergencia dentro del tramo 2012-2017 (El Niño Costero 2017,
+    Res. 014-2017-SMV/01), donde no hay ground truth para calibrar. Es raro,
+    acotado al warm-up y no afecta la evaluación OOS.
+
+    REPRODUCIBLE: la calibración se imprime por activo al correr
+    scripts/gen_fundamentals.py --force.
+
+[X] D21. MVP DE EXTREMO A EXTREMO — CERRADA (2026-09-03): SÍ, PERO SIN TOCAR
+    EL TRAMO DE PRUEBA.
+    >> NOTA DEL 2026-09-12: la DECISIÓN sigue en pie tal cual, pero TODAS LAS
+       CIFRAS del piloto se rehicieron sobre el panel corregido. Las que
+       aparecen más abajo en esta entrada son las de la corrida EN CUARENTENA
+       y se conservan por trazabilidad, NO como resultado vigente. Las
+       vigentes están en docs/resultados_entorno_OE1.txt y en la sección
+       EVENTO DE DATOS de este mismo documento.
+    DECISIÓN DEL AUTOR: construir primero algo operativo de OE1 a OE3 —entorno,
+    agente entrenado, evaluación— antes de seguir refinando insumos, porque el
+    mejor diagnóstico son resultados finales. Se adopta.
+    RIESGO QUE INTRODUCE, y por qué NO es menor: si el piloto se usa para tomar
+    decisiones de diseño, esas corridas SON pruebas y tendrían que entrar al
+    contador del Sharpe deflactado (D10). Un MVP sin disciplina destruye
+    exactamente el argumento de honestidad que sostiene la evaluación.
+    REGLA ADOPTADA (barata y estándar): **EL MVP NO TOCA EL TRAMO DE PRUEBA.**
+    Se entrena y se diagnostica sobre train+validación únicamente. El test
+    queda virgen para la corrida definitiva, que ocurre después de congelar el
+    pre-registro. Con eso el piloto no cuesta nada en credibilidad.
+    ALCANCE DEL MVP (deliberadamente flaco): vista `solo_mercado`, recompensa
+    DSR, PPO, 3 semillas, baselines 1/N y buy&hold, un solo pliegue. Todo lo
+    demás —las otras 3 vistas, los brazos V0/V1, SAC, la banda nula, el resto
+    de baselines— es expansión sobre la misma tubería.
+    LOS RESULTADOS DEL MVP NO SON HALLAZGOS. Se registran como diagnóstico de
+    plomería. Cualquier cifra que salga de acá lleva esa etiqueta.
+
+========================================================================
+ACTA — REUNIÓN CON ESPECIALISTA DE MERCADO (2026-09-02)
+------------------------------------------------------------------------
+Material presentado: BVL_DRL_sesion_especialista.pptx (22 láminas) y
+docs/propuesta_funcion_riesgo_OE1.txt. Registro a partir de las notas del
+autor. CRITERIO: la palabra del especialista TIENE PESO PERO NO ES LEY. Cada
+punto se anota con lo que se adopta, lo que se matiza, y por qué.
+
+A. LO QUE CONFIRMÓ — cierra decisiones
+  A1. No negociar en días sin negociación ("si nadie quiere jugar, no juega").
+      -> cierra D8.
+  A2. Caja remunerada a la tasa del banco central / 365. -> cierra D9.
+  A3. El 1/N es "casi invencible" si no hay costos. -> confirma el baseline
+      central de D10 y da urgencia al requisito de equidad de frecuencias.
+  A4. Función objetivo: Sharpe, que considera retorno y riesgo. Descarta el
+      Sortino ("es para hedge funds, para apalancarse"). -> ENMIENDA D4.
+  A5. Luz del Sur "está casi muerto", pero como el trabajo es académico y es
+      historia, es aceptable. -> el activo se queda. Se añade una verificación
+      barata: si el modelo de costos funciona, el peso medio del agente en
+      LUSURC1 debe tender a cero. Convierte una limitación en una prueba de que
+      el entorno no está roto.
+  A6. Fundamentales pueden no tener alto impacto. -> coherente con el orden de
+      la lámina 10; no cambia nada, refuerza la ablación.
+
+B. LO QUE APORTÓ Y SE ADOPTA
+  B1. "Casi el 70% del mercado BVL lo explican factores externos."
+      -> se MIDE en vez de citarse. Ver sección C.
+  B2. Índices externos como factores: S&P 500, MSCI China, MSCI emergentes, y
+      MEDIAS MÓVILES de esos índices. Análisis técnico fuerte en corto plazo.
+      -> se adoptan como CANDIDATOS y pasan por el mismo tamiz que mató al oro
+      y al estaño (probe_macro_exposicion.py, Newey-West, factores a t−1).
+      El rezago de un día no es concesión: el NYSE cierra después de la BVL y
+      ya está medido que la BVL reacciona con un día de rezago.
+      OJO: DXY es probablemente casi colineal con macro_tc_usdpen; se mide el
+      aporte incremental, no se agregan los dos a ciegas.
+  B3. Fundamentales: SOLO IMPORTA LA SORPRESA. "La data fundamental es
+      relevante únicamente cuando va en contra de lo esperado: se esperaba 2% y
+      subió 10%." Sugirió indicadores de cambio grande contra la media móvil.
+      -> SE ADOPTA, y ataca una debilidad YA DECLARADA en la lámina 6 (los
+      fundamentales entran como NIVEL arrastrado). Sin consenso de analistas,
+      la sorpresa se construye con modelo de series de tiempo: camino aleatorio
+      estacional (mismo trimestre del año anterior) más deriva, y
+      sorpresa = (real − esperado)/σ. Es el SUE clásico. Cambia la FORMA de la
+      señal: de escalón de 90 días a PICO fechado en known_date, que es como el
+      mercado la consume. No exige re-descargar nada.
+  B4. Ratios por tipo de empresa: P/E y ROE para empresas generales; P/B y ROA
+      para financieras.
+      -> SE ADOPTA con un matiz. Verificado en el código: compute_ratios YA
+      calcula roe, roa, net_margin, debt_equity, debt_ratio, y `patrimonio` ya
+      viene del SMV, así que el P/B es una línea en build_dataset (market cap ÷
+      patrimonio, con el conteo híbrido de acciones existente). MATIZ: BCP es
+      el ÚNICO financiero de los siete. Codificar "si es financiero usa P/B" es
+      una regla con n=1 que no se puede validar. Se calculan LOS CUATRO ratios
+      para todos, más una bandera `es_financiero`, y decide la ablación. La
+      intuición sectorial es correcta; el que la aplique debe ser el agente.
+  B5. Baselines: índice de Perú y ETF de Perú. -> adoptados en D10.
+  B6. Costos: bid/ask como DOS VECTORES DE PRECIO en vez del promedio, más una
+      comisión por operación del orden de 0.4%. -> ver sección D y D7.
+  B7. Acceso a la data de Bloomberg (terminal físico en la universidad).
+      -> ver sección E.
+
+C. LO QUE SE MIDIÓ EN VEZ DE CITARSE (2026-09-03)
+  El "70%" NO necesita Bloomberg: el co-movimiento sale del panel que ya
+  existe. PCA sobre los retornos de los 7 (scripts/mide_comovimiento_oe1.py):
+      frecuencia                        n      PC1      PC1+PC2
+      diaria, todas las filas         3,320   29.7%     43.1%
+      semanal (viernes)                 731   35.5%     49.3%
+      mensual                           168   45.1%     58.3%
+      diaria, solo días con los 7        328   44.9%     57.4%
+  Correlación media por pares: 0.229. Verificación interna: con 7 activos
+  equicorrelacionados a ρ=0.229, PC1 ≈ (1+6ρ)/7 = 33.9%, consistente con lo
+  medido. El factor común de la BVL para ESTE universo es ~30% diario y ~45%
+  mensual, NO 70%. El patrón creciente con el horizonte es el sesgo clásico por
+  negociación no sincrónica.
+  HALLAZGO COLATERAL (entró a D8): solo 9.3% de las fechas tienen a los 7
+  activos transando el mismo día.
+  PASO 2 A MEDIAS, se reporta como está: R² contra las 5 series BCRP da 0.1-3.5%
+  contemporáneo y 1.8-11.9% rezagado un día (PC1: 11.9%). Que el rezago supere
+  al contemporáneo es consistente con el rezago de un día ya medido, pero puede
+  ser artefacto de la especificación rápida: cuando un activo no cotiza varios
+  días, su ret_1d acumula varios días contra un cambio macro de uno solo. NO ES
+  DEFINITIVO; la medición buena va por probe_macro_exposicion.py con Newey-West
+  y el alineamiento corregido.
+  LECTURA DIRECCIONAL, que es la que importa para el diseño: hay un factor
+  común de 30-45% y las series actuales explican como mucho ~12%. Ese hueco es
+  donde vivirían el S&P 500 y el MSCI EM (B2), o es flujo local (AFP, no
+  residentes) que ninguna fuente pública muestra. Las dos respuestas son
+  publicables.
+
+D. DONDE SE MATIZA AL ESPECIALISTA
+  D-i.  SHARPE vs SORTINO. Su argumento literal es incorrecto (el Sortino es
+        desviación a la baja, no tiene relación con apalancamiento). La
+        conclusión se adopta igual, por razones mejores. Ver D4.
+  D-ii. "DOS VECTORES DE PRECIO". Comprar al ask y vender al bid es
+        MATEMÁTICAMENTE IDÉNTICO a operar al mid cobrando medio spread por
+        lado, que es lo que ya hace la propuesta. El giro es menor de lo que
+        parece. LO QUE DE VERDAD FALTA es la SERIE DE TIEMPO del spread: un
+        snapshot constante subestima el costo justo en el estrés (2020, 2021),
+        que es cuando el agente quiere operar. Ese, y no "dos vectores", es el
+        argumento para ir a Bloomberg.
+  D-iii. EL 0.4%. Verificado: no es exagerado, es el centro del rango retail
+        publicado (Renta 4 cobra 0.43%). El error era del asistente, no suyo:
+        la grilla hasta 400 pbs estaba mal compuesta. Ver D7.
+  D-iv. HORIZONTE LARGO. Aclarado por el autor: era una PREDICCIÓN DE
+        COMPORTAMIENTO, no una regla a imponer al agente. Con eso la colisión
+        entre economía (rotar poco) y estadística (un agente mensual tiene ~168
+        decisiones en 14 años, insuficiente para entrenar) se disuelve: se
+        mantiene decisión diaria con banda, y el horizonte largo EMERGE del
+        costo. Ver F.
+  D-v.  "LOS SPREADS TAMBIÉN LOS TENDRÍA QUE DECIDIR EL AGENTE" — ambiguo. Si
+        es "decidir considerando el spread", es el diseño actual. Si es
+        "elegir cómo ejecutar" (límite vs mercado), es una tesis de ejecución
+        que exige libro de órdenes L2 inexistente para 2012-2025. SE DECLARA
+        FUERA DE ALCANCE. Pendiente de desambiguar con él.
+
+E. BLOOMBERG — COMPLEMENTA, NO SUSTITUYE
+  El acceso es un terminal físico en la universidad: sesiones escasas. Riesgo
+  real: hoy el pipeline es 100% reproducible desde fuentes públicas y eso es
+  una contribución DECLARADA; Bloomberg típicamente no permite redistribución.
+  REGLA: un volcado único a parquet, con fecha documentada, NUNCA una
+  dependencia viva. Prioridad estricta de la visita:
+    1. PX_BID y PX_ASK diarios, 2012-2025, los 7 tickers. Es lo ÚNICO
+       irreemplazable y lo que cambia el resultado central.
+    2. PROBAR PRIMERO CON UN SOLO TICKER: si no hay histórico de puntas para
+       nombres ralos de Lima, el plan cambia, y mejor saberlo en el minuto 5.
+    3. Índice local con retorno total (baseline de D10, hoy no lo tenemos).
+    4. EQY_SH_OUT para validar el conteo híbrido de acciones.
+    5. Preguntar las reglas de redistribución para la tesis.
+  Dimensionamiento: 7 tickers × 4 campos × ~3,500 días ≈ 98,000 puntos; el
+  add-in de Excel tiene topes, priorizar bid/ask.
+  LOS ÍNDICES EXTERNOS NO REQUIEREN BLOOMBERG: se consiguen gratis y el
+  proyecto ya usa esa vía.
+  ADR (BAP, CPAC): se MANTIENE la exclusión del universo transable (forma
+  precio en Nueva York y BAP es Credicorp, el holding, no BCP). Pero el ADR es
+  un FEATURE legítimo: cotiza después del cierre de la BVL, así que su retorno
+  del día t es público antes de la apertura de t+1 — causal por construcción.
+  Se mide el lead-lag BAP→CREDITC1 con el mismo tamiz. NO BLOQUEA NADA; entra
+  como brazo extra si el cronograma lo permite.
+
+F. PREDICCIÓN PRE-REGISTRADA DEL ESPECIALISTA (2026-09-02)
+  Se registra ANTES de entrenar, con fecha, para poder contrastarla:
+  "Bajo estos costos, el comportamiento óptimo será de horizonte largo y baja
+  rotación."
+  CONTRASTE: se mide el periodo medio de tenencia y la rotación efectiva del
+  agente entrenado. Si coincide, es evidencia externa de que el entorno está
+  bien calibrado. Si el agente rota a diario, o el modelo de costos está mal o
+  encontró algo que hay que explicar. Pre-registrar la predicción de un
+  practicante y contrastarla es raro en esta literatura y no cuesta nada.
+
+G. LO QUE NO SE ADOPTA
+  G1. Corpus de prensa INTERNACIONAL. Por su propio argumento ya llega por
+      precio (y así estaba decidido en la lámina 5). Construirlo es un corpus
+      nuevo, otra corrida de LLM y otra validación: meses. Va a trabajo futuro.
+  G2. Modelar la ejecución / libro de órdenes (ver D-v).
+  G3. Reemplazar el panel de mercado por Bloomberg (ver E).
+
+[X] D22. ESCALA DE EXPLORACIÓN — CERRADA (2026-09-03): log_std_init = −2,
+    ent_coef = 0, Y SE CALIBRA POR ROTACIÓN, NO POR DESEMPEÑO.
+    >> NOTA DEL 2026-09-12: RE-MEDIDA sobre el panel corregido y la conclusión
+       queda INTACTA — es la tabla que menos se movió (determinista 1.60 vs
+       1.57; log_std=0 -> 206.07 vs 205.92; log_std=-2 -> 31.51 vs 31.49), y
+       tiene sentido: mide el peaje del RUIDO de una red sin entrenar, que no
+       depende de si las fechas están bien alineadas. Las cifras de DESEMPEÑO
+       que aparecen más abajo sí cambiaron; ver EVENTO DE DATOS.
+    SALE DEL PILOTO DE D21, que es exactamente para lo que servía.
+
+    EL PROBLEMA, medido y no supuesto. En un espacio de acción de SÍMPLEX el
+    ruido gaussiano de PPO se aplica a los logits, y con el defecto de SB3
+    (log_std_init = 0, σ = 1) eso re-sortea la asignación completa en CADA paso:
+        política determinista, sin entrenar   ->  rotación   1.57 / año
+        política estocástica, log_std_init= 0 ->  rotación 205.92 / año
+                              log_std_init=−1 ->  rotación  84.19 / año
+                              log_std_init=−2 ->  rotación  31.23 / año
+    O sea: el agente pasa el entrenamiento pagando un peaje gigantesco que NO
+    produce su acción media sino el ruido. El gradiente no puede atribuirlo a mu,
+    así que no hay por dónde aprender a no rotar. Consecuencia observada:
+    entrenar EMPEORÓ la política determinista, de rotación 1.57 a 43.48, con
+    −19.7% de retorno mediano en validación contra +11.9% del 1/N.
+    NO era un defecto del entorno (los tests de conservación siguen exactos) ni
+    evidencia sobre la BVL: era la parametrización de la exploración.
+
+    LO QUE SE PROBÓ (40k pasos, pliegue 0, una semilla; diagnóstico, no hallazgo):
+      configuración          rot. estocástica   rot. tras 40k   ret.    sharpe
+      defecto                     205.92            21.87       −8.7%   −1.02
+      log_std=−2, ent_coef=0       31.23             4.53       +8.4%   +0.67
+      gSDE + log_std=−2            63.42            26.12      −12.9%   −1.80
+    gSDE FALLÓ y se descarta: su ruido dependiente del estado resulta de MAYOR
+    magnitud efectiva acá (63 contra 31), no menor. Se anota porque la hipótesis
+    era razonable y la medición la contradijo.
+
+    EL CRITERIO DE CALIBRACIÓN, y es la parte que importa para la honestidad:
+    la escala de exploración se elige por la ROTACIÓN de la política estocástica
+    frente a la determinista, NUNCA por el retorno o el Sharpe. Un
+    hiperparámetro elegido mirando el desempeño en validación es selección
+    encubierta y tendría que entrar al contador de D10. Elegido por un criterio
+    de comportamiento que no mira el resultado, no lo es.
+    RESIDUO DECLARADO: con log_std=−2 la política estocástica todavía rota 31
+    veces al año contra 1.96 del 1/N. Está en el orden correcto pero no resuelto.
+
+    NO ALCANZÓ. Corrida corregida (150k pasos, 3 semillas, pliegue 0, validación):
+        semilla 0  ret  4.5% | sharpe 0.31 | maxDD −11.2% | rot 8.98 | caja 12.6%
+        semilla 1  ret  4.2% | sharpe 0.28 | maxDD −11.4% | rot 9.09 | caja 12.3%
+        semilla 2  ret  4.6% | sharpe 0.32 | maxDD −11.3% | rot 9.28 | caja 12.9%
+        mediana    ret  4.5% | sharpe 0.31 |                rot 9.09
+      contra 1/N diario: ret 11.9%, sharpe 0.90, rot 1.96.
+    DOS LECTURAS, y la segunda cambia el diagnóstico:
+      (1) MÁS ENTRENAMIENTO EMPEORÓ EL RESULTADO. A 40k pasos: rot 4.53, ret
+          +8.4%, sharpe 0.67. A 150k: rot 9.09, ret +4.5%, sharpe 0.31. Y las
+          tres semillas coinciden al decimal, así que NO es suerte: el
+          aprendizaje empuja SISTEMÁTICAMENTE hacia rotar más.
+      (2) EL AGENTE NO ENCUENTRA PEORES SEÑALES: PAGA MÁS PEAJE POR LAS MISMAS.
+          Costo medido sobre este pliegue: 1.1% del capital por unidad de
+          rotación anual (1/N diario: rot 1.96 -> S/40,285 = 2.24%).
+          Descomposición aproximada, lineal en la rotación:
+             1/N diario   neto 11.9% + costo 2.2%  => bruto ~14.1%
+             agente       neto  4.5% + costo ~10.0% => bruto ~14.5%
+          El bruto es prácticamente el mismo. TODA la diferencia está en el
+          peaje: el agente rota 4.6 veces más para llegar al mismo lugar.
+          CAVEAT: la descomposición usa un costo por unidad de rotación medido
+          sobre el 1/N; si el agente concentra su rotación en los nombres caros
+          (Luz del Sur 323 pbs, BCP 268) su costo real es MAYOR y su bruto
+          también. Se declara como aproximación, no como medición del bruto.
+    CONSECUENCIA: el problema ya no es la exploración —eso quedó resuelto— sino
+    que la política no tiene forma barata de expresar "no operar". Cada paso
+    produce un vector de pesos objetivo nuevo, y quedarse quieto exige que la
+    red reproduzca exactamente su salida anterior, lo cual es un accidente y no
+    un estado alcanzable.
+
+    SI NO ALCANZA — OPCIÓN ESTRUCTURAL, PENDIENTE DE DECISIÓN DEL AUTOR: que la
+    acción sea un AJUSTE sobre los pesos actuales en vez de un objetivo
+    absoluto. Entonces "no hacer nada" es el punto natural de la política, el
+    ruido perturba el CAMBIO y no la posición, y la parametrización queda
+    alineada con la economía ya decidida (la banda de D7 y la predicción
+    pre-registrada del especialista sobre baja rotación). Cambia la semántica de
+    D2, así que es decisión y no implementación.
+
+========================================================================
+CIERRE DEL PILOTO DE D21 (2026-09-03) — QUÉ QUEDÓ RESUELTO Y QUÉ NO
+------------------------------------------------------------------------
+>> CIFRAS EN CUARENTENA (marcado el 2026-09-12). Todo lo numérico de esta
+   sección se midió sobre el panel que iba un día rancio. Se conserva por
+   trazabilidad —nada se borra— pero NO es resultado vigente. Las cifras
+   vigentes están en la sección EVENTO DE DATOS y en
+   docs/resultados_entorno_OE1.txt. Las lecturas CUALITATIVAS (1) a (4) de
+   abajo SÍ sobrevivieron a la corrección; lo que cambió son los números.
+
+Corrida con la acción relativa de D2 enmendada (150k pasos, 3 semillas,
+pliegue 0, validación; PPO, log_std=−2, ent_coef=0, vista solo_mercado, DSR):
+
+  configuración de la acción   rot/año   retorno   sharpe   maxDD    caja
+  absoluta (softmax)              9.09     +4.5%     0.31   −11.3%   12.6%
+  RELATIVA (delta)                2.01     −2.2%    −0.53    −7.0%   64.9%
+  1/N diario (referencia)         1.96    +11.9%     0.90   −10.2%      —
+
+1. LA ENMIENDA DE D2 FUNCIONÓ EN LO QUE APUNTABA. La rotación cae de 9.09 a
+   2.01, en línea con el 1.96 del 1/N. El agente dejó de quemar el bruto en
+   peaje. El drawdown también mejora (−7.0% contra −10.2% del 1/N).
+
+2. APARECIÓ UN COMPORTAMIENTO NUEVO: 64.9% en caja (mediana; las semillas van
+   de 39.8% a 67.3%). NO es el artefacto de arranque declarado en D2 —ese
+   explicaría ~4% de caja media, no 65%—: el agente ELIGE la caja.
+
+3. Y ELIGE BIEN. Los baselines sobre los DOS tramos del pliegue 0:
+       tramo                      1/N diario   solo caja   maxDD del 1/N
+       train 2013-01..2018-10       1.65%/año   2.63%/año      −46.5%
+       val   2018-11..2019-11      11.91%/año   1.88%/año      −10.2%
+   En su tramo de entrenamiento LA CAJA LE GANÓ A LA RENTA VARIABLE en retorno
+   Y en drawdown. Con una recompensa que penaliza volatilidad, quedarse en caja
+   es la respuesta CORRECTA a lo que el agente vio. La validación resultó ser el
+   tramo más favorable de los seis de la partición (percentil 78 de las
+   ventanas de un año; ver resultados §6.1) y esa política quedó mal parada.
+   [Corregido el 2026-09-26: decía "el mejor año de la década", que es falso.]
+   >> El agente no falló: train y val son REGÍMENES OPUESTOS.
+
+4. CONSECUENCIAS QUE SÍ SON DECISIONES:
+   (a) REPORTAR UN SOLO PLIEGUE SERÍA ENGAÑOSO. Los tres pliegues de D10 dejan
+       de ser una mejora metodológica y pasan a ser un requisito: con estos
+       datos, cualquier conclusión de un pliegue único mide el régimen, no al
+       agente.
+   (b) D9 QUEDA VALIDADA POR LA VÍA INCÓMODA. Como la caja rinde, el agente
+       encontró la estrategia que de hecho ganó en su tramo. Si la caja rindiera
+       cero, el entorno le habría escondido la respuesta correcta y lo habría
+       forzado a la renta variable. Era exactamente el argumento de D9.
+   (c) LA EVALUACIÓN TIENE QUE PODER PREMIAR "SALIRSE DEL MERCADO". Si el
+       criterio de éxito es solo "supera al 1/N", un agente que acierta al no
+       invertir durante 2013-2018 se registra como fracaso. El criterio
+       pre-registrado de D10 ya compara contra caja, pero conviene decirlo
+       explícito: en este universo, estar afuera es una posición legítima y en
+       buena parte del horizonte fue la ganadora.
+   (d) VARIANZA ENTRE SEMILLAS: el peso en caja va de 39.8% a 67.3%. Cuando la
+       política decide algo casi binario (dentro o fuera del mercado), la
+       dispersión entre semillas se traduce en dispersión de retorno. Refuerza
+       el mínimo de 10 semillas y el reporte por mediana e intercuartil.
+
+NADA DE ESTO ES UN HALLAZGO. Es el piloto de D21: un pliegue, una vista, una
+recompensa, tres semillas, y sobre VALIDACIÓN. El registro marca con_test = 0.
+
+========================================================================
+PRIMERAS MEDICIONES DEL ENTORNO (2026-09-03) — BASELINES, NO AGENTE
+------------------------------------------------------------------------
+>> CIFRAS EN CUARENTENA (marcado el 2026-09-12). Mismo motivo que la sección
+   anterior. Para referencia, así se movieron los baselines del horizonte
+   completo al corregir el panel:
+       1/N diario sin costo   34.4% -> 32.8%
+       1/N diario             10.2% ->  8.5%
+       1/N trimestral         24.9% -> 21.0%
+       comprar y mantener      4.9% ->  0.7%
+       solo caja              40.5% -> 40.5%   (no depende del panel)
+   LAS CUATRO LECTURAS DE ABAJO SE MANTIENEN TODAS: el costo se come ~24
+   puntos, la frecuencia óptima es interior, la caja le gana a todo, y el
+   1/N mensual queda por debajo de la mediana de la banda nula.
+
+Salida de `scripts/smoke_env_oe1.py` sobre el panel real, 2013-01 a 2025-12
+(3,261 días evaluados; el entorno arranca tras el calentamiento de D6 y después
+de que los 7 activos coticen — InRetail sale a bolsa el 2012-10-05).
+NO son resultados del agente y no consumen nada del contador de D10: son hechos
+sobre los datos y las políticas de referencia, todos deterministas.
+
+  estrategia              ret.total  sharpe   maxDD  rot/año    costo S/
+  1/N diario  sin costo      34.4%    0.05  -44.9%     2.47           0
+  1/N diario  con costo      10.2%   -0.05  -46.5%     1.18     368,117
+  1/N semanal con costo      19.3%   -0.01  -45.6%     0.88     234,747
+  1/N mensual con costo      21.3%   -0.00  -45.6%     0.56     134,564
+  1/N trimestral             24.9%    0.01  -44.8%     0.37      86,572
+  comprar y mantener          4.9%   -0.09  -44.6%     0.08      16,230
+  solo caja                  40.5%    0.00     0.0%    0.00           0
+
+  banda nula, 60 carteras aleatorias con asignación fija:
+     rebalanceo mensual   p5   3.4% | mediana 25.6% | p95 56.1%
+     sin rebalanceo       p5 -13.4% | mediana  6.3% | p95 41.9%
+
+CUATRO LECTURAS, y ninguna es cosmética:
+
+  1. EL COSTO SE COME 24 PUNTOS. El 1/N diario pasa de 34.4% a 10.2%: S/368,117
+     sobre S/1.8 MM, o sea 20% del capital inicial en peaje a lo largo de 13
+     años. El aguijón deja de ser una advertencia y pasa a ser una medición.
+
+  2. LA FRECUENCIA ÓPTIMA ES INTERIOR, y eso contesta la P1 del especialista con
+     datos: diario 10.2% < semanal 19.3% < mensual 21.3% < trimestral 24.9%,
+     pero comprar y mantener cae a 4.9%. O sea SÍ hay prima por rebalancear
+     —el 1/N trimestral le saca 20 puntos a no hacer nada— y el costo se la come
+     entera si se rebalancea a diario. La predicción pre-registrada del
+     especialista (sección F del ACTA) ya se cumple para los BASELINES; queda
+     ver si también para el agente.
+
+  3. LA CAJA LE GANA A TODO. 40.5% contra 24.9% del mejor baseline de renta
+     variable, con drawdown 0% contra −45%. En 2012-2025, este universo rindió
+     menos que la tasa de referencia. Consecuencia de diseño: D9 no era un
+     detalle contable — si la caja no rindiera, el entorno le estaría escondiendo
+     al agente la única estrategia que ganó. Y la vara del agente no es 1/N: es
+     "¿le gana a estar en el banco?".
+
+  4. LA BANDA NULA CAZÓ ALGO QUE 1/N SOLO NO MUESTRA. El 1/N mensual (21.3%)
+     está POR DEBAJO de la mediana de las carteras aleatorias (25.6%). El "rival
+     casi invencible" ni siquiera es mediano en este universo, porque las
+     carteras Dirichlet reparten sobre 8 casillas e incluyen caja —y la caja fue
+     lo que ganó—. Justifica por sí sola haber puesto la banda nula en D10.
+
+DEFECTO PROPIO CORREGIDO EN EL CAMINO (se anota, no se poda): la primera versión
+de la banda nula re-sorteaba los pesos cada 21 días y daba una mediana de −60%.
+Eso no medía la suerte de la asignación: medía el costo de rotar la cartera
+entera doce veces al año. Un null mal armado hace ver bien a cualquier cosa. El
+sorteo va ahora en la ASIGNACIÓN y la frecuencia la fija el entorno, igual que
+para todo baseline.
+
+========================================================================
+EVENTO DE DATOS (2026-09-12) — EL PANEL IBA UN DÍA RANCIO
+------------------------------------------------------------------------
+No es una decisión: es un DEFECTO DE DATOS que sobrevivió a R3-R6 completos
+y que obligó a rehacer todas las cifras del piloto. Se registra acá porque
+condiciona cómo se lee D21 y D22, y porque la lección es reutilizable.
+
+EL HALLAZGO. El endpoint /v1/stock-quote/share-values de la BVL etiqueta
+cada cierre con el SIGUIENTE DÍA DE NEGOCIACIÓN. No es parseo nuestro: la
+API devuelve cadenas ISO sin ambigüedad.
+
+    2ª vuelta de 2021 — Alicorp, mismo precio, etiqueta distinta
+      Bloomberg     2021-06-04  6.82     2021-06-07  5.79   (−15.1%)
+      share-values  2021-06-07  6.82     2021-06-08  5.79
+
+CÓMO SE DETECTÓ: contrastando contra Bloomberg. Correlación de retornos
+2013-2025, panel contra PX_LAST: 0.02-0.13 sin corregir, 0.88-0.98
+corrigiendo, en los siete activos.
+
+POR QUÉ IMPORTA:
+  (a) NO ES LOOK-AHEAD, ES LO CONTRARIO. El panel iba rancio; con la
+      ejecución en t+1 de D13, el rezago efectivo era de DOS días. El
+      agente resolvía un problema MÁS DIFÍCIL que el real. Tranquilizador
+      para la validez (los resultados no estaban inflados), pero igual los
+      invalidaba como medición.
+  (b) CONTAMINABA TODO JOIN ENTRE FUENTES. Macro, sentimiento y
+      fundamentales se unen por `date`; si mercado iba corrido y los otros
+      no, todas las alineaciones cruzadas estaban mal por un día.
+  (c) TOCA A D13. El hallazgo "la BVL reacciona con UN DÍA de rezago"
+      (memoria project_macro_factores_validacion; ACTA §C, R² rezagado
+      11.9% > contemporáneo 3.5%) se usó para respaldar D13 y HAY QUE
+      RE-MEDIRLO: si el panel iba un día tarde, un factor macro en t−1 que
+      "explicaba" el retorno en t estaba explicando el de t−1, o sea era
+      CONTEMPORÁNEO. D13 no se reabre —su argumento principal es la
+      ejecutabilidad, no el rezago— pero pierde uno de sus respaldos hasta
+      que se re-mida.
+  (d) TOCA A D8 en la letra chica: `is_stale` / `is_no_trade` describían el
+      día anterior al que etiquetaban.
+
+POR QUÉ SOBREVIVIÓ A TODAS LAS VALIDACIONES, y es la parte reutilizable:
+todas las validaciones de R3 eran INTERNAS (rectangularidad, huecos,
+continuidad, reconciliación BVL/Yahoo). Ninguna podía detectarlo, porque un
+panel corrido un día es perfectamente consistente CONSIGO MISMO. Hizo falta
+una fuente EXTERNA con fechas confiables.
+
+  REGLA QUE SE ADOPTA: toda serie temporal que entre al panel desde una API
+  sin documentación de su convención de fechas se contrasta contra una
+  segunda fuente POR CORRELACIÓN DE RETORNOS y con una PRUEBA DE EVENTO
+  (una fecha donde se sabe que pasó algo grande), no solo por niveles.
+
+Es el caso más grave del patrón de feedback_deriva_decidido_implementado.
+
+CORRECCIÓN Y REVALIDACIÓN (2026-09-12): `corrige_etiqueta_bvl` en
+src/market/market_client.py, con colchón de 10 días para no perder el
+primer día del rango. R3 y R6 regenerados (R4 y R5 NO: el etiquetado LLM no
+depende de la fecha de la BVL). Criterio pre-registrado corr > 0.85:
+7/7 PASAN. Prueba de evento: el desplome de la 2ª vuelta cae ahora el LUNES
+2021-06-07 en Alicorp (−15.1%), BCP (−9.8%) y Ferreycorp (−15.3%).
+Cinco tests en tests/test_desfase_fecha_bvl.py, con datos reales y una
+guarda para que el test principal no pueda volverse trivialmente cierto.
+
+EFECTO SOBRE LAS CIFRAS. Las conclusiones CUALITATIVAS sobrevivieron todas.
+Las cifras cambiaron, y el agente MEJORÓ:
+
+    acción RELATIVA (mediana de 3 semillas, pliegue 0, validación)
+                        cuarentena   corregido    cambio
+      retorno              −2.2%       +2.6%      +4.8 pp
+      sharpe               −0.53       +0.18      +0.70
+      maxDD                −7.0%       −4.2%      +2.8 pp
+      rotación              2.01        1.97      −0.04
+
+Su drawdown (−4.2%) pasó a ser el MEJOR de la tabla, menos de la mitad que
+el del 1/N. La acción ABSOLUTA casi no se movió (+4.5% → +3.8%), lo que
+refuerza que la mejora no es ruido. LO QUE NO CAMBIÓ: el agente sigue sin
+ganarle al 1/N en ese tramo (+2.6% contra +11.9%).
+
+CUARENTENA Y CONTADOR DE D10. Las 16 corridas previas al 2026-09-12 quedan
+en cuarentena; el registro las distingue con el campo `panel` dentro de
+`resultado` (no dentro de `config`, así que no altera el hash). NO se
+cuentan como configuraciones nuevas, y el argumento es que D2 y D22 se
+decidieron por criterios de COMPORTAMIENTO (rotación), no de desempeño, así
+que esas corridas no constituyen selección sobre el resultado. Si algún día
+se decide contarlas, la marca permite hacerlo.
+Estado al 2026-09-12: 28 corridas · 4 configuraciones distintas · con_test 0.
+
+
+========================================================================
+TRABAJO DEL 2026-09-12 — LO QUE SE IMPLEMENTÓ (no son decisiones nuevas)
+------------------------------------------------------------------------
+Se registra para que no vuelva a pasar lo de "decidido y no implementado".
+
+(1) VISTAS SEPARADAS — RESUELVE EL BLOQUEANTE DE R8. Hasta hoy
+    `mercado_sentimiento` y `mercado_fundamentales` incluían macro adentro,
+    así que comparar contra `solo_mercado` medía el aporte de DOS canales y
+    lo atribuía a uno. Ahora cada brazo de la ablación agrega UN SOLO canal;
+    las combinadas (mercado_macro_sentimiento, etc.) quedan aparte para
+    medir interacción. src/env/features.py, constante VISTAS_ABLACION.
+
+(2) FORMA DE LA SEÑAL FUNDAMENTAL — IMPLEMENTA EL ACTA §B3. Nuevo módulo
+    src/env/fundamental_shape.py (16 tests). Trece columnas:
+      sue_<col>              sorpresa estandarizada. Camino aleatorio
+                             estacional con deriva. REZAGO 4 para series
+                             trimestrales puras (roe, net_margin) y 1 para
+                             las TTM (eps_ttm, net_income_ttm), que ya están
+                             desestacionalizadas por construcción.
+      fund_dist_ma4_<col>    distancia a la media de los 4 trimestres
+                             ANTERIORES (excluye el actual a propósito).
+      pico_sue_<col>         la sorpresa solo el primer día bursátil desde
+                             la publicación: convierte el escalón de 90 días
+                             en el PICO FECHADO que pedía el acta.
+    CAUSALIDAD: la sorpresa de q usa trimestres ESTRICTAMENTE anteriores, y
+    hay un test de venda en los ojos (recalcular truncando el futuro y
+    exigir el mismo valor).
+    DOS COSAS QUE SALIERON AL IMPLEMENTAR, y se anotan:
+      * con sigma≈0 no hay escala contra la cual estandarizar; se emite 0 en
+        vez de un infinito. Decidido y testeado, no accidental.
+      * el 23% de los `known_date` reales cae en sábado, domingo o feriado.
+        La primera versión exigía coincidencia EXACTA y perdía uno de cada
+        cuatro anuncios, y no al azar sino según el calendario. Corregido:
+        el pico se dispara el primer día bursátil desde la publicación.
+    FALTA el P/B del acta §B4: necesita `patrimonio` desde R4.
+    VALIDACIÓN BLANDA: las mayores sorpresas del panel son eventos
+    reconocibles (Alicorp Q4-2014 −5.99, la pérdida por derivados; Minsur
+    2015 −9.52; Pacasmayo Q2-2020 −3.76).
+
+(3) ÍNDICES EXTERNOS — IMPLEMENTA PARCIALMENTE EL ACTA §B2. Entraron
+    macro_spx (S&P 500) y macro_msci_em, gratis vía yfinance, cobertura 100%
+    en 2011-2025. NO entran MSCI China (probable colinealidad con
+    macro_cobre) ni DXY (casi colineal con macro_tc_usdpen).
+    CAUSALIDAD, y es el punto delicado: el NYSE cierra DESPUÉS que la BVL,
+    así que SPX(d) no está disponible al cierre de la BVL en d. Pero por D13
+    la observación de d se EJECUTA al cierre de d+1, y para entonces SPX(d)
+    lleva ~18 horas siendo público. El rezago ya está en el reloj del
+    entorno y no hace falta duplicarlo. Este argumento NO depende del
+    hallazgo del rezago que quedó en revisión: depende solo del horario.
+    FALTA MEDIR SU APORTE con el mismo tamiz que descartó al oro y al
+    estaño (Newey-West, aporte incremental). Hasta entonces están en el
+    panel pero no justificados.
+
+(4) R7 ACREDITADO. El documento de tesis pide "curvas de entrenamiento;
+    modelos almacenados". Hasta hoy se entrenaba con verbose=0 y sin
+    model.save(): el agente existía pero R7 no se acreditaba. Ahora cada
+    corrida guarda su curva de recompensa y su modelo .zip.
+    OJO AL LEER LA CURVA: con random_start los episodios tienen largo
+    variable, así que la recompensa ACUMULADA mezcla "qué tan bien le fue"
+    con "cuán largo fue". La comparable es la recompensa POR PASO.
+    LO QUE MOSTRÓ: con acción absoluta entrenar EMPEORA la política (las
+    tres semillas caen), que es D22 vista durante el entrenamiento y no
+    inferida del resultado. Y las curvas NO llegan a meseta a 150k pasos
+    (3 de 6 siguen subiendo) -> ver D25.
+
+(5) BRAZO CONDICIONAL DE D15(c) DEFINIDO. Las 18 columnas (ALTO vs RESTO ×
+    3 polaridades × 3 escalas) ya están en el panel y ahora tienen vista
+    propia (`mercado_sentimiento_18`). NO SE CORRE por defecto: D15(c) dice
+    que esa resolución se compra SOLO si el canal de 9 muestra señal.
+    SE VERIFICÓ que el canal primario implementado son exactamente las 9
+    columnas de D15(b), ni una más. No hay deriva acá.
+
+
+[ ] D23. ESQUEMA DE VENTANA DE ENTRENAMIENTO — ABIERTA. Planteada por el
+    ASESOR (2026-09-11): si el mercado cambia de régimen, la data vieja deja
+    de describir el presente.
+
+    LO PRIMERO, PARA DESPEJARLO: la estructura por pliegues YA estaba
+    contemplada e implementada (D10, src/env/folds.py, 2026-09-03). El
+    esquema actual ES `train → val → train → val → train → val` deslizándose,
+    y el primer entrenamiento ya ocupa 44.7% del periodo utilizable, muy
+    cerca del ~50% que propuso. Esa parte ya está adoptada.
+
+    LO QUE SÍ QUEDA ABIERTO es más fino, y es probablemente lo que el asesor
+    señala de verdad:
+      EXPANDING (lo implementado)  el train siempre arranca en 2013 y crece.
+      ROLLING   (la alternativa)   ventana de largo FIJO que descarta lo viejo.
+    El argumento del cambio de régimen es, literalmente, el argumento a favor
+    de rolling.
+
+    VIABILIDAD: TRIVIAL. Implementado como `walk_forward(..., train_len=N)`,
+    con 4 tests y SIN cambiar el default (uno de los tests es una guarda
+    contra esa deriva). Lo que cuesta no es el código: es la data. En el
+    pliegue 2 el rolling descarta 1,008 de 2,465 días (40.9%), y ~3,260 días
+    utilizables es el recurso escaso de este problema.
+
+    LA PREGUNTA CONVERTIDA EN MEDICIÓN (no cuesta contador de D10: son
+    estadísticos del panel, no estrategias entrenadas):
+
+      pliegue  vol VAL  vol exp  vol rol  corr VAL  corr exp  corr rol  más cerca
+      0         0.238    0.243    0.243     0.066     0.170     0.170   idéntico*
+      1         0.439    0.252    0.264     0.255     0.148     0.151   rolling
+      2         0.225    0.286    0.304     0.018     0.181     0.182   expanding
+      * empate por construcción: la ventana móvil se define con el largo del
+        propio entrenamiento del pliegue 0.
+
+    LECTURA: NO HAY EVIDENCIA DE QUE LA VENTANA MÓVIL AYUDE EN ESTE PANEL.
+    El pliegue 1 la favorece pero por poco, y lo que importa ahí es otra
+    cosa: su validación tiene vol 0.439 contra 0.252-0.264 de CUALQUIERA de
+    las dos ventanas. Es pandemia + Castillo, y ningún tramo pasado se le
+    parece, así que recortar no lo arregla. El pliegue 2 favorece a
+    expanding. El argumento del asesor es teóricamente correcto, pero acá el
+    cambio de régimen es tan grande que descartar datos no acerca el
+    entrenamiento al objetivo: solo lo empobrece.
+
+    RECOMENDACIÓN, PENDIENTE DE DECISIÓN DEL AUTOR:
+      1. mantener `expanding` como primario (es lo que se haría en la
+         práctica: reentrenar con todo lo conocido);
+      2. dejar `rolling` como brazo de robustez, ya implementado y testeado;
+      3. PRE-REGISTRAR la elección ANTES de correr. Elegir entre las dos
+         mirando cuál da mejor validación sería selección encubierta —misma
+         lección de D22— y tendría que entrar al contador de D10;
+      4. atacar el régimen donde sí se puede: reportando LOS TRES PLIEGUES y
+         con features que lo describan, no recortando historia.
+
+    COSTO SI SE QUIERE EVIDENCIA EMPÍRICA y no solo estructural: los dos
+    esquemas × 3 pliegues son 18 corridas (~25 min) y 6 configuraciones
+    distintas más en el contador.
+
+    DETALLE DE LA ESTRUCTURA QUE CONVIENE TENER PRESENTE, y aplica a los dos
+    esquemas: el TEST de un pliegue termina siendo TRAIN de los siguientes.
+    Medido: el train del pliegue 2 incluye el 100% del test del pliegue 0.
+    NO es fuga hacia el futuro (entrenar con 2019-2021 para predecir
+    2023-2025 es legítimo y es lo que uno haría), pero implica que
+    (i) los tres resultados de prueba NO son independientes —los IC salen de
+    las SEMILLAS, no de los pliegues— y (ii) EL ORDEN IMPORTA: una vez que
+    se mira el test del pliegue 0, cambiar el diseño contamina los otros dos.
+    En la práctica: se congela el pre-registro UNA VEZ y se corren los tres
+    seguidos.
+
+
+[ ] D24. CONDICIÓN INICIAL DEL EPISODIO — ABIERTA. Salió al graficar la
+    trayectoria, no al mirar la media, y matiza la lectura de D21.
+
+    EL PORTAFOLIO ARRANCA 100% EN CAJA, y con la acción relativa el agente
+    solo puede moverse 5 pp por paso. La serie empieza en ~90-99% y baja
+    monótonamente durante todo el año:
+
+      modo    semilla  caja MEDIA  primer mes  último mes  último día
+      delta      0       62.2%       96.2%       27.8%       24.5%
+      delta      1       70.6%       98.8%       33.6%       32.8%
+      delta      2       58.5%       89.4%       37.4%       35.5%
+      logits   0/1/2   ~13%          ~17%        ~13%        ~13%
+
+    O sea el "62% en caja" está DOMINADO POR EL CAMINO DE ENTRADA, no por
+    una preferencia de estado estacionario. El agente no se queda en caja:
+    TARDA en salir de ella. Con acción absoluta no hay camino de entrada
+    porque el softmax fija el objetivo directo — por lo tanto LA COMPARACIÓN
+    "13% vs 62% de caja" ENTRE LOS DOS MODOS NO ES LIMPIA: mezcla velocidad
+    de entrada con preferencia.
+
+    NO REFUTA la lectura de D21 (en el tramo de entrenamiento la caja
+    efectivamente le ganó a la renta variable: 2.63%/año contra 1.45%/año,
+    con drawdown 0% contra −46.4%), pero obliga a MEDIRLA DE OTRA FORMA.
+    DOS OPCIONES, y es decisión del autor:
+      (i)  comparar el ESTADO ESTACIONARIO (último tercio del tramo) en vez
+           de la media del episodio; o
+      (ii) arrancar el episodio ya invertido en 1/N, para que la caja sea una
+           DECISIÓN y no una CONDICIÓN INICIAL.
+    La (ii) es más limpia conceptualmente pero cambia el entorno, así que es
+    ENMIENDA DE D2 y no implementación.
+
+    DATO COLATERAL: con el panel corregido las tres semillas convergen mucho
+    más (terminan entre 24.5% y 35.5%, un rango de 11 puntos; con el panel en
+    cuarentena iban de 1.1% a 47.8%, 47 puntos). La política se volvió más
+    estable, que es otra señal de que el panel anterior metía ruido.
+
+
+[ ] D25. PRESUPUESTO DE PASOS DE ENTRENAMIENTO — ABIERTA. Sale de las curvas
+    de R7, que antes no se registraban.
+
+    LAS CURVAS NO LLEGAN A MESETA A LOS 150k PASOS: en 3 de 6 corridas el
+    último 10% de la curva sigue por encima del 10% anterior. El indicador
+    que pide el documento de tesis para R7 es "convergencia estable de las
+    curvas de recompensa en al menos 3 semillas por algoritmo": los
+    ARTEFACTOS de R7 ya existen, su INDICADOR todavía no.
+
+    EL CRITERIO PARA SUBIRLO, Y ES LA PARTE QUE IMPORTA: se decide mirando
+    LA MESETA DE LA CURVA DE ENTRENAMIENTO, que es un criterio de
+    comportamiento, NUNCA el Sharpe en validación, que sería selección
+    encubierta y entraría al contador de D10. Misma lógica que D22.
+
+    ────────────────────────────────────────────────────────────────────────
+    MEDIDO EL 2026-09-18 — 10 SEMILLAS, 1,000,000 DE PASOS, PLIEGUE 0
+    `scripts/d25_presupuesto.py` · 117 min · vista solo_mercado
+    ────────────────────────────────────────────────────────────────────────
+    El resultado es NEGATIVO y es de los más informativos que dio el proyecto.
+
+    (1) LA MESETA EXISTE Y ESTÁ LEJOS DE 150k. Nueve de diez semillas hacen
+        meseta; la mediana cae en ~750k pasos. O sea el diagnóstico original
+        era correcto: a 150k el agente estaba subentrenado.
+
+    (2) LA CURVA DE ENTRENAMIENTO SUBE EN LAS DIEZ SEMILLAS. La recompensa DSR
+        por paso pasa de negativa en el primer tramo a claramente positiva al
+        final (la semilla 7, de -0.005 a +0.249). El agente aprende su
+        objetivo, y cada vez mejor.
+
+    (3) Y SIN EMBARGO LA VALIDACIÓN EMPEORA EN NUEVE DE DIEZ SEMILLAS.
+        Mediana del retorno en validación por presupuesto:
+
+          pasos        ret     vol   sharpe    maxDD    rot    caja   costo S/
+          150,000    +3.0%    4.8%     0.30    -3.5%   1.91   68.0%    31,066
+          300,000    +1.0%    5.6%    -0.05    -5.6%   2.95   60.1%    47,352
+          600,000    +1.9%    7.5%     0.04    -6.0%   4.46   48.4%    72,112
+        1,000,000    +1.4%    6.8%    -0.01    -6.4%   5.18   53.6%    82,699
+
+        Solo 1 de 10 semillas termina mejor de lo que empezó (y esa empata).
+
+    (4) EL MECANISMO ESTÁ IDENTIFICADO Y NO ES MISTERIOSO: **LA ROTACIÓN CASI
+        SE TRIPLICA** (1.91 -> 5.18 al año) y el costo con ella (S/31k ->
+        S/83k, +166%). El drawdown empeora MONÓTONAMENTE (-3.5% -> -6.4%).
+        Cuanto más optimiza el DSR sobre 2013-2018, más opera — y en la BVL
+        operar es justamente lo que no se puede pagar.
+
+        >> ES D22 OTRA VEZ, PERO POR EL OTRO LADO. En D22 la rotación venía
+           del RUIDO DE EXPLORACIÓN y se arregló con log_std. Acá viene de la
+           POLÍTICA APRENDIDA, y no hay hiperparámetro que la arregle: es lo
+           que el objetivo pide. El sobreajuste en este problema NO se
+           manifiesta como una curva de validación que se despega despacio:
+           se manifiesta como ROTACIÓN.
+
+    (5) LA DISPERSIÓN ENTRE SEMILLAS NO BAJA. Rango 8.4% -> 7.9%, desviación
+        estándar 2.4% -> 2.4% con 6.7x más cómputo. Y la correlación de rangos
+        entre checkpoints consecutivos es +0.64 / +0.75 / +0.41: cada semilla
+        conserva su lugar. NO ES RUIDO DE ENTRENAMIENTO QUE SE PROMEDIA: cada
+        semilla converge a SU política y se queda ahí. Refuerza el mínimo de
+        10 semillas de D10 y el reporte por mediana e intercuartil.
+
+    ────────────────────────────────────────────────────────────────────────
+    LA TENSIÓN QUE ESTO CREA, Y HAY QUE RESOLVERLA ANTES DE CORRER
+    ────────────────────────────────────────────────────────────────────────
+    El criterio pre-registrado de D25 —la meseta de la curva— elige ~750k
+    pasos. La evidencia descriptiva dice que a 750k el agente es PEOR fuera de
+    muestra que a 150k. Los dos hechos son ciertos y apuntan al revés.
+
+    LO QUE **NO** SE PUEDE HACER: elegir 150k porque valida mejor. Eso es
+    entrenar cuatro configuraciones y quedarse con la que gustó, sin pagarlo
+    en el contador. Es exactamente la lección de D22.
+
+    LO QUE SÍ SE PUEDE, y es la propuesta: **PARADA TEMPRANA POR ROTACIÓN,
+    MEDIDA SOBRE TRAIN.** Se detiene el entrenamiento cuando la rotación anual
+    de la política DETERMINISTA sobre el TRAMO DE ENTRENAMIENTO supera un
+    techo fijado de antemano (candidato natural: la rotación del 1/N diario,
+    ~1.97, que es el rival de referencia y no un número inventado). Es un
+    criterio de COMPORTAMIENTO, se mide sobre train, no mira validación, y es
+    la misma lógica con que D22 calibró la exploración. Queda PROPUESTO, no
+    adoptado: hay que pre-registrarlo.
+
+    LA LECTURA DE FONDO, QUE ES LO PUBLICABLE: en este mercado **el DSR sobre
+    el tramo de entrenamiento no es un buen sustituto del desempeño fuera de
+    muestra**, y optimizarlo con más fuerza produce un agente que opera más y
+    gana menos. Eso no es un defecto de la implementación: es un resultado
+    sobre la interacción entre el objetivo, los costos de la BVL y una única
+    trayectoria histórica.
+
+    CONSECUENCIA PARA EL PLAN: subir el presupuesto NO es una vía de mejora.
+    La vía que queda abierta y sin explorar es la RECOMPENSA (D4 tiene los
+    brazos DDR y log-retorno neto decididos y nunca corridos), y ahí sí hay
+    una hipótesis concreta: la ventaja medida del agente es el DRAWDOWN, no el
+    retorno, y la DDR penaliza exactamente la semivarianza.
+
+
+[ ] D26. PARÁMETROS DEL BASELINE MARKOWITZ — ABIERTA. El baseline se
+    IMPLEMENTÓ el 2026-09-18 (era el faltante #7 de
+    docs/inconsistencias_documento_vs_implementacion.txt, el único de los tres
+    baselines del documento que no existía). El código está y tiene 14 tests;
+    lo que falta es PRE-REGISTRAR tres elecciones que el documento no fija y
+    que mueven el resultado.
+
+    POR QUÉ ES UNA DECISIÓN Y NO UNA IMPLEMENTACIÓN: un baseline mal
+    parametrizado es un rival de paja, y un rival de paja hace ver bien al
+    agente sin que el agente haya hecho nada. Es la misma lección que la banda
+    nula mal armada (que daba mediana -60% y hacía ver bien a cualquier cosa) y
+    que el requisito de equidad de frecuencias de D10. Un Markowitz elegido
+    después de ver cuál versión le conviene al agente NO es un baseline.
+
+    (a) LARGO DE LA VENTANA DE ESTIMACIÓN. Hoy 252 días (un año bursátil).
+        El E3 §2.2.4 dice "ventana móvil" y no fija el largo. Con 7 activos,
+        252 observaciones dan 28 obs por parámetro de media, que es poco pero
+        es lo estándar. Alternativas razonables: 500 (más estable, menos
+        reactiva) o 126 (más reactiva, más ruidosa).
+        CRITERIO PROPUESTO: fijar 252 por convención de la literatura y
+        reportar 126/500 como sensibilidad, NO elegir el que dé mejor número.
+
+    (b) REGLA DEL CASO DEGENERADO — la más importante de las tres. Si NINGÚN
+        activo tiene retorno esperado por encima de la tasa libre de riesgo, la
+        cartera tangente long-only NO EXISTE: el problema queda infactible.
+        Implementado: IR A CAJA. Es la respuesta de la teoría cuando el activo
+        sin riesgo domina a todos los riesgosos, y es coherente con D9.
+        NO ES UN CASO DE BORDE EN ESTE UNIVERSO: medido sobre 2013-2025 con
+        rebalanceo mensual, pasa 12 veces de 156 (7.7% del horizonte). La
+        alternativa —forzar la cartera menos mala— convertiría al baseline en
+        un hombre de paja justo en los tramos en que la caja gana, que son
+        buena parte del horizonte.
+        COLATERAL QUE VALE LA PENA REPORTAR: la media-varianza clásica también
+        recomienda salirse del mercado acá. Refuerza el punto de la sección
+        7.4(c) de resultados_entorno_OE1.txt —la evaluación tiene que poder
+        premiar estar afuera— con un argumento que no depende del agente.
+
+    (c) QUÉ BRAZOS ENTRAN AL CONTADOR DE D10. Están implementados tres:
+          tangencia               formulación literal del E3 §2.2.4
+          tangencia + Ledoit-Wolf mitigación que agregó D10
+          varianza mínima         no la pide el documento; contraste porque la
+                                  media muestral es el estimador inestable
+        Cada uno es una configuración distinta y degrada el Sharpe deflactado.
+        CRITERIO PROPUESTO: los dos primeros SIEMPRE (el documento compromete
+        el primero y D10 el segundo); varianza mínima solo si se reporta como
+        diagnóstico y no como rival.
+
+    LO QUE YA SE MIDIÓ, y no cuesta contador porque son baselines, no
+    estrategias entrenadas (rebalanceo mensual, costos del snapshot):
+
+      tramo                        tangencia   tang+LW   min-var   1/N mens.  caja
+      pliegue0 val 2018-11..19-11    +45.0%     +47.9%    +14.9%     +11.5%   +1.9%
+      horizonte 2013-2025            +14.8%     +31.0%    -11.7%     +17.2%  +40.5%
+      maxDD 2013-2025                -55.1%     -53.9%    -50.5%     -45.5%    0.0%
+      rotación/año 2013-2025           5.37       5.18      1.75       0.56    0.00
+
+    TRES LECTURAS:
+     1. NO ES UN RIVAL DE PAJA: sobre el horizonte completo le gana al 1/N
+        diario y pierde contra el 1/N mensual, con el PEOR drawdown de la
+        tabla. Es un baseline creíble y batible, que es lo que se quiere.
+     2. EL +45% DEL PLIEGUE 0 ES UNA APUESTA A UN ACTIVO, no una virtud del
+        método: 100% en INRETC1 durante meses (+26.3% en el tramo) y luego
+        rotación a LUSURC1 (+113.8%, la OPA de China Yangtze). VERIFICADO QUE
+        NO ES FUGA: ya pesaba LUSURC1 ANTES del salto del 2019-09-30, o sea es
+        impulso sobre la corrida previa al anuncio. Refuerza lo de siempre:
+        un solo pliegue mide el régimen.
+     3. SE CONCENTRA BRUTALMENTE (100% en un activo). Es propiedad real de la
+        media-varianza long-only sin tope de concentración. SE DECLARA; poner
+        un tope de peso elegido a mano sería otro parámetro sin pre-registrar.
+
+    SESGO DE ESTIMACIÓN MEDIDO, y no es del código: los días con precio
+    arrastrado dan retornos cero exactos y DEFLACTAN la volatilidad estimada.
+    Vol anualizada 2013-2025 con todo el calendario vs. solo días con precio
+    propio: MINSURI1 36.5% vs 45.7% (36.4% stale), CREDITC1 27.6% vs 35.5%
+    (39.5%), LUSURC1 27.1% vs 36.2% (44.1%), INRETC1 21.1% vs 21.5% (3.1%).
+    O sea el optimizador cree que el universo es menos riesgoso de lo que es, y
+    MÁS en los activos ilíquidos, que son justo los caros de operar. Afecta a
+    cualquiera que estime con estos precios, el agente incluido.
+
+    DÓNDE VIVE: src/env/policies.py::Markowitz · tests/test_markowitz.py
+    (14 tests, incluido el de venda en los ojos CON control).
+
+
+[X] D27. ESCALA DE LA SORPRESA FUNDAMENTAL — CERRADA (2026-09-18). Enmienda de
+    D6. Salió al auditar si las señales estaban realmente integradas para R8, y
+    es un defecto PROPIO: se anota, no se poda.
+
+    EL DEFECTO. `src/env/features.py` tenía una sola rama para todo lo que no se
+    re-estandariza:
+
+        if col in PASSTHROUGH or col.startswith(PASSTHROUGH_PREFIJOS):
+            block = np.nan_to_num(wide, nan=0.0)     # <- sin clip
+
+    O sea NO re-estandarizar y NO winsorizar se trataban como UNA decisión, y
+    son DOS. El argumento escrito —"la sorpresa ya viene estandarizada por su
+    propia sigma, volver a pasarle un z-score expanding la aplastaría"— es
+    correcto y sigue en pie. Pero de ahí NO se sigue que deba entrar sin acotar.
+
+    LO QUE ESO PRODUCÍA, medido sobre el panel real (vista completa, tras el
+    calentamiento):
+
+      columna                   celdas |z|>5   % de su col      min      max
+      sue_net_income_ttm               565         2.47%      -9.52     5.69
+      sue_net_margin                   463         2.03%     -16.53     8.99
+      sue_eps_ttm                      359         1.57%      -9.52     5.86
+      sue_roe                           97         0.42%     -22.46     4.75
+      pico_sue_* (los cuatro)           27         ~0.03%     -22.46     8.99
+
+      TOTAL 1,511 celdas de 1,210,202 (0.125%) — pero MAL REPARTIDAS:
+        activos-día con al menos un input fuera de ±5:   3.57%
+        días con al menos un activo así:                21.37%
+
+    O sea uno de cada cinco días el agente recibía un input de hasta CUATRO
+    VECES el rango de todas las demás features, y solo en el brazo fundamental.
+
+    POR QUÉ NO ERA COSMÉTICO — Y ES EL PUNTO. Si el brazo
+    `mercado_fundamentales` hubiera entrenado peor por escala, no habría forma
+    de distinguir "los fundamentales no aportan" de "el brazo fundamental tenía
+    las features mal escaladas". Y el criterio de abandono de D11 dice
+    textualmente que si el canal no supera al baseline en la ablación de R8, EL
+    CANAL NO SE TOMA. Una ablación sesgada EN CONTRA mata un canal que sí
+    servía — el espejo exacto del defecto de la entrada #3 (macro escondido en
+    las vistas), que podía SALVAR un canal que no aportaba.
+
+    LA DECISIÓN: winsorizar a ±5σ SIN re-estandarizar.
+      * preserva la intención del acta §B3: la magnitud sigue siendo
+        informativa DENTRO del rango, que es lo que la distingue de una
+        bandera binaria;
+      * alinea el canal fundamental con los otros tres;
+      * es la identidad sobre las columnas binarias de PASSTHROUGH
+        (`is_no_trade`, `sue_valido`, `pe_reliable`, ...), que viven en [0,1].
+
+    LO QUE SE PIERDE, declarado: el recorte borra la DISTINCIÓN entre una
+    sorpresa de −9 y una de −22. Son 1,511 celdas y todas son eventos extremos
+    reales (Minsur 2015 −9.52, Alicorp Q4-2014 −5.99). Si algún día se quisiera
+    esa cola, la vía correcta es una transformación que comprima sin truncar
+    (signo·log1p|z|), NO devolver el canal sin acotar. No se hace ahora porque
+    sería un parámetro más sin pre-registrar.
+
+    VERIFICADO: las 8 vistas quedan en [−5, 5] exactas, 0 celdas fuera. La
+    sorpresa NO se aplastó (sigue con 300+ valores distintos por columna y
+    std > 0.1). GUARDA PERMANENTE en tests/test_vistas_r8.py (10 tests), que
+    además chequea que ningún brazo lleve macro escondido, que los brazos sean
+    ANIDADOS sobre la misma base, que la vista completa sea la unión de los
+    brazos y que el canal fundamental no esté vacío.
+
+    NO AFECTA A `solo_mercado`: esa vista no tiene columnas `sue_`. Por eso la
+    ablación se corre con el MISMO presupuesto de 150k pasos del piloto — el
+    brazo base tiene que REPRODUCIR las corridas que ya están en el registro, y
+    eso es una verificación gratis de que nada más se movió.
+
+
+[ ] D28. ¿SE HAN CORRIDO LAS SEÑALES? — el estado, para que no se vuelva a
+    preguntar. AUDITADO el 2026-09-18.
+
+    INTEGRACIÓN: SÍ, completa. Las 8 vistas cargan sin NaN ni infinitos, el
+    entorno arranca y corre con todas. Dimensiones de observación: 87
+    (solo_mercado, 11 cols/activo), 136 (macro, 18), 178 (sentimiento, 24), 241
+    (fundamentales, 33), 381 (completa, 53). El canal fundamental trae 22
+    columnas efectivas con señal real (niveles ~100% no-cero, `sue_*` 91-95%,
+    `pico_sue_*` 1.5% que es lo correcto: solo el primer día bursátil desde la
+    publicación).
+
+    CORRIDAS: NO. Hasta el 2026-09-18, el registro de D10 decía
+        corridas por VISTA:  {'solo_mercado': 28}
+        corridas por TRAMO:  {'val': 28}
+    o sea NINGÚN agente había visto jamás fundamentales, sentimiento ni macro.
+    El piloto de D21 se declaró deliberadamente flaco (una vista) y así quedó.
+    El tramo de PRUEBA tampoco se ha tocado con ninguna vista (`con_test = 0`).
+
+    SE LANZA la ablación el 2026-09-18 con `scripts/ablacion_r8.py`: 4 vistas x
+    3 pliegues x 3 semillas sobre validación. Sigue siendo DIAGNÓSTICO — D10
+    pide 10 semillas — y hereda D25 (los agentes están subentrenados por igual).
+
+    DATO COLATERAL PARA LEER EL BRAZO FUNDAMENTAL: `known_date_real` está en
+    56%, o sea el 44% de las observaciones usa el lag de respaldo y no la fecha
+    real de publicación (D20). La calidad del canal que se está evaluando
+    hereda eso.
+
+    ADVERTENCIA AL LEER EL EJE: el DSR es una recompensa AUTO-REFERENCIAL
+    (depende de la propia historia de retornos del agente), así que su nivel
+    absoluto no es comparable entre configuraciones; solo su TENDENCIA dentro
+    de una corrida.
+
+[ ] D29. TAMIZ DE RECOMPENSAS SIN ENTRENAR — NUEVA (2026-09-19).
+    EL CANDADO QUE ABRE. D4 dice "tres brazos y no más" porque cada brazo
+    entrenado es una configuración más en el contador de D10. Con esa regla,
+    explorar recompensas parecía caro por definición. No lo es: CARACTERIZAR
+    UNA RECOMPENSA NO NECESITA UN AGENTE, necesita series de retorno. El tamiz
+    corre 18 estrategias reales dentro del mismo simulador, sobre train y val,
+    y no entrena nada: CERO configuraciones anotadas.
+
+    EL CRITERIO, FIJADO EN EL CÓDIGO (constantes UMBRAL_* de
+    scripts/d4_tamiz_recompensas.py) ANTES DE CORRERLO:
+      T1 FIDELIDAD DE ORDEN   rho de Spearman del acumulado contra el Sharpe
+                              del periodo >= +0.50, en LOS DOS tramos.
+      T2 NO PAGA POR RUIDO    inflar la vol a media constante (k=1.5) no puede
+                              subir el acumulado en ninguna de las 36 celdas.
+      T3 EL RIESGO PESA       por ablación normalizada, >= 20% de la señal.
+      T4 VE EL PEAJE          restar 1 bp/día baja el acumulado >= 1%, monótono.
+
+    HONESTIDAD SOBRE LA PRIMERA CORRIDA: hubo que arreglar TRES DEFECTOS DE
+    MEDICIÓN (T3 comparaba series en unidades crudas y daba 99% para toda la
+    familia diferencial; T2 reportaba un peor-caso relativo que explota cuando
+    el acumulado pasa por cero; a `dsr_rot` no se le pasaba la rotación).
+    SE CORRIGIÓ CÓMO SE MIDE; LOS UMBRALES NO SE TOCARON.
+
+    LO QUE FALTA DECIDIR:
+      · Si el tamiz es VINCULANTE (una recompensa que lo reprueba no se corre)
+        o solo INFORMATIVO. Hoy ninguna de las seis lo pasa, así que declararlo
+        vinculante sin más dejaría a OE1 sin recompensa.
+      · Si T1 se mide contra el Sharpe o contra el drawdown (ver enmienda D4).
+      · Si el mismo método se extiende a otras decisiones que hoy se resuelven
+        entrenando. D23 (ventana) y D24 (condición inicial) NO son tamizables
+        así —dependen del agente—, pero D26 (parámetros de Markowitz) sí.
+
+    POR QUÉ IMPORTA MÁS QUE SU RESULTADO: es un método para elegir SIN gastar
+    el contador y SIN mirar validación. Es la misma lógica con que D22 calibró
+    la exploración por rotación en vez de por desempeño.
+
+[ ] D30. SORPRESAS MACRO (CALENDARIO ECO) — NUEVA (2026-09-19).
+    QUE APARECIO. La pantalla ECO del terminal, bajada el 19-sep
+    (data/raw/bloomberg/eco_calendario_macro_20260919.xlsx), trae 2,471 eventos
+    macro de Perú entre 2011 y 2026 CON HORA, y para cada uno el CONSENSO
+    (`Encues(M)`) junto al dato EFECTIVO. Eso hace calculables 935 SORPRESAS:
+
+        Tipo referencial (BCRP)      188      IPC Lima YoY            179
+        Actividad económica YoY      186      Tasa de desempleo       140
+        IPC Lima MoM                 183      PIB YoY                  59
+
+    POR QUÉ ES TENTADOR, Y NO ES POCO. El canal macro del panel son NIVELES
+    (TC, EMBI, cobre, tasa, inflación, SPX, MSCI-EM). La SORPRESA —dato menos
+    consenso— es la parte que efectivamente es NOTICIA; el nivel ya está
+    descontado. Y §7.7 midió que macro es el ÚNICO canal que CALMA al agente:
+    baja la rotación 0.39 y el costo S/9,125. Si algún canal merece más
+    resolución, es ese.
+
+    Y ADEMÁS ESTÁ EN HORA DE LIMA, verificado: las decisiones de tasa del BCRP
+    figuran a las 18:00, que es la hora oficial de anuncio. Eso permite decidir
+    con precisión si un dato se conoció antes o después del cierre (D13), cosa
+    que las horas de EVTS NO permiten (ver §7.2 de estado_extraccion_bloomberg).
+
+    POR QUÉ **NO** SE ADOPTA HOY, Y ES LO IMPORTANTE:
+      1. R8 YA SE CORRIÓ. Agregar una familia de features después de medir la
+         ablación cambia el sujeto del experimento. Si entra, R8 se vuelve a
+         correr entero, y eso son 36+ corridas del contador de D10.
+      2. NO HA PASADO EL TAMIZ. La regla del proyecto es que ningún factor
+         macro entra por ser plausible: pasa por `probe_macro_exposicion.py`
+         sobre el universo vigente, que es el mismo filtro que ELIMINÓ al oro
+         (0 de 7 activos) y RECHAZÓ al estaño.
+      3. §7.13 midió que los canales SE ESTORBAN (interacción −3.9pp de retorno
+         y −0.86 de Sharpe). Sumar dimensiones tiene costo demostrado, no solo
+         beneficio hipotético.
+      4. §7.15 cerró que la vía de la recompensa tampoco mueve la vara. Antes
+         de agregar señal hay que decidir si el problema ES de señal — y esa
+         es la pregunta abierta de la tesis, no un detalle de implementación.
+
+    LO QUE HAY QUE DECIDIR:
+      (a) Pasar las 6 series de sorpresa por el tamiz de exposición. Es barato
+          y no gasta contador: es correlación, no entrenamiento.
+      (b) Si pasan, decidir si entran como CANAL NUEVO (y R8 se recorre) o como
+          refuerzo del canal macro existente (y R8 se recorre igual).
+      (c) O declararlas TRABAJO FUTURO y dejarlas documentadas. Es la opción
+          barata y, con lo medido en 7.13 y 7.15, la más defendible.
+
+    OJO CON EL LOOK-AHEAD SI SE ADOPTA: el consenso `Encues(M)` es conocible
+    ANTES del anuncio, pero el dato `Efectivo` NO. La sorpresa solo existe
+    DESPUÉS del evento, a su hora. Con el reloj t+1 de D13 eso se respeta solo,
+    pero hay que probarlo con el mismo test de venda en los ojos que se le hizo
+    a Markowitz y a la sorpresa fundamental.
 
 ========================================================================
 NOTAS DE RIESGO (para tener presente al decidir)

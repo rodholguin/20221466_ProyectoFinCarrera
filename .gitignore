@@ -8,12 +8,27 @@ data/processed/*.csv
 
 # Cache de respuestas crudas del SMV (archivos JSON grandes ~8MB c/u)
 data/raw/smv_cache/
+# PDFs del Informe Bursátil Mensual de la BVL (~187 MB, 174 archivos).
+# Se regeneran con scripts/gen_bvl_mensual.py (URL predecible, ver bvl_infmen.py)
+data/raw/bvl_infmen/
+# Logs de corridas largas
+data/interim/*.log
 # Archivos de exploración/sondeo (generados por scripts de probe)
 data/interim/smv_*.json
 data/interim/smv_*.txt
 
-# Cache de sentimiento LLM
+# Cache de respuestas del LLM de sentimiento. NO se versiona: son ~50 MB de
+# respuestas regenerables, y el patron anterior (sentiment_cache*.json) NO cubria
+# el directorio porque `*` no cruza `/`. Reproducir una corrida no necesita el
+# cache: necesita el corpus (data/raw/news_*.parquet) y el prompt versionado.
+data/interim/sentiment_cache/
 data/interim/sentiment_cache*.json
+
+# Artefactos ARCHIVADOS al cambiar de version/universo. Se conservan en disco
+# por trazabilidad local, no en el repo.
+data/interim/_sentimiento_viejo_*/
+data/interim/_macro_bcrp_con_oro_*.parquet
+data/raw/_corpus_viejo_*/
 
 # Python
 __pycache__/
@@ -23,10 +38,13 @@ __pycache__/
 .Python
 
 # Entornos virtuales
-.venv/
-venv/
-env/
-ENV/
+# Anclados a la RAÍZ a propósito: sin la barra inicial, `env/` también se traga
+# `src/env/` (el entorno de RL de OE1) y el paquete desaparece del repo sin que
+# nada falle. Pasó el 2026-09-03.
+/.venv/
+/venv/
+/env/
+/ENV/
 
 # Variables de entorno / secretos
 .env
@@ -52,3 +70,37 @@ build/
 
 # Windows
 Thumbs.db
+
+# Artefactos de caché creados al ejecutar notebooks con otro cwd
+notebooks/data/
+
+# Extracciones del terminal Bloomberg (data licenciada, NO redistribuible).
+# Anclado con `data/raw/` explícito, no con un patrón suelto: ver la nota de
+# los entornos virtuales más arriba. Citar como "Bloomberg L.P., consultado el
+# 2026-09-05 y 2026-09-07". Ver docs/estado_extraccion_bloomberg.txt
+data/raw/bloomberg/
+
+# Artefactos precalculados que alimentan notebooks/OE1_entorno_y_agente.ipynb.
+# Son regenerables con scripts/genera_artefactos_oe1.py (~10 min) y pesan ~1 MB
+# entre el .npz de curvas y los .json. El notebook SI se versiona con sus
+# salidas: es el entregable. OJO: data/interim/registro_configuraciones.jsonl NO
+# entra aca — es la bitacora append-only de D10 y tiene que ser versionable.
+data/interim/artefactos_oe1/
+
+# Respaldo del panel ANTERIOR al fix de fecha del 2026-09-12 (~15 MB de parquets).
+# Se conserva en disco por trazabilidad —la convencion del proyecto es que nada
+# se borra— pero no entra al repo: es data derivada y regenerable. El hallazgo y
+# su validacion viven en docs/hallazgos_desfase_fecha_bvl.txt.
+data/interim/_respaldo_pre_fix_fecha/
+
+# Archivos de bloqueo de Office (se crean al abrir un .pptx/.docx y desaparecen
+# al cerrarlo). Nunca deben commitearse.
+~$*
+
+# Salidas regenerables de los generadores de entregables (scripts/entregables).
+# Las figuras se rehacen con figuras.py / figuras2.py / figppt.py en segundos;
+# los .docx y .pptx SI se versionan porque son los entregables presentados.
+scripts/entregables/fig/
+scripts/entregables/figppt/
+scripts/entregables/node_modules/
+scripts/entregables/package*.json

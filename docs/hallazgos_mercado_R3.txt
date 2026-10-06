@@ -279,6 +279,70 @@ docs/hallazgos_fundamentales_R4.txt sección 5.8, mismo tipo de límite de
 fuente). Queda sin ajustar (is_split_adjusted=False), documentado para
 revisión manual.
 
+5.8. Los avisos de "salto overnight >40%" son FALSOS POSITIVOS de M&A
+------------------------------------------------------------------------
+(2026-08-22, al correr R3 sobre el universo de 7.)
+
+detect_split_candidates() usa `ret.abs() > threshold`: es SIMÉTRICO EN EL SIGNO.
+Pero la economía no lo es. Un split o una acción liberada AUMENTAN el número de
+acciones y por lo tanto HACEN CAER el precio: producen un salto NEGATIVO. Un
+salto grande y POSITIVO casi nunca es una acción corporativa — salvo un
+contrasplit, raro en la BVL. Es, típicamente, una noticia.
+
+Los dos avisos de esta corrida se verificaron uno por uno y AMBOS son
+movimientos reales de mercado. Ninguno necesita ajuste:
+
+  CPACASC1  2025-12-17  +61.1%  S/ 4.50 -> 7.25
+      Anuncio de la compra de la participación mayoritaria por HOLCIM
+      (~US$ 1,500 millones). El precio se queda en S/ 6.80-7.00 después: no
+      revierte. La operación cerró en 2026, fuera del horizonte del estudio.
+
+  LUSURC1   2019-10-01  +41.1%  S/ 16.30 -> 23.00
+      Sempra Energy vendió su 83.6% a China Yangtze Power International por
+      US$ 3,590 millones (anuncio del 30-sep-2019). Gestión tituló ese día
+      "Acciones de Luz del Sur trepan 41% en la jornada" — coincide al decimal
+      con lo que trae el parquet. El precio se queda en S/ 20-24.
+
+CÓMO SE DESCARTÓ QUE FUERAN DATOS MALOS: (1) el precio PERSISTE en el nivel
+nuevo en ambos casos, lo cual descarta un glitch puntual; (2) confirmación en
+prensa con la cifra exacta; (3) se re-corrió la regresión macro excluyendo cada
+día y ninguna conclusión cambia (el R² sube, como corresponde al quitar un
+outlier legítimo de la cola).
+
+MEJORA IMPLEMENTADA (2026-08-23): `clasificar_saltos()` en corporate_actions.py.
+Cada salto se cruza contra las acciones corporativas que el propio módulo YA
+descarga de la BVL (ventana de +-5 días, por el desfase de `dateCut`) y se emite
+un veredicto:
+  - caída CON acción liberada/dividendo cerca -> "explicado por acción corporativa"
+  - caída SIN acción corporativa              -> "REVISAR" (único caso que pide
+                                                 revisión manual)
+  - alza SIN acción corporativa               -> "probable noticia, NO ajustar"
+
+DE PASO SE CORRIGIÓ UN BUG LATENTE del llamador: el aviso estaba condicionado a
+`splits.empty`, o sea que solo se emitía si el emisor NO TENÍA NINGÚN SPLIT en
+toda la serie. Un emisor con splits (CREDITC1, por ejemplo) se quedaba sin
+revisar sus saltos anómalos por completo. Ahora el aviso es por salto. Al
+levantar la condición no apareció ningún salto oculto en el universo de 7, así
+que el bug no había tenido consecuencia práctica — pero era real.
+
+Corrida de verificación (2026-08-23, los 7 activos): los dos únicos avisos son
+CPACASC1 +61.1% y LUSURC1 +41.1%, ambos clasificados como "alza: probable
+noticia, NO ajustar". CERO casos que requieran revisión manual.
+
+SOBRE 5.6 (BUENAVC1 +46.9% del 2020-09-21): queda sin resolver pero ya es
+discutible — BUENAVC1 salió del universo en jul-2026. Además, la limitación que
+5.6 declaraba ("no existe un endpoint de hechos de importancia BVL/SMV
+accesible") FUE SUPERADA después: se descubrió e integró
+/v1/corporate-actions de la BVL (ver docs/hallazgos_fundamentales_R4.txt y la
+fecha real de presentación de EEFF). Ese es el camino para cerrar casos así.
+
+RELEVANCIA PARA R5 (canal de sentimiento): los dos movimientos diarios más
+grandes de todo el universo son ANUNCIOS DE M&A. En la taxonomía de R5 eso es
+`ma_reestructuracion`, magnitud 1.0 — el tramo más alto. Son el caso de prueba
+natural del canal de noticias: si el sentimiento no captura estos dos, no
+captura nada. Conviene revisarlos explícitamente al evaluar la corrida de R5.
+
+
 5.7. P/E y Dividend Yield: la pieza de R3 en una decisión que se tomó en R4
 ------------------------------------------------------------------------
 corporate_actions.py descarga (para CREDITC1 y ALICORC1) splits Y
@@ -364,6 +428,11 @@ texto de la tesis.
   - BUENAVC1 (5.6): un salto de +46.9% sin confirmar ni descartar como
     acción corporativa real, por falta de acceso automatizado a hechos de
     importancia BVL/SMV en PEN.
+    >> ACTUALIZADO 2026-08-22: la limitación de fuente FUE SUPERADA (existe
+       /v1/corporate-actions de la BVL, ya integrado en R4), y BUENAVC1 salió
+       del universo, así que el caso dejó de ser bloqueante. Ver 5.8, que
+       además muestra que los avisos POSITIVOS de este detector son M&A y no
+       acciones corporativas.
   - El reescalado de OHLC de Yahoo (5.5) depende de que los ratios de
     yfinance sean correctos; solo hay una validación independiente para el
     close (5.3), no para el open/high/low reescalado en sí.

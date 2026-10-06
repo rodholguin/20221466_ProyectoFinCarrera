@@ -18,6 +18,67 @@ estaba resuelta de antemano en R3/R4/R5.
 
 
 ========================================================================
+ESTADO VIGENTE DEL PANEL AL 2026-09-01  (leer esto primero)
+------------------------------------------------------------------------
+El cuerpo de este documento describe el panel de JUNIO 2026: 5 activos y 36
+columnas. SIGUE SIENDO VÁLIDO en su metodología —el calendario común, el
+roll-forward, el merge_asof por known_date, la frontera R6/OE1— y esa es la
+parte que va a la tesis. Lo que cambió es la FORMA del panel. Se anota acá en
+vez de reescribir el cuerpo, para que quede trazable qué se decidió cuándo.
+========================================================================
+  QUÉ                     JUNIO 2026            AHORA (2026-09-01)
+  ----------------------  --------------------  --------------------------
+  activos                 5 (universo viejo)    7 (jul-2026)
+  filas x columnas        ~17.5k x 36           24,591 x 115
+  rango                   2012-2025             2012-2025 (igual)
+  sentimiento             4 columnas crudas     + 36 EWMAs (D15/D17)
+  fundamentales           roe/roa/... 5 activos + P/E, DY, y los 7 activos
+  macro                   no existía            5 series (D-macro; ver abajo)
+  banderas nuevas         is_no_trade           + is_stale, pe_reliable,
+                                                  known_date_real (D20)
+
+  LOS SEIS CAMBIOS, CON SU DECISIÓN Y SU PORQUÉ:
+
+  1. UNIVERSO 5 -> 7 (jul-2026). SAGAC1, CORAREC1 y BUENAVC1 salieron por
+     iliquidez (4.1%, 20.8% y 23.7% de días con precio distinto al previo);
+     entraron INRETC1, CPACASC1, FERREYC1, MINSURI1 y LUSURC1.
+     Ver docs/pendientes_implementacion_universo.txt.
+
+  2. CANAL DE SENTIMIENTO: de un score continuo a CONTEOS CATEGÓRICOS (D15).
+     La §63 de abajo dice que el panel guarda "4 columnas crudas en vez de un
+     score ya decaído" — eso SIGUE SIENDO CIERTO y las 4 se conservan. Lo nuevo
+     es que encima se construyen 9 columnas `sent_{pos,neu,neg}_ewma_{5,20,60}`
+     desde conteos por celda. La magnitud dejó de ser multiplicador y quedó solo
+     como puerta de relevancia. Motivo (del asesor): no le corresponde al autor
+     atribuir un número cardinal al positivo/neutro/negativo.
+
+  3. BANDERA `titular_nombra_empresa` (D17). Solo el 16.2% del corpus nombra a
+     la empresa en el titular, y ese estrato tiene 63.8% de relevancia contra
+     2.1%. Se MARCA, no se filtra: el LLM corre sobre todo y la restricción se
+     decide en la ablación de R8.
+
+  4. BANDERA `known_date_real` (D20). La fecha de presentación de los EEFF es
+     REAL (hecho BVL) desde ~2018 y FALLBACK antes. No es aleatorio: train queda
+     31.9% real y val/test 100%, o sea la variable cambia de significado a lo
+     largo del split. Además el lag de fallback pasó a calibrarse POR ACTIVO
+     porque el global le metía look-ahead a InRetail.
+
+  5. TRES BRAZOS DE ABLACIÓN NUEVOS en feature_views, todos pre-registrados:
+     `mercado_sentimiento_tramos` (18 columnas), `..._restringido` (D17), y el
+     de fundamentales con `known_date_real` (D20). La §433 habla de "las 4
+     vistas": ahora son SIETE.
+
+  6. MACRO: se incorporaron 6 series y luego se ELIMINÓ el oro (0 de 7 activos
+     con efecto medible; su activo justificante había salido del universo).
+     Quedan 5. Ver fundamento_macro_riesgo_politico.txt §4.4.
+
+  ADVERTENCIA DE LECTURA: los conteos concretos del cuerpo (36 columnas, 5
+  activos, ~17.5k filas, y las tablas de cobertura por activo) son de junio y
+  NO se actualizaron. Para cifras vigentes, el panel manda; para metodología,
+  manda el cuerpo de este documento.
+
+
+========================================================================
 1. OBJETIVO DE R6
 ========================================================================
 Construir el panel único (ticker, date) que combina mercado + indicadores

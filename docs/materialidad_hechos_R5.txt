@@ -1,0 +1,270 @@
+HECHOS DE IMPORTANCIA DE LA BVL COMO SEGUNDA FUENTE DE R5 — MEDICIÓN Y CIERRE
+Fecha: 2026-08-31.  Anotación: el autor, a ciegas, 140/140 filas.
+Decisión que resulta: D18 en docs/decisiones_pendientes_OE1.txt.
+Reproducible: python scripts/evalua_materialidad_hechos.py
+========================================================================
+
+RESUMEN EN CINCO LÍNEAS
+------------------------------------------------------------------------
+  1. El criterio pre-registrado dice NO ADOPTAR. Falla los tres puntos.
+  2. La tasa de materialidad es ALTA (53.4% vs 7.2% de la prensa): el
+     problema no es que los hechos sean basura.
+  3. El problema es que NO ARREGLAN LO QUE SE LES PIDIÓ: la heterogeneidad
+     medida es 6.4x, no el 2.9x estimado, y Pacasmayo no triplica bajo
+     ningún etiquetado razonable.
+  4. DOS FILAS marcadas con `duda` voltean dos de los tres criterios. El
+     criterio no es robusto y hay que decirlo.
+  5. Donde los hechos SÍ son fuertes es en algo que el criterio NUNCA MIDIÓ:
+     la FECHA. Eso queda como propuesta reducida y diferida.
+
+
+========================================================================
+1. LOS TRES PROBLEMAS QUE SE ESTABAN MEZCLANDO
+========================================================================
+La discusión se enredó porque "los Hechos de Importancia" se propusieron como
+solución de tres problemas distintos, y solo se midió uno.
+
+  A. COBERTURA DESIGUAL. Pacasmayo 3.9 noticias/año contra InRetail 38.6.
+     Es el riesgo declarado de D11 (una red de pesos COMPARTIDOS entre activos
+     con cobertura 16.8x distinta).
+     -> LOS HECHOS NO LO ARREGLAN. Medido: 16.8x -> 6.4x, contra un umbral
+        pre-registrado de <6x. Es el objeto de este documento.
+
+  B. LA PRENSA LLEGA TARDE. El titular sale después del movimiento de precio.
+     -> LOS HECHOS SÍ LO ARREGLAN, y es lo más fuerte que tienen. Caso medido
+        (Luz del Sur 2019): el hecho se divulgó el 30-set después del cierre,
+        el precio saltó +41.10% el 1-oct, y el titular de prensa del corpus es
+        del 15-oct — 10 sesiones tarde, con el precio ya retrocedido de 32.40
+        a 30.55. NUNCA SE MIDIÓ SISTEMÁTICAMENTE. Ver §6.
+
+  C. ECO: LA PRENSA CUBRE EL MISMO EVENTO VARIAS VECES y la taxonomía no
+     distingue el anuncio del cierre. Planteado por el autor: "una noticia de
+     anuncio de una compra no es igual que una noticia de la compra; para el
+     momento de la compra el impacto ya pasó".
+     -> LOS HECHOS LO ARREGLAN PARCIALMENTE (el emisor divulga una vez, cuando
+        nace la obligación). Es un problema de la TAXONOMÍA, no de la fuente.
+        Se registra aparte, como D19.
+
+
+========================================================================
+2. LA MUESTRA Y CÓMO SE ANOTÓ
+========================================================================
+  data/interim/validacion_humana/muestra_hechos_materialidad.xlsx
+  140 filas, muestreo estratificado (candidatos + rutina por activo), pesos
+  Hájek. Anotada A CIEGAS por el autor. 140/140 completas, 47 con `duda`.
+
+  DISTRIBUCIÓN DE LO ANOTADO
+    Z_no_relevante            69      B_operacional            2
+    B_dividendo_capital       28      B_gobierno_corporativo   2
+    A_resultados              22      Z_patrocinio_rse         1
+    A_ma_reestructuracion      9      Z_marketing_promocion    1
+    A_crisis_evento_adverso    4      C_analisis_opinion       1
+                                      B_estrategia_inversion   1
+
+  EL AUTOR NO DELEGÓ ESTA ANOTACIÓN. Es la lección del BLOQUEANTE #1 de R5,
+  donde la "referencia humana" la había producido el asistente.
+
+
+========================================================================
+3. EL VEREDICTO CONTRA EL CRITERIO PRE-REGISTRADO
+========================================================================
+El criterio se fijó el 2026-08-29, ANTES de ver los datos, en el docstring de
+scripts/evalua_materialidad_hechos.py. Se adopta la fuente solo si se cumplen
+las tres condiciones.
+
+  TASA DE MATERIALIDAD (poblacional, Hájek)
+    dentro de los candidatos :  53.4% ±10.2pp   (n=105, n_eff=92)
+    sobre todo lo anotable   :  47.8% ±11.7pp
+    comparación: la prensa    :   7.2% ±2.8pp
+  -> LOS HECHOS SON 7 VECES MÁS DENSOS EN SEÑAL QUE LA PRENSA. Este número es
+     favorable y hay que reportarlo: el problema NO es la calidad de la fuente.
+
+  EVENTOS/AÑO
+    activo      prensa  hechos    suma      x     tasa
+    INRETC1       38.6     4.9    43.5    1.1    60.0%
+    CREDITC1      18.1     6.2    24.3    1.3    46.7%
+    LUSURC1       15.6    10.5    26.1    1.7    60.0%
+    MINSURI1      13.8     3.4    17.2    1.2    53.3%
+    ALICORC1       6.8    16.7    23.5    3.4    73.3%
+    CPACASC1       3.9     4.3     8.2    2.1    33.3%
+    FERREYC1       2.3     4.5     6.8    2.9    33.3%
+    razón max/min:  prensa 16.8x  ->  prensa+hechos 6.4x
+    total/año:      99.1 -> 149.5
+
+  VEREDICTO
+    (1) heterogeneidad < 6.0x            :   6.4x   NO CUMPLE
+    (2) FERREYC1 triplica                :   2.9x   NO CUMPLE
+    (2) CPACASC1 triplica                :   2.1x   NO CUMPLE
+    (3) filtro de rutina sin materiales  :    15    NO CUMPLE
+    >>> NO ADOPTAR
+
+  DÓNDE FALLÓ LA ESTIMACIÓN PREVIA, Y POR CUÁNTO. El expediente del 2026-08-29
+  estimaba heterogeneidad 2.9x y Pacasmayo 26.8 hechos/año (7.9x). Lo medido es
+  6.4x y 4.3 hechos/año (2.1x). LA ESTIMACIÓN ERRABA POR MÁS DEL DOBLE en la
+  métrica principal y por 6x en el activo del que más se esperaba. La
+  pre-registración hizo exactamente su trabajo: frenó una adopción que "parecía
+  obvia" y estaba mal fundada.
+
+
+========================================================================
+4. DOS PROBLEMAS DEL CRITERIO, QUE HAY QUE DECLARAR
+========================================================================
+4.1 EL CRITERIO (3) ESTÁ MAL ESPECIFICADO — CHOQUE CON UNA REGLA DEL MISMO DÍA
+    De los 15 "materiales perdidos en el filtro de rutina", CATORCE SON
+    `A_resultados` (estados financieros intermedios) y uno es un resultado de
+    colocación de bonos.
+    Pero el mismo documento que fijó el criterio dice, escrito ANTES de anotar:
+      "SOLAPA CON R4 Y R3: los EEFF (E05) ya son el known_date de fundamentales,
+       y los dividendos (L14) ya están en el panel desde R3. Alimentarlos otra
+       vez como sentimiento sería DOBLE CONTEO. Hay que declararlo y excluirlos."
+    O SEA: el criterio (3) está contando como FALLO exactamente la exclusión que
+    se decidió a propósito. No es mover el poste después de ver los datos — es
+    un choque entre dos reglas escritas el mismo día.
+    SE DEJA CONSTANCIA Y NO SE USA PARA RESCATAR NADA: (1) y (2) fallan solos,
+    así que corregir (3) no cambia el veredicto. Se documenta para que la
+    próxima vez que se pre-registre un criterio se revise contra las
+    restricciones ya escritas.
+
+4.2 EL CRITERIO NO ES ROBUSTO: DOS FILAS CON `duda` VOLTEAN DOS PUNTOS
+    El anotador mandó a trámite las ESCRITURAS PÚBLICAS (formalización notarial
+    de actos ya acordados) y las marcó con `duda`. Sensibilidad medida:
+      etiquetado                        heterog.  FERREYC1  CPACASC1
+      BASE (como se anotó)                 6.4x      2.9x      2.1x
+      escrituras = el acto que formalizan  5.7x      3.3x      2.3x
+                                             OK        OK        NO
+      todo el papeleo de deuda material    6.4x      2.9x      2.3x
+      (cota superior: TODO material)       3.0x      6.8x      4.3x
+    DOS FILAS —una de FERREYC1 y una de CPACASC1— cruzan dos de los tres
+    umbrales. Un criterio que se cruza o no según cómo se etiqueten dos
+    escrituras públicas no está midiendo lo que dice medir.
+    Y HAY UNA ASIMETRÍA INCÓMODA: EL CRITERIO PREMIA EL ETIQUETADO INCORRECTO.
+    Etiquetar por palabra clave (mal) hace pasar dos criterios; etiquetar por
+    materialidad (bien) los hace fallar.
+    LO ROBUSTO: CPACASC1 no triplica bajo NINGÚN etiquetado razonable
+    (2.1x-2.5x). Ese resultado no depende de ningún juicio de borde.
+
+
+========================================================================
+5. LAS CINCO OBSERVACIONES DEL ANOTADOR — VERIFICADAS UNA POR UNA
+========================================================================
+Las cinco se comprobaron contra el archivo. Las cinco son correctas.
+
+5.1 `Z_no_relevante` SE USÓ COMO CAJÓN DE TRÁMITE, Y NO CALZA. [CONFIRMADO]
+    58 filas llevan nota con prefijo `TRAMITE:` y las 58 están en
+    `Z_no_relevante`, cuya definición dice "el titular no trata de esta empresa
+    en absoluto" — cuando sí trata de ella, solo que es papeleo.
+    RECOMENDACIÓN DEL ANOTADOR: agregar `Z_tramite_administrativo` (magnitud 0).
+    LECTURA: de acuerdo con el diagnóstico, PERO NO SE AGREGA A LA TAXONOMÍA DE
+    PRENSA. Ya hay una hipótesis abierta de que las 6 categorías Z son
+    conductualmente idénticas y consumen medio espacio de decisión de un modelo
+    chico; una séptima va en contra. Si los hechos se adoptan alguna vez, LLEVAN
+    SU PROPIO CONJUNTO DE CATEGORÍAS: D15 los funde río abajo en el mismo
+    encoding y no necesitan taxonomía idéntica al clasificar. Si no se adoptan,
+    el problema no existe.
+
+5.2 MATERIALIDAD ANTES QUE PALABRA CLAVE. [CONFIRMADO Y CORRECTO]
+    "Escritura Pública de Escisión" contiene `escisión`, que la taxonomía manda
+    a `A_ma_reestructuracion`, pero es la formalización notarial de algo acordado
+    meses antes.
+    LECTURA: el criterio del anotador es el correcto, y por una razón MÁS FUERTE
+    que la que dio. No es solo que no mueva el precio: es que ESTARÍA MAL
+    FECHADO. Poner un evento de magnitud 1.0 en la fecha de la escritura sitúa
+    la señal meses después de que el mercado se enteró — el mismo error que el
+    proyecto ya rechazó al decidir NO re-fechar las noticias tardías (H3).
+    CONSECUENCIA: ver 4.2. Esta elección correcta es la que hace fallar el
+    criterio.
+
+5.3 LOS TITULARES VACÍOS SON ESTRUCTURALES, NO UN CASO RARO. [CONFIRMADO]
+    28 filas matchean el patrón mudo (`Acuerdo de Ses-Dir del 18-Abr-2023`,
+    `Respuesta a Oficio SMV N° 5211-2025`, `Sobre subsidiaria Inretail Consumer`).
+    La MEDIANA del campo `hecho` es de 59 CARACTERES.
+    LECTURA: es el punto más grave de los cinco, y hay que sumarle algo que el
+    anotador no dijo: este 14% es ENCIMA de los 2,007 hechos que YA se habían
+    excluido del muestreo por tener el campo `observation` vacío. El problema de
+    mudez no es 14% — es 14% de lo que quedó DESPUÉS de sacar lo peor.
+    Es un TECHO DURO de la fuente. Ningún modelo lee lo que no está escrito.
+
+5.4 EL CÓDIGO OFICIAL SALVA ALGUNAS Y TRAICIONA OTRAS. [CONFIRMADO]
+    L14, L13 y L04 permitieron clasificar filas cuyo texto no decía nada. Pero
+    la fila 107 tiene código L21 "Emisiones de valores por oferta pública" y el
+    contenido es "Información mensual de tenedores de ADRs al cierre de Set-2024".
+    LECTURA: pega en uno de los tres pilares del caso original, que decía que los
+    hechos "traen un CÓDIGO OFICIAL DE TIPO DE EVENTO asignado por el emisor, no
+    por un LLM". No se sostiene solo. Junto con 5.3, de las tres ventajas
+    declaradas queda en pie UNA: el `registerDate` point-in-time (ver §6).
+
+5.5 DÓNDE CORTAR EN EMISIONES DE DEUDA. [CONFIRMADO, Y ES INOCUO]
+    `B_dividendo_capital` cubre anuncio y ejecución; Z cubre el papeleo
+    (prospectos, complementos, cupones). Caso dudoso: los certificados de
+    depósito negociables del BCP (fila 136), mandados a trámite porque para un
+    banco emitir corto plazo es tesorería rutinaria.
+    LECTURA: el criterio es correcto (magnitud por contenido económico, no por
+    tipo de acto). Y SE MIDIÓ: contar todo el papeleo de deuda como material NO
+    CAMBIA NADA (6.4x -> 6.4x). Es la menos consecuente de las cinco.
+
+
+========================================================================
+6. LO QUE NUNCA SE MIDIÓ, Y ES DONDE LOS HECHOS SÍ SIRVEN
+========================================================================
+El criterio midió COBERTURA (problema A). Nunca midió FECHA (problema B), que
+es la única de las tres ventajas declaradas que sobrevivió a §5.
+
+La evidencia que existe es un caso, y es fuerte:
+    2019-09-30  hecho BVL divulgado después del cierre
+    2019-10-01  LUSURC1 +41.10%
+    2019-10-15  el titular de prensa entra al corpus (10 sesiones tarde,
+                con el precio ya retrocedido de 32.40 a 30.55)
+
+PROPUESTA REDUCIDA, PARA DESPUÉS DE LA CORRIDA: usar los hechos NO como fuente
+de eventos sino como ANCLA DE FECHA. El hecho es la primera divulgación
+obligatoria; la prensa posterior sobre el mismo evento es eco por construcción.
+No requiere que los hechos "tripliquen" nada, no compite con la prensa, y ataca
+B y C a la vez.
+NO SE HACE AHORA: es medible como un brazo más DESPUÉS de que exista el panel, y
+ahí sale mucho más barato. Ver D18.
+
+
+========================================================================
+7. LO QUE NO SE VA A PODER RESOLVER — LIMITACIONES PARA LA TESIS
+========================================================================
+Esto va al capítulo de limitaciones tal cual, y NO tiene arreglo dentro del
+alcance del trabajo.
+
+  (a) HECHOS MUDOS. 14% de la muestra es inclasificable desde el texto, encima
+      de 2,007 hechos ya excluidos por campo vacío. Techo duro de la fuente.
+
+  (b) CLASIFICACIÓN POR TITULAR, SIN CUERPO. MediaCloud no entrega el texto del
+      artículo (verificado: la columna `text` no existe). La anotación humana de
+      referencia se hizo con la MISMA información, así que la tarea es
+      alcanzable — pero el techo es el titular.
+
+  (c) LA COBERTURA DE PACASMAYO Y FERREYCORP NO TIENE ARREGLO. Prensa + hechos
+      da 8.2 y 6.8 eventos/año. No hay fuente disponible que lo resuelva: es una
+      propiedad de la prensa peruana y de lo que los emisores divulgan, no del
+      pipeline. CONECTA DIRECTO CON EL CRITERIO DE ABANDONO DE D11: si el canal
+      no supera al baseline en la ablación de R8, el canal no se toma.
+
+  (d) LA ANTICIPACIÓN DEL MERCADO. Luz del Sur subió +43% ANTES del hecho del
+      30-set. Es información que se filtró y que ninguna fuente pública, por bien
+      fechada que esté, va a capturar. Límite estructural, no deficiencia del
+      diseño.
+
+
+========================================================================
+8. QUÉ SE HACE CON ESTO
+========================================================================
+  [X] D18 — no adoptar los hechos como segunda fuente de cobertura. Registrado.
+  [ ] D19 — el eje de NOVEDAD/ETAPA (problema C) queda abierto con una propuesta
+      barata y determinista. Se decide en R8, no ahora.
+  [ ] La propuesta reducida de §6 (ancla de fecha) se retoma DESPUÉS del panel.
+
+  Y LO PRINCIPAL: EL CANAL NUNCA SE HA CORRIDO DE PUNTA A PUNTA NI UNA VEZ.
+  D14, D15, D16, D17 y esta medición son afinación previa de algo que todavía no
+  se probó. Varias de esas afinaciones ya están diseñadas para que R8 las decida
+  con datos (se calculan en R6, se marcan en vez de filtrarse, entran como brazos
+  de ablación). Lo que falta no es otra medición: es implementar D15+D17, correr
+  R5, regenerar el panel y dejar que la ablación decida.
+
+========================================================================
+FIN
+========================================================================

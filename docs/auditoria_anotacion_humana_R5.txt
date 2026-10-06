@@ -1,0 +1,674 @@
+AUDITORÍA DE LA ANOTACIÓN HUMANA Y REVISIÓN DE LA TAXONOMÍA — R5 (SENTIMIENTO)
+Tesis: Aprendizaje por refuerzo profundo aplicado a la Bolsa de Valores de Lima
+Autor: Rodrigo Holguin — Asesor: Dr. E. Villanueva
+Creado: 2026-08-26. Cierra los dos bloqueantes de docs/PENDIENTES_R5.txt.
+Fuente: data/interim/validacion_humana/muestra_r5_anotar.xlsx (550/550 anotadas).
+Medición viva: python scripts/evalua_validacion_humana_r5.py
+========================================================================
+
+PROPÓSITO
+------------------------------------------------------------------------
+Tres cosas, en este orden:
+  (1) Registrar lo que la anotación del autor MIDIÓ, que es lo que faltaba para
+      elegir modelo y para calibrar D12.
+  (2) Auditar la anotación misma: dónde es consistente, dónde tuvo que inventar
+      una convención, y qué caso está mal.
+  (3) Responder las seis observaciones que el autor levantó al anotar, y
+      proponer el rediseño que se desprende de ellas.
+
+NO sustituye a docs/taxonomia_eventos_R5.txt (que sigue siendo la especificación
+vigente). Lo que aquí se propone entra en deliberación como D14; hasta que se
+cierre, la taxonomía de 15 categorías es la que rige.
+
+
+========================================================================
+1. LOS DOS BLOQUEANTES: CERRADOS
+========================================================================
+
+BLOQUEANTE #1 — LA REFERENCIA NO ERA HUMANA. Cerrado. Existe la anotación del
+autor: 550 titulares, taxonomía de 15 categorías, polaridad donde la magnitud es
+mayor que cero, juzgando SOLO por el titular (que es todo lo que ve el modelo).
+Bloque A (120) y bloque B (430) barajados y ciegos.
+
+  DECLARACIÓN OBLIGATORIA EN LA TESIS, tal cual es:
+  - La anotación es de UN anotador (el autor), no de un panel.
+  - SIETE filas de 550 (1.3%) llevan nota de haber sido consultadas con el
+    asistente. El autor declara que la consulta fue POSTERIOR a su juicio y se
+    tomó como retroalimentación para decidir por cuenta propia; cinco de las
+    siete confirmaron la etiqueta original y dos la cambiaron (385, 476). El
+    procedimiento se declara; no se oculta y no se corrige, porque corregirlo
+    hacia atrás sería peor que declararlo.
+  - Las 180 etiquetas del asistente (data/interim/r5_validacion_anotada.csv)
+    quedan como SEGUNDO ANOTADOR con criterio distinto y declarado, no como
+    referencia. Renombrar sus columnas `rel_humana`/`sent_humano` sigue
+    pendiente y sigue siendo la causa raíz del error original.
+
+BLOQUEANTE #2 — ELECCIÓN DE MODELO. Desbloqueado: la tabla de §2.4 ya mide
+contra la referencia del autor. Falta cerrar §7 de docs/seleccion_modelo_R5.txt.
+
+
+========================================================================
+2. LO QUE LA ANOTACIÓN MIDIÓ
+========================================================================
+
+2.1 EL PREFILTRO REGEX NO MATA NADA RELEVANTE
+------------------------------------------------------------------------
+Descarta 109 de 550 titulares (19.8%) ANTES de gastar una llamada al LLM.
+De esos 109, los que el autor considera relevantes son CERO.
+Acierto de categoría en lo descartado: 106/109 (97.2%).
+
+Esto cierra un punto ciego total: lo que el prefiltro mata, ningún modelo puede
+recuperarlo, y el error se le habría achacado al LLM. Queda medido y a favor del
+prefiltro. Es la razón por la que se muestreó del corpus COMPLETO (antes del
+prefiltro) y no del corpus ya filtrado.
+
+
+2.2 ACUERDO AUTOR vs ASISTENTE — EL KAPPA ES LO MENOS INFORMATIVO
+------------------------------------------------------------------------
+RELEVANCIA (n=120, bloque A): acuerdo 81.7%, kappa 0.456.
+POLARIDAD  (n=13, donde ambos dicen relevante): acuerdo 76.9%, kappa 0.618.
+
+Tomado solo, el kappa 0.456 se leería como "acuerdo moderado, referencia
+regular". Esa lectura es incorrecta y la estructura del desacuerdo lo demuestra:
+
+  EL DESACUERDO ES 100% UNIDIRECCIONAL. 22 ítems que el asistente marcó
+  relevantes y el autor irrelevantes; CERO en el sentido contrario. Las
+  etiquetas del autor son un SUBCONJUNTO ESTRICTO de las del asistente.
+
+Y es atribuible entero a dos convenciones explícitas, no a ruido de criterio:
+  - 14 de los 22 son noticia SECTORIAL. El asistente la contaba como relevante;
+    la taxonomía v2.1 la manda a magnitud cero A PROPÓSITO. No hay discrepancia
+    de juicio: hay una definición que se movió.
+  - Los 3 ÚNICOS desacuerdos de polaridad (filas 75, 191, 206) son los tres
+    M&A: el asistente dijo `positivo`, el autor `neutral` por su regla de M&A.
+  - Los 8 restantes son la empresa como AUTOR de un estudio (103, 251, 509,
+    510), marketing (156, 198), RSE (168) y la empresa opinando (176).
+
+CONSECUENCIA METODOLÓGICA, y es la lectura que va a la tesis: el autor, el
+asistente y los cinco modelos locales NO tienen criterios distintos. Tienen el
+MISMO ordenamiento y cortan en puntos distintos. Es el mismo anidamiento que
+scripts/analiza_ensemble_r5.py encontró entre modelos (docs/seleccion_modelo_R5
+§4B), extendido a los anotadores humanos. El autor está en el extremo
+conservador de esa cadena.
+
+  POR QUÉ IMPORTA: si la familia entera está anidada, elegir modelo NO es elegir
+  un criterio, es elegir un UMBRAL. Y el umbral objetivo lo define ahora la
+  anotación del autor. Eso convierte la selección de modelo en un problema de
+  calibración, que es mucho más fácil y mucho más defendible que "cuál razona
+  mejor".
+
+
+2.3 TASAS DE POBLACIÓN — 7.2%, NO 10%
+------------------------------------------------------------------------
+El 10% crudo de las 550 NO es la tasa poblacional: el bloque A está
+estratificado por la etiqueta del modelo v1 y sobre-representa lo que ese modelo
+marcó. La tasa insesgada sale solo del bloque B, reponderado por peso de
+muestreo (estimador de Hájek, IC por tamaño efectivo de Kish):
+
+  RELEVANCIA POBLACIONAL = 7.2% ±2.8pp   (n=430, n_eff=322)
+
+Por activo (dentro de un activo el muestreo es uniforme, no se repondera):
+  MINSURI1   21.3% ±11.7pp (n=47)
+  LUSURC1    20.8% ±11.5pp (n=48)
+  INRETC1    16.9% ± 9.1pp (n=65)
+  CPACASC1    6.5% ± 7.1pp (n=46)
+  ALICORC1    5.7% ± 6.2pp (n=53)
+  CREDITC1    2.5% ± 2.8pp (n=118)
+  FERREYC1    1.9% ± 3.7pp (n=53)
+
+PROYECCIÓN A EVENTOS RELEVANTES sobre todo el horizonte 2012-2025 (el split de
+train es un subconjunto temporal de esto, así que estos números son COTAS
+SUPERIORES de lo que verá el agente al entrenar):
+
+  activo      corpus   tasa    eventos esperados   IC95
+  INRETC1      3,191  16.9%          ~540          [249 - 831]
+  CREDITC1     9,946   2.5%          ~253          [  0 - 535]
+  LUSURC1      1,048  20.8%          ~218          [ 98 - 339]
+  MINSURI1       908  21.3%          ~193          [ 87 - 299]
+  ALICORC1     1,689   5.7%           ~96          [  0 - 201]
+  CPACASC1       832   6.5%           ~54          [  4 - 105]
+  FERREYC1     1,735   1.9%           ~33          [  0 -  96]
+  TOTAL       19,349                ~1,390
+
+  ESTO GOBIERNA D12 Y EL CRITERIO DE ABANDONO DEL CANAL (taxonomía §6).
+  Ferreycorp queda en ~2.4 eventos POR AÑO. Con vidas medias de 5/20/60 días,
+  sus columnas sent_pos_ewma / sent_neg_ewma van a ser cero la enorme mayoría
+  de los días. Alicorp y Pacasmayo no están mucho mejor.
+
+  INVERSIÓN DEL ESFUERZO: CREDITC1 es el 51% del corpus y el 18% de los eventos.
+  Más de la mitad del presupuesto de LLM se gasta en el activo de menor
+  rendimiento. Causa identificada: la query de CREDITC1 incluye el alias
+  `Credicorp`, pero el activo del universo es el BANCO DE CRÉDITO (config.yaml),
+  no el holding. Eso arrastra Credicorp Capital, Prima AFP y Pacífico Seguros,
+  que son hermanas y no el emisor. Fue una decisión deliberada de maximizar
+  recall (mediacloud_client._build_query), y la taxonomía las manda a Z, así que
+  NO es un error de etiqueta: es un costo de cómputo que ahora está cuantificado
+  y que el prefiltro no ataca.
+
+MEZCLA DE CATEGORÍAS reponderada a población (· = magnitud cero):
+  · no_relevante        31.3%      ma_reestructuracion   1.6%
+  · mencion_incidental  22.9%      estrategia_inversion  1.5%
+  · sector_macro        20.4%      crisis_evento_adverso 1.1%
+  · indice_bursatil     14.5%      analisis_opinion      1.0%
+  · patrocinio_rse       2.0%      operacional           0.9%
+  · marketing_promocion  1.7%      regulatorio_material  0.7%
+                                   dividendo_capital     0.2%
+                                   resultados            0.1%
+
+BASELINES TRIVIALES que hay que publicar junto a cualquier métrica:
+  - "siempre irrelevante" acierta 92.8% en relevancia (población), 90% en la
+    muestra cruda. Cualquier modelo que reporte accuracy sin esto miente.
+  - "siempre Z_no_relevante" acierta 31.3% en la tarea de 15 categorías.
+
+
+2.4 EL RANKING DE MODELOS SE INVIERTE
+------------------------------------------------------------------------
+Contra la referencia del autor (bloque A, n=120, los cinco pilotos ya corridos —
+sin gastar un token nuevo):
+
+  modelo             precisión   recall     F1     acierto de categoría
+  gemma3:12b          75.0%      92.3%    82.8%        59.2%
+  qwen2.5:14b         71.4%      76.9%    74.1%        67.5%
+  qwen2.5:32b         64.3%      69.2%    66.7%        63.3%
+  gemma3:27b          46.2%      92.3%    61.5%        64.2%
+  gemma3:4b_v21       27.7%     100.0%    43.3%        46.7%
+  gemma3:4b           19.4%     100.0%    32.5%        55.0%
+
+  qwen2.5:32b LIDERABA contra la referencia del asistente (precisión 82.6%) y
+  cae al tercer puesto contra la del autor. Ese cambio es exactamente el sesgo
+  que se anticipó en el bloqueante #1: evaluar contra una referencia hecha por
+  un modelo favorece a los que razonan como ese modelo.
+
+  McNemar pareado: gemma3:12b le gana significativamente a toda la familia 4b
+  (p<0.02) y a gemma3:27b (p=0.016). Es INDISTINGUIBLE de qwen2.5:14b (p=0.752)
+  y de qwen2.5:32b (p=0.289). Con 13 positivos no da para más y hay que decirlo.
+
+  DOS LIMITACIONES QUE VAN CON LA TABLA, SIEMPRE:
+  (a) Corre sobre el BLOQUE A, estratificado por la etiqueta del modelo v1. Las
+      precisiones ORDENAN pero no son estimaciones poblacionales. Para eso hay
+      que correr los pilotos sobre el bloque B (430 ítems del corpus nuevo).
+  (b) El acierto de categoría (última columna) NO correlaciona con el F1 de
+      relevancia: qwen2.5:14b es el mejor en categoría y el segundo en
+      relevancia; gemma3:12b al revés. Son dos tareas y hay que reportarlas
+      separadas, no promediarlas.
+
+
+========================================================================
+3. AUDITORÍA DE LA ANOTACIÓN
+========================================================================
+
+3.1 CALIDAD GENERAL: ALTA
+------------------------------------------------------------------------
+- 279 de 550 filas llevan nota; 13 declaran explícitamente la categoría
+  alternativa que se descartó. Eso es trazabilidad, no adorno: permite auditar
+  la frontera sin volver a leer el titular.
+- Las convenciones se aplican de forma UNIFORME donde están declaradas
+  (familias 103/140/251/509/510; 156/201/269/514; 70/214/499).
+- Los casos trampa están todos cazados: Cobriza/Doe Run (fila 50), homonimia
+  Ferreyros (437), noticias de otra empresa del listado (145, 244, 179, 345).
+- Barrido automático de control: sobre las 495 filas Z, buscando (a) alias de
+  marca de la propia empresa y (b) regex de eventos corporativos
+  (resultados / M&A / dividendo / gobierno / regulatorio), NO aparece ningún
+  relevante mal enterrado. La anotación no tiene falsos negativos detectables.
+
+3.2 LO QUE SE CORRIGIÓ
+------------------------------------------------------------------------
+FILA 328 — "Acción de Cementos Pacasmayo y su día de gloria con alza de 61%,
+  ¿quiénes venden?" (2025-12-17). Estaba en C_analisis_opinion / positivo.
+  CORREGIDA A Z_indice_bursatil el 2026-08-26.
+  RAZÓN: el §1(f) de la taxonomía ya decidió este caso al medir que los
+  resúmenes de índice aciertan el signo 50.5% (n=838, p=0.81) y al concluir que
+  "no se arregla leyendo el cuerpo: ahí la noticia sería el retorno del día, que
+  R3 ya tiene mejor y antes". La fila 328 es la versión mono-activo de eso.
+  Dejarla en C=0.3 con signo positivo le mete el retorno del día al canal de
+  sentimiento por la puerta de atrás, y encima con un día de rezago respecto de
+  R3. (Nota: la 328 es el día SIGUIENTE al anuncio de Holcim de la fila 468.
+  Que las dos filas sean coherentes entre sí valida la anotación, y es
+  precisamente por qué la 468 sí es el evento y la 328 no.)
+  EFECTO: relevantes 55 -> 54; CPACASC1 8.7% -> 6.5%; relevancia poblacional
+  7.3% -> 7.2%.
+
+3.3 LO QUE QUEDA ABIERTO — LA REGLA DE LA FILA 68
+------------------------------------------------------------------------
+La regla, tal como quedó escrita en la nota de la fila 68, dice:
+  "C_analisis_opinion exige que el titular NOMBRE a la empresa como objeto del
+   juicio."
+
+Produce dos resultados que el autor considera discutibles:
+  FILA 247 — "BTG: Reemplazo de DU-003 impulsará firmas bancarias,
+    constructoras y de equipamiento" -> C_analisis_opinion / positivo (Ferreycorp)
+  FILA 320 — "Fitch Ratings: mineras que operan únicamente en Perú afrontan
+    mayor riesgo por protestas sociales" -> C_analisis_opinion / negativo (Minsur)
+Ninguna de las dos nombra a la empresa. Bajo la regla literal deberían ser Z, y
+la propia nota de la 247 lista Z_sector_macro como alternativa. Están anotadas
+como C, es decir, la regla ya se estaba violando en la práctica.
+
+DIAGNÓSTICO: la regla empaqueta TRES pruebas distintas y solo dos son buenas.
+  (i)   ¿La empresa es el OBJETO del juicio, o su AUTOR?
+        Buena, hace trabajo real: separa la fila 3 (S&P califica a Alicorp -> C)
+        de la 251 (el BCP firma un estudio -> Z). SE CONSERVA.
+  (ii)  ¿El juicio apunta a la empresa o a un CONJUNTO que la incluye?
+        Buena, y es la que de verdad decide 68 / 247 / 320. SE CONSERVA.
+  (iii) ¿El titular la NOMBRA literalmente?
+        MALA. Es un proxy de (ii) y se rompe en los dos sentidos: 247 y 320 no
+        la nombran pero delimitan un conjunto que la contiene; y a la inversa,
+        un titular puede nombrarla sin juzgarla.
+LA (iii) ES LA QUE HAY QUE ELIMINAR. El reemplazo es el eje de alcance de §5, y
+es el mismo eje que resuelve el hueco regulatorio y el caso del robo (fila 478).
+Mientras D14 no se cierre, la convención provisional es: la 247 y la 320 pasan a
+Z_sector_macro, para que la regla escrita y las etiquetas digan lo mismo.
+
+3.4 DERIVA MENOR DE FRONTERA (no afecta al panel)
+------------------------------------------------------------------------
+FILA 13  — "Las AFP tendrán mayores opciones de inversión..." -> Z_sector_macro
+FILA 429 — "Retiro AFP de 4 UIT | Cronograma..."             -> Z_no_relevante
+Las dos son regulación del sistema previsional, las dos en una fila de BCP, y
+cayeron en casillas Z distintas. Las dos tienen magnitud CERO, así que al panel
+no le cambia absolutamente nada: la distinción entre `sector_macro` y
+`no_relevante` no produce ninguna columna.
+DÓNDE SÍ IMPORTA: en el macro-F1 de 15 clases con que se compara a los modelos.
+Un modelo penalizado por no adivinar en cuál de dos casillas equivalentes cae
+una noticia está siendo medido en algo que no le importa a nadie.
+CONCLUSIÓN, y vale para las 6 categorías Z en bloque: la métrica principal de
+selección de modelo debe ser PONDERADA POR MAGNITUD, no un macro-F1 plano sobre
+15 clases. El macro-F1 va como métrica secundaria y con esta advertencia.
+Corolario: la categoría vacía B_gobierno_corporativo (0 filas de 550) deja de
+ser un problema — en una métrica ponderada por magnitud no hay que decidir si
+vale cero o si se excluye del promedio.
+
+3.5 CONCENTRACIÓN DE LA DUDA — ES UN RESULTADO, NO UN DEFECTO
+------------------------------------------------------------------------
+105 filas marcadas con `duda` (19.1%). No están repartidas al azar:
+  A_regulatorio_material  5/5   100%      Z_sector_macro        34/113  30%
+  B_operacional           3/4    75%      Z_mencion_incidental  18/88   20%
+  A_crisis_evento_adverso 5/7    71%      Z_no_relevante        15/151  10%
+  C_analisis_opinion      6/9    67%      Z_indice_bursatil      2/124   2%
+  B_estrategia_inversion  5/11   46%      A_resultados           0/4     0%
+                                          B_dividendo_capital    0/2     0%
+LECTURA: la duda se concentra exactamente donde la taxonomía tiene fronteras mal
+definidas (regulatorio, crisis, análisis) y desaparece donde el hecho es
+objetivo (resultados, dividendos, índice). El titular solo NO es el problema —
+la definición lo es. Es evidencia directa a favor del rediseño de §5, y no a
+favor de ampliar la ventana de texto.
+Corolario reportable: 28 de los 54 relevantes (52%) están marcados con duda.
+Las métricas deben correrse con y sin ese subconjunto; la diferencia estima
+cuánta de la tarea es genuinamente ambigua.
+
+
+========================================================================
+4. LAS SEIS OBSERVACIONES DEL AUTOR
+========================================================================
+
+4.1 "HAY NOTICIAS MARCADAS COMO UNA EMPRESA QUE PARECEN DE OTRAS.
+     ¿NO HABRÁ DATA LEAKAGE?"
+------------------------------------------------------------------------
+El síntoma es real y está bien visto. El nombre no: data leakage es
+contaminación entre train y test, y aquí no hay entrenamiento — se está midiendo
+un clasificador zero-shot contra una referencia.
+
+Lo que sí hay son TRES fenómenos distintos que conviene no mezclar:
+
+  (a) ASOCIACIÓN LEGÍTIMA, INVISIBLE EN EL TITULAR. MediaCloud indexa el CUERPO
+      del artículo; la muestra solo trae el TITULAR. De ahí que la enorme
+      mayoría de los titulares no nombre a la empresa. Filas 9 y las ~36 de tipo
+      de cambio (el BCP es la fuente de la cotización) son el caso ejemplar.
+      NO es un error de datos: es un DESAJUSTE ENTRE LA UNIDAD DE ASOCIACIÓN
+      (cuerpo) Y LA UNIDAD DE CLASIFICACIÓN (titular). Y es medible: es la razón
+      principal de que la relevancia poblacional sea 7.2%.
+
+  (b) FALSOS POSITIVOS DE COINCIDENCIA DE CADENA. Aquí la etiqueta está mal.
+      Fila 437 (Violeta Ferreyros vs Ferreycorp) y fila 50 (mina Cobriza, que es
+      de Doe Run, en una fila de Buenaventura).
+      La fila 50 es la trampa más informativa de la muestra: un modelo que no
+      sepa quién opera Cobriza la va a clasificar como A_crisis_evento_adverso y
+      va a estar equivocado por falta de conocimiento del mundo, no por fallo de
+      criterio. VALE REPORTAR APARTE cuántos errores son de ese tipo.
+
+  (c) NOTICIA DE OTRA EMPRESA DEL MISMO LISTADO. Filas 145, 244, 179, 345
+      (Alicorp en fila de Pacasmayo, Pacasmayo en fila de Ferreycorp, Plaza Vea
+      en fila de Saga, Tottus en fila de Ferreycorp).
+
+VERIFICACIÓN QUE SÍ CORRESPONDÍA HACER, Y SU RESULTADO. Hay una variante de esta
+sospecha que SÍ sería un problema serio y point-in-time: que las queries usen
+alias de marcas que la empresa NO poseía en toda la ventana 2012-2025, aplicando
+el perímetro societario de hoy hacia atrás. Se revisó
+`mediacloud_client._build_query` una por una:
+  INRETC1  : InRetail / Supermercados Peruanos / Plaza Vea / InkaFarma
+             -> todas del grupo Intercorp durante toda la ventana. LIMPIO.
+             (Mifarma, adquirida vía Quicorp recién en 2018, NO está en la query.)
+  FERREYC1 : Ferreycorp / Ferreyros -> misma entidad, cambio de razón social.
+  LUSURC1  : Luz del Sur -> misma entidad; cambió el dueño (Sempra -> China
+             Three Gorges, 2020), no el emisor.
+  CREDITC1 : incluye `Credicorp`, que es el HOLDING y no el emisor del universo.
+             No es look-ahead — Credicorp existió toda la ventana — pero sí es
+             sobre-alcance de perímetro, y su costo está cuantificado en §2.3.
+  CONCLUSIÓN: NO hay violación point-in-time por construcción de query.
+
+QUÉ HACER:
+  - Nada urgente sobre (a): es el diseño y está medido.
+  - (b) y (c) son ruido de etiqueta de la fuente, irreducible sin leer el cuerpo.
+    Se ACOTA reportando la tasa: en la muestra son 6 filas de 550 (1.1%).
+  - DECISIÓN QUE SÍ HAY QUE TOMAR: fijar la unidad de entrada ANTES de volver a
+    anotar. Si algún día el pipeline le entrega el CUERPO al modelo, estas
+    etiquetas cambian de significado y la referencia entera deja de valer. Ver
+    §4.5.
+
+4.2 "HAY NOTICIAS GENERALES REGULATORIAS. ¿CÓMO MANEJAMOS ESTO?"
+------------------------------------------------------------------------
+Es el hueco más grande de la taxonomía actual. `A_regulatorio_material` exige
+una norma "que afecta AL NEGOCIO", lo que deja sin casilla propia a toda la
+regulación sectorial: cae en Z_sector_macro con magnitud CERO, o sea que se
+trata igual que una nota de farándula.
+
+Ejemplos que quedaron en 0 y que un analista sí miraría:
+  Fila 13  — nuevas opciones de inversión para las AFP (sistema previsional)
+  Fila 332 — Perú fijará niveles mínimos de transgénicos en procesados
+  Fila 460 — Indecopi fiscaliza call centers con IA (alcanza a todo el retail)
+  Fila 541 — condiciones de la suspensión perfecta de labores
+  Fila 24  — la BVL rebaja 90% las tarifas de negociación del IBGC
+
+Y sí entró como A cuando la empresa era el objeto identificable de la norma:
+  Filas 70, 214, 499 (conflicto tarifario Luz del Sur - Osinergmin - COES)
+  Fila 340 (el Senace aprueba el EIA de San Rafael, mina de Minsur)
+
+DOS PROBLEMAS DISTINTOS QUE LA DEFINICIÓN NO SEPARA:
+  (i)  ALCANCE: empresa / sector / economía. Es lo que distingue 70 de 460.
+  (ii) CANAL: "afecta al negocio" vs "afecta a la acción". La fila 24 abarata
+       NEGOCIAR el papel de Ferreycorp sin tocar su negocio de maquinaria.
+       Esto NO se arregla con alcance y la recomendación es dejarlo fuera del
+       canal de sentimiento: el canal de microestructura ya está en R3 (volumen,
+       frecuencia, puntas bid/ask del Informe Bursátil). Duplicarlo aquí sería
+       meter la misma información dos veces con peor medición.
+
+SOLUCIÓN: el eje de alcance de §5. `regulatorio` deja de ser una categoría con
+magnitud fija y pasa a ser tipo=regulatorio × alcance, con magnitud derivada.
+
+4.3 "¿HAY MANERA DE SABER SI UNA ADQUISICIÓN PUEDE SER BUENA O MALA?"
+------------------------------------------------------------------------
+Sí, pero no preguntándole el signo al modelo. Preguntándole el ROL.
+
+La evidencia de estudios de evento es robusta y vieja: el retorno anormal del
+COMPRADOR es cercano a cero en promedio (y frecuentemente negativo en
+adquisiciones grandes pagadas con acciones), mientras que el de la empresa
+ADQUIRIDA es claramente POSITIVO por la prima de control. Adivinar el signo
+desde el titular no se puede; distinguir el rol, sí, y es una pregunta objetiva.
+
+  Fila 468 — "Holcim adquirirá participación mayoritaria en Cementos Pacasmayo"
+             Pacasmayo es ADQUIRIDA -> prima de control -> POSITIVO
+  Fila 391 — "China Three Gorges oficializa compra de Luz del Sur a Sempra"
+             Luz del Sur es ADQUIRIDA -> POSITIVO
+  Fila 157 — "Sempra iniciará proceso para vender unidades en Perú y Chile"
+             Luz del Sur es el activo en venta -> ADQUIRIDA (anuncio previo)
+  Fila 206 — "Alicorp adquiere la brasileña Pastificio Santa Amália"
+             Alicorp es COMPRADORA -> indeterminado -> NEUTRAL
+  Fila 62  — "Minsur acuerda la venta de su operación minera en Brasil"
+             Minsur es VENDEDORA -> depende de si desinvierte un activo
+             problemático o uno rentable; el titular no lo dice -> NEUTRAL
+
+POR QUÉ ESTO NO ES OPCIONAL — y es el hallazgo más fuerte de toda la auditoría:
+
+  58% DE LOS EVENTOS RELEVANTES SON `neutral`, y 58% DE LA MASA DE MAGNITUD.
+  Los 13 M&A — la categoría A más frecuente del corpus, 1.6% de la población,
+  la más frecuente de las nueve relevantes — son TODOS neutrales por regla.
+
+  En el diseño de D11(iii), `neutral` no entra a sent_pos_ewma NI a
+  sent_neg_ewma. Es decir: EL EVENTO MÁS MATERIAL DEL CORPUS ES INVISIBLE EN LAS
+  SEIS COLUMNAS DEL PANEL. Solo sobrevive por has_news / n_articles /
+  days_since_news, que no distinguen una toma de control de un auspicio escolar.
+
+  Esto es un agujero de DISEÑO, no de datos, y la regla "M&A siempre neutral" es
+  su causa directa. El campo `rol` lo cierra sin volver a llamar al LLM para lo
+  ya clasificado, porque la polaridad se DERIVA del rol río abajo.
+
+BONUS: `rol` da además una hipótesis CONTRASTABLE contra datos propios. Con
+close_total_return de R3 se puede medir el retorno anormal alrededor de las
+fechas de M&A y verificar si objetivo>0 y comprador≈0 se cumple en la BVL. Con
+~1.6% de 19,349 artículos el número de EVENTOS distintos es del orden de varias
+decenas — poco para un estudio de evento serio, suficiente para un chequeo de
+signo. Va como ablación en R8, no como validación.
+
+4.4 "MUCHAS CATEGORÍAS QUEDARON EN DESUSO. ¿REORGANIZAR LA TAXONOMÍA?"
+------------------------------------------------------------------------
+Sí, y el desbalance está al revés de como fue diseñada:
+
+  bloque  categoría                 filas
+  A (1.0) ma_reestructuracion         13
+          crisis_evento_adverso        7
+          regulatorio_material         5
+          resultados                   4
+  B (0.6) estrategia_inversion        11
+          operacional                  4
+          dividendo_capital            2
+          gobierno_corporativo         0   <- vacía
+  C (0.3) analisis_opinion             8
+  Z (0)   no_relevante               151
+          indice_bursatil            124
+          sector_macro               113
+          mencion_incidental          88
+          patrocinio_rse              10
+          marketing_promocion          9
+
+La taxonomía dedica 9 de 15 códigos a las 54 filas relevantes y 6 códigos a las
+496 irrelevantes. El detalle fino está donde casi no hay datos y el grueso del
+corpus se comprime en cuatro casillas.
+
+DIAGNÓSTICOS QUE SE DESPRENDEN:
+  - B_gobierno_corporativo no tiene ninguna fila. Con una métrica ponderada por
+    magnitud (§3.4) deja de ser un problema de cómputo.
+  - A_resultados (4) y B_dividendo_capital (2) no tienen soporte para reportar
+    precisión por clase. Hay que decirlo, no reportar el número.
+  - QUE A_resultados SEA LA CATEGORÍA MÁS ESCASA ES EL DATO MÁS INCÓMODO. Los
+    resultados trimestrales son el hecho más relevante para un inversionista y
+    son 0.1% de la población. La causa NO es la taxonomía: es la FUENTE. Prensa
+    generalista (Gestión, El Comercio, La República) cubre resultados de forma
+    esporádica. Si el objetivo del clasificador es señal financiera, el corpus
+    está mal elegido antes que la taxonomía.
+    MITIGACIÓN QUE YA EXISTE: los EEFF entran al panel por R4 con known_date
+    real de la BVL, que es una fuente mejor, completa y point-in-time. El canal
+    de sentimiento NO tiene que cubrir resultados. Conviene declararlo así en
+    lugar de tratarlo como una carencia.
+
+LA REORGANIZACIÓN VA EN §5. Punto práctico importante: NO obliga a re-anotar las
+550. Los 15 códigos actuales mapean directo al eje `tipo`, y los ejes nuevos
+(alcance, rol) solo hay que anotarlos donde cambian algo: las 54 relevantes más
+las 113 de Z_sector_macro, que es donde vive la regulación sectorial. Son ~167
+filas, no 550.
+
+4.5 "TITULARES TRUNCADOS. ¿QUIZÁS NO DELIMITAR TANTO?"
+------------------------------------------------------------------------
+Son DOS problemas distintos y solo uno se arregla.
+
+(A) EL TRUNCAMIENTO ES UN BUG, Y ES DETERMINISTA.
+    No es aleatorio y no viene "de la extracción": el cuerpo del titular está
+    cortado a EXACTAMENTE 70 caracteres, y recién después se le antepone el
+    prefijo de sección.
+      [531] "Perú: "      ( 6) + 70 =  76
+      [250] "Famosos: "   ( 9) + 70 =  79
+      [110] "Mercados: "  (10) + 70 =  80
+      [372] "Negocios: "  (10) + 70 =  80
+      [418] "Economía: "  (10) + 70 =  80
+      [  5] "Respuestas: "(12) + 70 =  82
+    Contraprueba: la fila 423 ("Negocios: Ranking Merco 2020", cuerpo de 18
+    caracteres) está completa. La regla es "prefijo presente Y cuerpo == 70".
+    TAMAÑO REAL sobre el corpus completo: 271 de 21,576 filas (1.26%).
+    ACCIÓN: detectarlas con regex y excluirlas o refetchearlas. Es barato,
+    independiente de cualquier decisión de diseño, y hay que hacerlo antes de
+    ampliar la muestra.
+
+(B) AMPLIAR LA VENTANA DE TEXTO NO ES UNA CORRECCIÓN, ES OTRO PROYECTO.
+    Sí resolvería los cortes y subiría la relevancia. Pero:
+    - MediaCloud NO devuelve el cuerpo. Los parquets de data/raw tienen
+      exactamente: id, indexed_date, language, media_name, media_url,
+      publish_date, title, url, ticker, query, fetched_at. No hay snippet ni
+      bajada. Ampliar significa SCRAPEAR las URLs.
+    - 46 filas de 550 (8%) no tienen URL. Y el horizonte va de 2013 a 2025, así
+      que el link rot sobre los medios peruanos va a ser severo, con sesgo
+      temporal: se recuperaría más cuerpo de lo reciente que de lo antiguo, y
+      eso mete un sesgo NO estacionario en un panel que alimenta a un agente
+      secuencial. Es peor que el problema que resuelve.
+    - INVALIDA LA REFERENCIA. Con titular solo, las etiquetas de §4.1(a) son
+      coherentes. Con el cuerpo, muchísimas filas hoy en Z_mencion_incidental
+      pasarían a relevantes y habría que re-anotar las 550 desde cero.
+    RECOMENDACIÓN: NO para esta tesis. Se declara como restricción de diseño
+    ("clasificación con información escasa: el titular es lo que la fuente
+    entrega") y como trabajo futuro. Es defendible y es honesto.
+    Evidencia que la respalda: §3.5 muestra que la duda se concentra donde la
+    DEFINICIÓN es mala, no donde el texto es corto — Z_indice_bursatil tiene 2%
+    de duda con los mismos titulares cortos.
+
+4.6 "FILA 478: ES UN ROBO, LA DEFINICIÓN MÁS CERCANA ES A, PERO NO VA A
+     AFECTAR TANTO"
+------------------------------------------------------------------------
+Correcto, y es el mejor argumento a favor de reorganizar. Dentro de la MISMA
+categoría A_crisis_evento_adverso, con la MISMA magnitud 1.0:
+
+  fila  hecho                                          materialidad real
+  478   robo de equipos en un Plaza Vea del Callao     despreciable
+  482   robo de S/1,400 en una botica del grupo        despreciable
+   76   orden de compensar a clientes por precios mal
+        publicados                                      baja
+  382   denuncia de daño ambiental contra Pucamarca     media-alta
+  391   China Three Gorges compra Luz del Sur (A)       máxima
+
+La taxonomía pregunta QUÉ TIPO DE HECHO ES y usa la respuesta como proxy de
+CUÁNTO IMPORTA. Son dos preguntas distintas y el proxy falla en las colas.
+
+CÓMO SE ARREGLA SIN REINTRODUCIR EL ERROR DE `confidence`: el §3 de la taxonomía
+argumenta —y sigue teniendo razón— que pedirle al LLM que juzgue IMPORTANCIA es
+una segunda autoevaluación, y que la única autoevaluación existente
+(`confidence`) resultó ruido medido (0.750 en errores vs 0.730 en aciertos).
+Por eso NO se debe agregar un campo "materialidad alta/media/baja".
+Lo que sí se puede pedir es una pregunta OBJETIVA que capture casi lo mismo:
+¿A QUÉ NIVEL APUNTA EL HECHO? Un local, la empresa, el sector, el mercado.
+Eso es observable en el titular, no es una opinión sobre importancia, y es el
+MISMO eje que resuelve §4.2 y §3.3. Ver §5.
+
+
+========================================================================
+5. PROPUESTA: UN SOLO EJE NUEVO, `alcance` (ENTRA COMO D14)
+========================================================================
+>> ESTADO (2026-08-29): MEDIDA Y DESCARTADA. Esta sección se conserva como la
+   deliberación que la originó; el veredicto, los números y el porqué están en
+   D14 de docs/decisiones_pendientes_OE1.txt, sección MEDICIÓN, y se reproducen
+   con `python scripts/mide_impacto_d14.py`.
+   En una línea: al factor propuesto (0.3) el eje NO aumenta la masa de magnitud
+   (0.98x estricta / 1.10x amplia) porque lo que entra se cancela con lo que el
+   propio eje degrada; y la razón max/min de cobertura entre activos empeora de
+   16.5x a 30.0x, que es justo el riesgo que D11 tuvo que mitigar.
+
+
+En vez de los tres ejes que proponía el borrador (relevancia / tipo /
+materialidad), UNO SOLO, porque hace el trabajo de los tres y es objetivo:
+
+  tipo     : los 9 códigos relevantes actuales (resultados, ma_reestructuracion,
+             crisis, regulatorio, estrategia_inversion, dividendo_capital,
+             operacional, gobierno_corporativo, analisis_opinion) + `ninguno`.
+  alcance  : unidad | empresa | sector | mercado
+  rol      : comprador | objetivo | vendedor | n/a   (solo si tipo = M&A)
+
+  magnitud = base(tipo) × factor(alcance)      -- se calcula en R6, gratis
+  polaridad de M&A = f(rol)                    -- se deriva, no se pregunta
+
+  factor propuesto:  unidad 0.3 · empresa 1.0 · sector 0.3 · mercado 0.0
+
+QUÉ RESUELVE, CASO POR CASO:
+  478 robo en una tienda      crisis × unidad  = 0.3   (antes 1.0)
+  391 compra de Luz del Sur   M&A    × empresa = 1.0   (igual)
+   68 "acciones de la BVL"    opinion× mercado = 0.0   (igual, y ahora por regla)
+  227 "InRetail puede subir"  opinion× empresa = 0.3   (igual)
+  247 BTG sobre el rubro      opinion× sector  = 0.09  (antes 0.3 mal asignado)
+  320 Fitch sobre mineras     opinion× sector  = 0.09  (antes 0.3 mal asignado)
+   70 sentencia a eléctricas  regul  × empresa = 1.0   (igual)
+  460 Indecopi a call centers regul  × sector  = 0.3   (antes 0.0)
+  541 suspensión perfecta     regul  × mercado = 0.0   (igual, y ahora por regla)
+Y elimina `sector_macro` como categoría: pasa a ser tipo × alcance=sector.
+
+LÍMITE HONESTO DE LA PROPUESTA, que hay que escribir en la tesis: `alcance` NO
+resuelve la materialidad, la aproxima. Contraejemplo propio: la fila 382
+(denuncia ambiental contra Pucamarca) es alcance=unidad y saldría 0.3, pero
+Pucamarca es una de las dos minas de Minsur, mientras que un Plaza Vea es una de
+cientos de tiendas de InRetail. El mismo `unidad` vale fracciones muy distintas
+del negocio según el activo. Eso NO se puede saber desde el titular y no se
+puede pedir a un modelo chico. Se acepta la imprecisión, se declara, y se deja
+como perilla de recalibración en R6 (que es gratis) y como brazo de D12
+(magnitud aprendida por tramo en vez de fija).
+
+COSTO DE ADOPTARLA:
+  - Re-anotar `alcance` en ~167 filas (las 54 relevantes + las 113 de
+    Z_sector_macro, que es donde puede aparecer regulación sectorial nueva).
+    NO las 550: los 15 códigos actuales ya dan el eje `tipo`.
+  - Re-anotar `rol` en 13 filas.
+  - Cambiar el prompt y volver a correr los pilotos. El barrido de 5 modelos
+    sobre 120 ítems es barato en el servidor xwing (0.8-1.6 s/artículo).
+  - CERO costo río abajo: magnitudes, vidas medias y agregación se calculan en
+    build_dataset, así que cualquier recalibración posterior no re-paga el LLM
+    (taxonomía §5, punto clave de arquitectura).
+
+CONDICIÓN PARA ADOPTARLA: hay que MEDIR que un modelo chico responde `alcance`
+mejor de lo que hoy elige entre 15 códigos. Si no, se cambió una taxonomía mala
+por otra. La medición es el mismo protocolo y los mismos 120 ítems del bloque A.
+
+DECISIÓN QUE HAY QUE TOMAR ANTES QUE NINGUNA OTRA: si las reglas de frontera
+(las de §3.3, §3.4 y las 7 convenciones que el autor fijó al anotar) ENTRAN AL
+PROMPT COMO CODEBOOK o no.
+  - Si entran: se mide CLASIFICACIÓN. Es lo correcto y el codebook ya está
+    escrito — son las 279 notas del Excel.
+  - Si no entran: se mide la capacidad del modelo de ADIVINAR convenciones
+    privadas del anotador, que no es una tarea con sentido. Si se elige esta
+    vía hay que declararla explícitamente.
+Afecta a unas 150 filas. La recomendación es que entren.
+
+
+========================================================================
+6. CORRECCIONES AL BORRADOR data/interim/debilidades_taxonomia_r5.md
+========================================================================
+El borrador es un buen registro de las observaciones y su §6 y §7 son las dos
+más fuertes. Tres cosas hay que corregir antes de que nada de ahí llegue a la
+tesis:
+
+  (a) "55 relevantes (10%) y 495 irrelevantes (90%)" — SESGADO. Trata las 550
+      como un pool único. Son dos bloques con diseños muestrales distintos y el
+      A está estratificado por la etiqueta del modelo v1. La tasa insesgada es
+      7.2% ±2.8pp (bloque B reponderado). Arrastra al baseline trivial de su
+      §9(2): "siempre irrelevante" acierta 92.8%, no 90%.
+  (b) "el truncamiento no viene de un límite de campo sino de la extracción" —
+      AL REVÉS. Es un límite de campo exacto de 70 caracteres (§4.5). Y son 6
+      filas, no 5: el borrador no vio la fila 5.
+  (c) La tabla de su §1 suma 551 y tiene cuatro celdas desfasadas (índice
+      123->124, sector 114->113, patrocinio 11->10, duda 106->105). Se escribió
+      antes de las últimas correcciones del autor, entre ellas la de la fila 24.
+
+  Lo que el borrador NO vio y es lo más importante: el 58% de magnitud atrapada
+  en `neutral` (§4.3) y los conteos de eventos por activo que gobiernan D12
+  (§2.3).
+
+
+========================================================================
+7. LO QUE QUEDA
+========================================================================
+EN ORDEN, Y LO PRIMERO ES LO MÁS BARATO:
+
+  [ ] Aplicar la convención provisional de §3.3: filas 247 y 320 a
+      Z_sector_macro, para que la regla escrita y las etiquetas coincidan.
+  [ ] Detectar y excluir las 271 filas truncadas @70 del corpus (§4.5).
+  [ ] Renombrar `rel_humana`/`sent_humano` a `rel_referencia`/`sent_referencia`
+      + campo de quién anotó, en r5_validacion_anotada.csv. Mientras se llamen
+      "humana" van a seguir induciendo el error.
+  [ ] Cerrar §7 de docs/seleccion_modelo_R5.txt con gemma3:12b, su snapshot
+      exacto, y las dos limitaciones de §2.4.
+  [ ] Correr los pilotos sobre el BLOQUE B (430 ítems, corpus nuevo). Es lo que
+      convierte la tabla de §2.4 en estimaciones poblacionales.
+  [ ] Correr Gemini (código listo, falta GEMINI_API_KEY). Responde si un modelo
+      frontier ROMPE el anidamiento o solo corta en otro punto. Esa pregunta NO
+      depende de la referencia.
+  [ ] Decidir D14 (§5) y, si se adopta, re-anotar alcance en ~167 filas y rol
+      en 13.
+  [ ] Métrica principal de selección PONDERADA POR MAGNITUD; macro-F1 de 15
+      clases como secundaria y con la advertencia de §3.4.
+  [ ] Reportar aparte: tasa de salidas inválidas de los modelos locales, y tasa
+      de errores por desconocimiento del mundo (el caso Cobriza, §4.1b).
+  [ ] Correr todas las métricas con y sin las 105 filas con `duda` (§3.5).
+
+========================================================================
+FIN
+========================================================================

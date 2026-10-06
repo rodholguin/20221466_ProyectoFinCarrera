@@ -1,0 +1,643 @@
+PLAN DE EXTRACCIÓN — TERMINAL BLOOMBERG
+Preparado: 2026-09-05. Visita a la universidad (terminal físico).
+Extiende: docs/decisiones_pendientes_OE1.txt, ACTA 2026-09-02, sección E.
+Contrastado con: docs/ejecutabilidad_y_costos_OE1.txt §5-§7,
+                 docs/riesgos_transversales_datos.txt, docs/hallazgos_saltos_y_fuentes_R5.txt
+========================================================================
+
+RELACIÓN CON EL ACTA
+------------------------------------------------------------------------
+La sección E del acta ya fijó una prioridad estricta de cinco puntos. Este
+documento NO la reemplaza: la conserva íntegra y le agrega cuatro extracciones
+que E no contemplaba (volumen diario, OHLC, flotante y fundamentales
+originalmente reportados), más el protocolo operativo de la visita.
+
+  Prioridad del acta §E          Estado en este plan
+  1. PX_BID / PX_ASK diarios     P0-2 — se mantiene como lo #1 irreemplazable
+  2. Probar con UN ticker antes  §2 pre-vuelo — se mantiene, es el minuto 5
+  3. Índice local retorno total  P1-2
+  4. EQY_SH_OUT                  P1-3
+  5. Reglas de redistribución    §12 — se mantiene, y es lo primero que se
+                                 pregunta al llegar
+
+  AÑADIDO EN ESTE PLAN, con su razón:
+  P0-1 volumen y monto diario  — E no lo lista, y es tan irreemplazable como
+                                 las puntas: la BVL no publica volumen diario
+                                 y Yahoo quedó invalidado (ver §4.1).
+  P0-3 OHLC real               — es el PLAN B de las puntas si el histórico de
+                                 bid/ask no llega a 2012. Sin él no hay plan B.
+  P0-4 flotante y propiedad    — documenta la premisa central de la tesis, que
+                                 hoy es una afirmación sin fuente citable.
+  P1-1 fundamentales OR vs MR  — es el panel bitemporal declarado "trabajo
+                                 futuro" en riesgos §3(b), a costo casi nulo.
+
+  DIMENSIONAMIENTO REVISADO: el acta calculó 7 × 4 campos × 3,500 ≈ 98,000
+  puntos. Con P0 completo (9 campos) son ≈ 220,000. Sigue siendo manejable,
+  pero obliga a bajar P0 PRIMERO y a revisar el tope en DAPI.
+
+
+========================================================================
+0. REGLA DE ENCUADRE (del acta §E, no se negocia)
+========================================================================
+  Hoy el pipeline es 100% reproducible desde fuentes públicas y eso es una
+  CONTRIBUCIÓN DECLARADA de la tesis. Bloomberg no puede ponerla en riesgo.
+
+  - Volcado ÚNICO a parquet, con fecha de extracción documentada.
+  - NUNCA una dependencia viva del pipeline. El día que se acabe el acceso,
+    R3-R6 tienen que correr igual.
+  - El cierre autoritativo sigue siendo la BVL. Bloomberg aporta volumen,
+    puntas, OHLC y flotante como CAPA DE VALIDACIÓN Y ENRIQUECIMIENTO.
+  - Añadir `data/raw/bloomberg/` al .gitignore ANTES de copiar nada.
+    OJO: un patrón mal anclado ya se tragó `src/env/` entero (ver acta,
+    "TRAMPA DE REPO"). Anclar con `/` o verificar con `git check-ignore -v`.
+  - Citar en la tesis: "Bloomberg L.P., consultado el 2026-09-05".
+
+  EL ENCUADRE EN UNA FRASE: el cierre ya lo tienes y es bueno. Lo que no
+  tienes es TODA la microestructura. Hoy el modelo de costos de OE1 —D7, el
+  costo por activo, los 111-323 pbs, el c* por bisección— descansa sobre UN
+  SOLO SNAPSHOT del 27-jul-2026. Ese es el hueco que esta visita cierra.
+
+
+========================================================================
+1. PRIORIDAD ESTRICTA
+========================================================================
+  P0  cambia las conclusiones de la tesis. Si solo alcanza para esto, alcanzó.
+      1. Volumen y monto negociado diarios
+      2. Puntas bid/ask diarias            <- lo #1 del acta §E
+      3. OHLC real
+      4. Flotante y estructura de propiedad
+
+  P1  cierra riesgos ya registrados.
+      1. Fundamentales originalmente reportados + fecha de publicación
+      2. Índice local en RETORNO TOTAL + miembros
+      3. EQY_SH_OUT histórico + acciones corporativas
+      4. Calendario oficial de Lima
+      5. LQA / TCA — liquidez y costo de impacto
+
+  P2  valioso pero abre alcance. Solo si sobra tiempo.
+      1. Consenso de analistas y sorpresa de utilidades
+      2. Sentimiento de noticias nativo de Bloomberg
+      3. Índices externos: SOLO los tres ítems del §7
+      4. Cross-listed CPAC / BAP con microestructura limpia
+      5. ECO — calendario de publicaciones macro con hora
+
+
+========================================================================
+2. PRE-VUELO — PRIMEROS 20 MINUTOS
+========================================================================
+  No lanzar la extracción grande hasta saber qué existe. El acta §E-2 ya lo
+  dice: probar con UN ticker antes, "mejor saberlo en el minuto 5".
+
+  [ ] SECF <GO>   Tickers exactos y sufijo de Lima. OJO: MINSURI1 es acción de
+                  INVERSIÓN — confirmar que no devuelva la común de Breca.
+  [ ] DES <GO>    Moneda e ISIN por activo. Que InRetail salga en US$ y que los
+                  ISIN coincidan con config.yaml:
+                    BCP        PEP120001008
+                    Pacasmayo  PEP239501005
+                    InRetail   PAL1801171A1
+  [ ] FLDS <GO>   Buscar "bid", "volume", "trades", "float". Los mnemónicos
+                  varían por clase de activo. CONFIRMAR CADA UNO antes de
+                  escribirlo en Excel — los de este documento son candidatos,
+                  no verdad revelada.
+  [ ] HP <GO>     ***EL CHEQUEO QUE DECIDE EL DÍA***: primera fecha con bid/ask
+                  para un solo ticker. Anotarla.
+  [ ] DAPI <GO>   Presupuesto de puntos históricos disponible este mes.
+
+  PLAN B, SI LAS PUNTAS NO LLEGAN A 2012
+  --------------------------------------
+  No es un fracaso. Bajar el bid/ask del tramo que exista y usar el OHLC
+  completo para estimar el spread hacia atrás con Corwin-Schultz (2012) o
+  Abdi-Ranaldo (2017), CALIBRANDO el estimador contra el bid/ask real en el
+  tramo solapado. Es más defendible que un spread constante, y el solape da la
+  validación. Por eso el OHLC (P0-3) es P0 y no un extra.
+
+
+========================================================================
+3. TICKERS
+========================================================================
+  Formato a confirmar en SECF. Candidato: sufijo de Lima "PE".
+
+  activo               ticker candidato        moneda  ojo con
+  -------------------  ----------------------  ------  ----------------------
+  Alicorp              ALICORC1 PE Equity      PEN     el más líquido: caso
+                                                       base de reconciliación
+  Ferreycorp           FERREYC1 PE Equity      PEN     5 acciones liberadas
+                                                       en el histórico (CACS)
+  Cementos Pacasmayo   CPACASC1 PE Equity      PEN     existe también
+                                                       CPACASI1 (inversión);
+                                                       usar la COMÚN
+  InRetail             INRETC1 PE Equity       USD     NO convertir en el
+                                                       terminal; bajar crudo y
+                                                       convertir con TC BCRP
+                                                       como hace _to_pen
+  Minsur               MINSURI1 PE Equity      PEN     acción de INVERSIÓN;
+                                                       precio PEN, reporte USD
+  Luz del Sur          LUSURC1 PE Equity       PEN     nominal 0.68; el spread
+                                                       más ancho (220 pbs)
+  BCP                  CREDITC1 PE Equity      PEN     el más delgado en
+                                                       dinero: ES la
+                                                       restricción de capacidad
+  ---- cross-listed, NO son del universo transable ----
+  Pacasmayo ADR        CPAC US Equity          USD     1 ADS = 5 acciones
+  Credicorp            BAP US Equity           USD     ya está en config como
+                                                       xcheck y nunca se usó
+
+
+========================================================================
+4. P0 — LO QUE CAMBIA LAS CONCLUSIONES
+========================================================================
+
+4.1 VOLUMEN Y MONTO NEGOCIADO, DIARIO
+------------------------------------------------------------------------
+  CAMPOS: PX_VOLUME, TURNOVER, EQY_WEIGHTED_AVG_PX
+          + NUM_TRADES o equivalente si existe (verificar en FLDS)
+
+  POR QUÉ: es el hueco estructural del proyecto. La BVL no entrega volumen
+  diario (market_client.fetch_bvl pone volume = NaN) y Yahoo quedó invalidado:
+  ceros contradictorios en 5.1-15.4% de los días con precio cambiante, razón
+  contra el volumen oficial de 0.16x a 5.12x sin dirección consistente, y
+  Spearman(|ret|, volumen) = 0.00-0.13. Hoy la capacidad se calcula con
+  MEDIANAS MENSUALES del Informe Bursátil.
+
+  CIERRA:
+    - Capacidad diaria real. §6.3-6.4 de ejecutabilidad deja de ser regla de
+      dedo ("liquidar en 20 sesiones al 10% de participación").
+    - is_no_trade con volumen cero de verdad, no proxy por precio repetido.
+      Es exactamente la distinción de D8 (máscara dura vs recargo de costo).
+    - Amihud y participación de mercado, como features y como modelo de
+      impacto.
+    - Jubila la limitación "Yahoo no autoritativo"
+      (project_yahoo_volumen_confiabilidad).
+
+  PRUEBA DE ACEPTACIÓN — CORRERLA EN EL SITIO, NO EN CASA:
+    Sumar el volumen diario de Bloomberg por mes y comparar contra
+    data/interim/bvl_mensual.parquet (173 meses de monto oficial BVL).
+    ***Este es el ancla externa que NO existía cuando se validó Yahoo.***
+    Criterio: si el ratio no cae en [0.95, 1.05] en la mayoría de meses,
+    Bloomberg tampoco es autoritativo y se trata igual que Yahoo — se declara
+    parcial y no se usa como cantidad negociada.
+    Una tabla dinámica en Excel basta. Es el único momento en que se puede
+    rehacer una extracción mala.
+
+4.2 PUNTAS BID/ASK DIARIAS   [lo #1 del acta §E]
+------------------------------------------------------------------------
+  CAMPOS: PX_BID, PX_ASK
+          + buscar en FLDS un spread promedio ponderado por volumen
+
+  POR QUÉ: todo D7 cuelga de un único snapshot —27-jul-2026, un momento de un
+  día. El acta §D-ii ya lo dice con precisión: "dos vectores de precio" es
+  matemáticamente idéntico a operar al mid cobrando medio spread por lado; LO
+  QUE DE VERDAD FALTA ES LA SERIE DE TIEMPO. Un spread constante subestima el
+  costo justo en el estrés (2020, 2021), que es cuando el agente quiere operar.
+  Ese, y no "dos vectores", es el argumento para ir a Bloomberg.
+
+  CIERRA:
+    - D7 con costo empírico por activo Y POR ÉPOCA.
+    - El pendiente de ejecutabilidad §7: "decidir si el costo es por activo
+      (spread observado) o único para el universo" pasa a ser una pregunta con
+      datos.
+    - El c* por bisección deja de heredar la incertidumbre del snapshot.
+
+  PRUEBA DE ACEPTACIÓN: el spread del día más reciente contra el snapshot BVL
+  del 27-jul-2026 (ida y vuelta, relativo):
+      ALICORC1 0.08%  INRETC1 0.13%  MINSURI1 0.14%  CPACASC1 0.63%
+      FERREYC1 0.70%  CREDITC1 1.65%  LUSURC1 2.20%
+  Si el ORDEN se preserva, la serie histórica hereda credibilidad.
+
+4.3 OHLC REAL
+------------------------------------------------------------------------
+  CAMPOS: PX_OPEN, PX_HIGH, PX_LOW, PX_LAST
+
+  POR QUÉ: hoy fetch_bvl fija open = high = low = close porque la fuente no da
+  más. Con máximos y mínimos reales se abren dos cosas:
+    (a) estimadores de spread de alta-baja — el PLAN B del §2;
+    (b) estimadores de volatilidad Garman-Klass / Parkinson, bastante más
+        eficientes que la de cierres para las features de OE1.
+
+  CONSECUENCIA HONESTA, ANOTARLA EN EL REGISTRO DE INCONSISTENCIAS:
+  esto reabre docs/justificacion_cierre_vs_ohlcv.txt. La justificación actual
+  es "no hay OHLCV disponible". Si Bloomberg lo tiene, el argumento cambia de
+  "no existe" a "existe y decidimos qué hacer con él". No es un problema: es
+  una entrada nueva, y la convención del proyecto es anotar, no borrar.
+
+4.4 FLOTANTE Y ESTRUCTURA DE PROPIEDAD
+------------------------------------------------------------------------
+  CAMPOS:   EQY_FLOAT, EQY_FREE_FLOAT_PCT, CUR_MKT_CAP
+  PANTALLA: HDS <GO>  — exportar la tabla de tenedores
+
+  POR QUÉ: "el flotante de BCP es mínimo porque Credicorp concentra la
+  propiedad" es hoy una AFIRMACIÓN SIN FUENTE CITABLE. Y es la premisa central
+  de la tesis: la delgadez del mercado es el OBJETO DE ESTUDIO, no un defecto
+  del dato. HDS la convierte en tabla con fuente.
+
+  CIERRA:
+    - La premisa del planteamiento, documentada.
+    - Una cota de capacidad mejor que la de rotación: capitalización FLOTANTE
+      en vez de acciones emitidas.
+    - El matiz "frecuencia != profundidad" (ejecutabilidad §6.2) gana una
+      tercera dimensión medida.
+
+
+========================================================================
+5. P1 — CIERRA RIESGOS YA REGISTRADOS
+========================================================================
+
+5.1 FUNDAMENTALES ORIGINALMENTE REPORTADOS, CON SU FECHA
+------------------------------------------------------------------------
+  CAMPOS:   IS_EPS, SALES_REV_TURN, NET_INCOME, EQY_SH_OUT
+            con override FILING_STATUS = OR (original) y luego = MR (reciente)
+            FUNDAMENTAL_PUBLIC_DATE
+            EARN_ANN_DT_TIME_HIST_WITH_EPS (BDS)   [verificar mnemónico]
+  PANTALLA: ERN <GO>
+
+  POR QUÉ: bajar la MISMA serie dos veces —original y reexpresada— y restarlas
+  es, literalmente, el panel BITEMPORAL que riesgos §3(b) declara "trabajo
+  futuro". Y la fecha de publicación de Bloomberg es un árbitro INDEPENDIENTE
+  del known_date calibrado en D20.
+
+  CIERRA:
+    - Valida D20 (lag por activo + bandera known_date_real) con una fuente que
+      no es la SMV.
+    - Mide de una vez el costo real del modelo mono-vintage "first-reported
+      inmutable". Si el diferencial es pequeño, la limitación se cierra CON
+      EVIDENCIA en lugar de con un argumento.
+  COSTO: barato. 7 emisores × ~56 trimestres, no 3,480 días.
+
+5.2 ÍNDICE LOCAL EN RETORNO TOTAL   [acta §E-3, §B5]
+------------------------------------------------------------------------
+  BUSCAR:   WEI <GO> / SECF -> S&P/BVL Perú General (ex-IGBVL), S&P/BVL Select,
+            sectoriales. Bajar PRECIO y RETORNO TOTAL.
+  PANTALLA: MEMB <GO> — miembros y pesos históricos
+
+  POR QUÉ: D10 pide índice local entre los baselines ampliados y hoy no lo
+  tenemos. El acta §B5 añadió también "ETF de Perú" (EPU) — pero EPU tiene un
+  quiebre de índice el 10-abr-2023 y solo ~66% de tenencias peruanas puras
+  (ver la ADVERTENCIA de §7.1), así que NO lo sustituye. Este es el baseline
+  local limpio y sube de prioridad por esa razón.
+
+  *** EL DETALLE QUE ARRUINA LA COMPARACIÓN SI SE PASA POR ALTO ***
+  El panel usa close_total_return. Comparar al agente contra el índice de
+  PRECIO le quita al índice sus dividendos y sesga el baseline A FAVOR del
+  agente. TIENE que ser la versión de retorno total.
+
+5.3 ACCIONES EN CIRCULACIÓN Y ACCIONES CORPORATIVAS   [acta §E-4]
+------------------------------------------------------------------------
+  CAMPOS:   EQY_SH_OUT (BDH histórico), DVD_HIST_ALL (BDS)
+  PANTALLAS: CACS <GO>, DVD <GO>
+
+  POR QUÉ: tercer árbitro para el conteo HÍBRIDO (fecha BVL + tesorería SMV) y
+  sobre todo para el desfase de reconocimiento del BCP: 15 de 54 trimestres con
+  diferencias de +2.26% a +25.85%, SIEMPRE en la misma dirección y con
+  periodicidad ANUAL (ejecutabilidad §8.1). Bloomberg tiene su propia fecha de
+  efectividad, independiente de las dos ya comparadas.
+
+  CIERRA:
+    - Validación externa de §8.3 (conteo híbrido implementado).
+    - Cruce de los 18-55 dividendos por emisor que R3 tomó de la BVL.
+    - Detecta eventos societarios no-AL en CPACASC1/FERREYC1/LUSURC1/MINSURI1,
+      que quedó PENDIENTE al correr R4 (riesgos, actualización jul-2026).
+
+5.4 CALENDARIO OFICIAL DE LIMA
+------------------------------------------------------------------------
+  PANTALLA: CDR PE <GO> — exportar feriados 2012-2025
+
+  POR QUÉ: hoy build_trading_calendar deduce el calendario de la PROPIA BVL,
+  así que no puede distinguir "feriado" de "nadie negoció". Esa distinción ES
+  D8. Con calendario oficial, la máscara dura deja de ser circular.
+
+5.5 LQA / TCA — LIQUIDEZ Y COSTO DE IMPACTO
+------------------------------------------------------------------------
+  PANTALLAS: LQA <GO> (Liquidity Assessment), BTCA / TCA <GO> si el perfil los
+             tiene.
+
+  POR QUÉ: ejecutabilidad §6.4 estima el tamaño de posición con un supuesto
+  explícito de salida. LQA responde exactamente esa pregunta con el modelo
+  estándar del mercado. Aunque no se adopte, un pantallazo con el número de LQA
+  al lado del propio vale mucho en la sustentación: convierte un supuesto en
+  una comparación.
+  Dos minutos para comprobar si está en la licencia. Si no está, no insistir.
+
+
+========================================================================
+6. P2 — SI SOBRA TIEMPO
+========================================================================
+
+6.1 CONSENSO DE ANALISTAS Y SORPRESA DE UTILIDADES   [acta §B3]
+------------------------------------------------------------------------
+  CAMPOS:   BEST_EPS, BEST_SALES, BEST_TARGET_PRICE
+            con BEST_FPERIOD_OVERRIDE para el point-in-time
+  PANTALLAS: EEO <GO>, ERN <GO>
+
+  POR QUÉ IMPORTA MÁS DE LO QUE PARECE: B3 del acta ya adoptó la SORPRESA como
+  la forma correcta de la señal fundamental ("solo importa la sorpresa"), y
+  decidió construirla SIN consenso, con un camino aleatorio estacional (el SUE
+  clásico). Si Bloomberg tiene consenso para estos emisores, la sorpresa se
+  puede construir con el ESPERADO REAL DEL MERCADO en vez de con un modelo de
+  series de tiempo — que es lo que B3 quería y no podía tener.
+
+  TRES FRENOS, y los tres importan:
+    (a) la cobertura de analistas en small caps de la BVL es rala. Esperar dato
+        en BCP/BAP e InRetail; quizá Pacasmayo y Ferreycorp; casi seguro nada
+        en Luz del Sur. Si solo cubre 2 de 7, no sirve como canal uniforme.
+    (b) el consenso point-in-time exige overrides y es fácil meter look-ahead
+        sin notarlo.
+    (c) una vista más en R8 castiga el Sharpe deflactado de D10.
+  RECOMENDACIÓN: bajarlo igual —es barato y no se puede bajar después— pero
+  decidir si entra al panel FUERA del terminal, con calma. Si no entra, la
+  ruta SUE de B3 sigue en pie y no se pierde nada.
+
+6.2 SENTIMIENTO DE NOTICIAS NATIVO DE BLOOMBERG
+------------------------------------------------------------------------
+  BUSCAR en FLDS: "news sentiment", "publication count", "news heat"
+  PANTALLAS: NI <GO>, CN <GO>
+
+  POR QUÉ: sería el argumento más fuerte de todo el OE2. Hoy el canal de
+  sentimiento está validado contra el precio (relevantes coinciden con |z|>2 el
+  34.8% vs 18.4% de base, p=0.006) y contra la anotación ciega del autor
+  (kappa 0.456). Un TERCER medidor independiente y comercial daría VALIDEZ
+  CONVERGENTE: no es que el clasificador funcione según el autor, es que
+  coincide con el de Bloomberg.
+  Probabilidad realista de cobertura en español para emisores peruanos: baja.
+  Diez minutos para saberlo. Si hay dato, es oro para el capítulo de validación.
+  NO CONFUNDIR con G1 del acta (corpus de prensa internacional), que quedó
+  descartado por costo. Esto es un índice agregado ya calculado, no un corpus.
+
+6.3 ÍNDICES EXTERNOS — VER §7. Casi todo se consigue gratis.
+
+6.4 CROSS-LISTED CPAC / BAP CON MICROESTRUCTURA LIMPIA
+------------------------------------------------------------------------
+  CAMPOS: OHLCV + PX_BID/PX_ASK para CPAC US Equity y BAP US Equity
+
+  POR QUÉ: el acta §E ya lo autorizó como FEATURE (no como activo transable):
+  "cotiza después del cierre de la BVL, así que su retorno del día t es público
+  antes de la apertura de t+1 — causal por construcción". Y H5 de R5: Pacasmayo
+  es el activo con más saltos sin fuente (35). H6 ya degradó la hipótesis (el
+  ADR mueve solo el 18% del total), pero con datos de NYSE —que sí tienen
+  volumen y puntas confiables— se cierra limpio en vez de dejarla a medias.
+  REGLA: solo el cierre del ADR del día ANTERIOR, o es fuga.
+
+6.5 ECO — CALENDARIO DE PUBLICACIONES MACRO
+------------------------------------------------------------------------
+  PANTALLA: ECO <GO>, filtrado a Perú, exportar histórico
+
+  POR QUÉ: fechas Y HORAS reales de publicación de los indicadores macro. Es
+  información point-in-time que el API del BCRP no da y que hoy se resuelve con
+  la regla aproximada "el IPC del mes M se publica ~1 de M+1". Barato y mejora
+  directamente el known_date de las series mensuales.
+
+
+========================================================================
+7. ÍNDICES EXTERNOS — QUÉ SÍ Y QUÉ NO SE BAJA DE BLOOMBERG
+========================================================================
+  ORIGEN: acta §B2. El especialista propuso S&P 500, MSCI China, MSCI
+  emergentes Y MEDIAS MÓVILES de esos índices ("análisis técnico fuerte en
+  corto plazo"). Se adoptaron como CANDIDATOS, sujetos al mismo tamiz que mató
+  al oro (0 de 7) y al estaño: probe_macro_exposicion.py, Newey-West, factores
+  a t-1. El rezago de un día no es concesión — el NYSE cierra después de la BVL
+  y ya está medido que la BVL reacciona con un día de rezago.
+  ADVERTENCIA REGISTRADA EN B2: DXY es probablemente casi COLINEAL con
+  macro_tc_usdpen. Se mide el aporte INCREMENTAL; no se agregan los dos a
+  ciegas.
+
+  MOTIVACIÓN CUANTIFICADA (acta §C): hay un factor común de 30-45% en el
+  universo y las 5 series BCRP explican como mucho ~12%. Ese hueco es
+  exactamente donde vivirían el S&P 500 y el MSCI EM — o es flujo local (AFP,
+  no residentes) que ninguna fuente pública muestra. Las dos respuestas son
+  publicables.
+
+  *** PERO: EL ACTA §E YA DECIDIÓ QUE ESTO NO REQUIERE BLOOMBERG ***
+  Cita literal: "LOS ÍNDICES EXTERNOS NO REQUIEREN BLOOMBERG: se consiguen
+  gratis y el proyecto ya usa esa vía."
+  El tiempo de terminal es escaso y caro. NO gastarlo en cierres de SPX o DXY.
+
+  7.1 LO QUE SE CONSIGUE GRATIS — hacerlo en casa, no en la visita
+  ------------------------------------------------------------------
+    S&P 500            ^GSPC (Yahoo) es SOLO PRECIO. Para retorno total, cierre
+                       ajustado de SPY. FRED también sirve para el nivel.
+    DXY                DX-Y.NYB (Yahoo) / ICE.
+    MSCI emergentes    el ÍNDICE es propietario, pero el ETF EEM (iShares MSCI
+                       Emerging Markets) cotiza desde 2003 y su cierre ajustado
+                       es un proxy con dividendos incluidos. Para una regresión
+                       de exposición es EQUIVALENTE y además es tradeable.
+    MSCI China         MCHI (desde 2011) o FXI (desde 2004). Mismo argumento.
+    ETF de Perú        EPU, desde jun-2009. Cubre el horizonte, pero VER LA
+                       ADVERTENCIA DE ABAJO: no es un proxy limpio de la BVL.
+    Medias móviles     se calculan, no se bajan.
+
+    NOTA METODOLÓGICA: para los ETF de mercados amplios (SPY, EEM, MCHI/FXI),
+    usarlos en vez de los índices no es un atajo. Son instrumentos negociables,
+    incluyen dividendos en el cierre ajustado, y su horario de cierre (NYSE,
+    16:00 ET, contra el cierre de la BVL ~13:30 de Lima) es justamente el que
+    hace CAUSAL el rezago de un día ya medido: el cierre del día t es público
+    antes de la apertura de t+1.
+
+  *** ADVERTENCIA SOBRE EPU — verificado 2026-09-05, corrige una afirmación
+      previa de este documento ***
+    EPU NO es "el mercado peruano" y tiene dos problemas serios como baseline:
+    (1) QUIEBRE METODOLÓGICO A MITAD DE MUESTRA. El 10-abr-2023 dejó de ser
+        "iShares MSCI Peru ETF" y pasó a "iShares MSCI PERU AND GLOBAL EXPOSURE
+        ETF", con un índice distinto. El cambio cae DENTRO del horizonte
+        2012-2025 y, muy probablemente, dentro del tramo de prueba.
+    (2) SOLO ~66% DE SUS TENENCIAS SON PURE-PLAY PERUANAS. Materiales 52%; las
+        dos primeras posiciones son el 46% de la cartera. El índice admite
+        empresas con sede o listadas en Perú MÁS empresas con exposición
+        económica significativa al país — es decir, nombres cuyo precio se
+        forma en NYSE (Southern Copper, Credicorp).
+    CONSECUENCIAS:
+    - COMO BASELINE (acta §B5, D10): usable, pero hay que DECLARAR el quiebre y
+      la composición. Y sube el valor de P1-2: el S&P/BVL en retorno total es
+      el baseline local LIMPIO, y EPU queda como complemento, no como
+      sustituto. Si solo se puede tener uno, el de Bloomberg es el bueno.
+    - COMO FACTOR / FEATURE: peor de lo que parece. Se solapa con el propio
+      universo (Credicorp es la matriz de BCP; Buenaventura estuvo en él), así
+      que es PARCIALMENTE CIRCULAR. Si entra, que entre como baseline, no como
+      regresor, salvo que se mida el solapamiento explícitamente.
+    Fuente: iShares/BlackRock, ficha del fondo EPU.
+
+  7.2 LOS TRES ÍTEMS QUE SÍ SON DE BLOOMBERG
+  ------------------------------------------------------------------
+    (a) *** MEMBRESÍA HISTÓRICA DEL MSCI PERU Y VENTANAS DE REVISIÓN ***
+        PANTALLA: MEMB <GO> sobre el índice MSCI Peru, con fechas de cambio.
+        Cierra un PENDIENTE ABIERTO: hallazgos_saltos_y_fuentes_R5.txt H5.b
+        deja "[ ] evaluar si conviene una bandera de ventana de revisión
+        MSCI/FTSE". El caso documentado: el 14-ago-2015 MSCI abrió consulta
+        para reclasificar al Perú de EMERGENTE a FRONTERA y la BVL cayó 5.25%.
+        MSCI/FTSE revisan en feb/may/ago/nov (ver scripts/diag_saltos_sin_
+        fuente.py). Esta serie NO se consigue gratis y es la única de índices
+        que justifica tiempo de terminal.
+        Bajar: fechas de revisión, cambios de membresía, y si es posible el
+        peso del Perú en el MSCI EM a lo largo del tiempo.
+
+    (b) NIVELES DE ÍNDICE EN RETORNO TOTAL, si se quiere el índice y no el ETF.
+        Los MXEF / MXCN / MXPE y sus versiones net y gross return son
+        propietarios. Solo vale la pena si en el análisis el proxy por ETF
+        resulta insuficiente — cosa que hoy no hay razón para suponer.
+        BAJA PRIORIDAD.
+
+    (c) Flujos de no residentes / propiedad extranjera de la BVL, si aparecen
+        en alguna pantalla. Es la OTRA mitad de la respuesta de §C ("o es flujo
+        local que ninguna fuente pública muestra"). No se sabe si existe;
+        preguntar. Si existe, es un hallazgo por sí solo.
+
+  7.3 QUÉ HACER CON ELLOS DESPUÉS (fuera del terminal)
+  ------------------------------------------------------------------
+    Pasarlos por probe_macro_exposicion.py con el universo VIGENTE, igual que
+    se hizo con el oro y el estaño. Criterio ya establecido y no negociable:
+    un factor entra si tiene EFECTO MEDIDO, no si tiene una historia económica
+    plausible. Medir el aporte incremental de DXY sobre macro_tc_usdpen antes
+    de agregarlo.
+    src/env/features.py:63 ya tiene previsto el prefijo para cuando entren.
+
+
+========================================================================
+8. LO QUE NO SE VA A SACAR DE AHÍ — NO QUEMAR TIEMPO
+========================================================================
+  - EL TARIFARIO DE LAS SAB PERUANAS: comisión, IGV, si el mínimo de S/40 es
+    por lado. Es de las SAB, la BVL, Cavali y la SMV. Sigue pendiente en
+    ejecutabilidad §7 y se resuelve con fuentes primarias publicadas.
+  - CORPUS DE PRENSA EN ESPAÑOL A ESCALA. Bloomberg no reemplaza a MediaCloud
+    para R5. A lo sumo un índice agregado (§6.2). Ver acta §G1.
+  - HECHOS DE IMPORTANCIA DE LA BVL con el detalle de D18. Ya medidos y
+    decididos: NO adoptados.
+  - LIBRO DE ÓRDENES O PROFUNDIDAD HISTÓRICA (L2). OMON y QR son de tiempo
+    real; no hay archivo. Lo mejor disponible es el bid/ask de cierre. El acta
+    §D-v ya declaró la tesis de ejecución FUERA DE ALCANCE por esta razón.
+  - INTRADÍA LARGO. Las barras intradía llegan del orden de 140 días atrás y el
+    tick bastante menos. Sirve para calibrar un spread efectivo RECIENTE,
+    jamás para 2012.
+
+
+========================================================================
+9. FÓRMULAS LISTAS PARA PEGAR
+========================================================================
+  Verificar cada mnemónico en FLDS antes de multiplicar por siete.
+
+  *** NOTA CRÍTICA EN EL FILL: NUNCA USAR Fill=P ***
+  El arrastre de valor previo es EXACTAMENTE el artefacto de staleness que se
+  está tratando de medir. Con Days=W y Fill=#N/A un día sin dato se ve como
+  hueco, que es lo que se quiere.
+
+  --- P0: panel diario, un activo por hoja ---------------------------------
+  =BDH("ALICORC1 PE Equity",
+       "PX_LAST,PX_OPEN,PX_HIGH,PX_LOW,PX_VOLUME,TURNOVER,PX_BID,PX_ASK",
+       "1/1/2012","12/31/2025","Dir=V","Days=W","Fill=#N/A",
+       "cols=9;rows=3700")
+
+  --- VWAP implícito (contrastar con TURNOVER / PX_VOLUME) ------------------
+  =BDH("ALICORC1 PE Equity","EQY_WEIGHTED_AVG_PX",
+       "1/1/2012","12/31/2025","Days=W","Fill=#N/A")
+
+  --- Flotante y capitalización --------------------------------------------
+  =BDP("CREDITC1 PE Equity","EQY_FLOAT")
+  =BDH("CREDITC1 PE Equity","EQY_SH_OUT,CUR_MKT_CAP",
+       "1/1/2012","12/31/2025","Per=M")
+
+  --- Bitemporal: la MISMA serie, original vs reexpresada -------------------
+  =BDH("ALICORC1 PE Equity","IS_EPS,NET_INCOME",
+       "1/1/2012","12/31/2025","Per=Q","FILING_STATUS=OR")
+  =BDH("ALICORC1 PE Equity","IS_EPS,NET_INCOME",
+       "1/1/2012","12/31/2025","Per=Q","FILING_STATUS=MR")
+
+  --- Dividendos y acciones corporativas — cruce contra R3 ------------------
+  =BDS("FERREYC1 PE Equity","DVD_HIST_ALL")
+
+  --- Pantallas: exportar a Excel, NO consumen presupuesto de BDH -----------
+    HDS     tenedores y concentración — la premisa del flotante de BCP
+    CACS    acciones corporativas con fecha de efectividad
+    DVD     historial de dividendos, ex-date y pago
+    ERN     fechas de anuncio de resultados — árbitro de known_date
+    CDR PE  calendario oficial de feriados de Lima
+    LQA     días para liquidar y costo por nivel de participación
+    MEMB    miembros del índice local; y del MSCI Peru para §7.2(a)
+    ECO     calendario de publicaciones macro de Perú, con hora
+    NI/CN   noticias, para el chequeo de §6.2
+
+
+========================================================================
+10. ORDEN DE LA VISITA
+========================================================================
+  Principio: las extracciones lentas se lanzan primero y corren SIN
+  supervisión, mientras se trabaja en las pantallas.
+
+  0:00-0:05  Preguntar las reglas de redistribución (§12). Acta §E-5.
+  0:05-0:20  Pre-vuelo §2. Salir de aquí sabiendo la PRIMERA FECHA con bid/ask.
+  0:20-0:35  Lanzar P0: las 7 hojas del panel diario 2012-2025, refrescando.
+             Es lo más lento del día. NO sentarse a mirarlo.
+  0:35-1:30  Pantallas mientras P0 corre: HDS, CACS, DVD, ERN, CDR PE, LQA,
+             MEMB (local y MSCI Peru), ECO. No consumen presupuesto de BDH.
+             Exportar cada una a su propia hoja.
+  1:30-2:00  Pegar P0 como VALORES y correr la prueba de aceptación de §4.1
+             (reconciliación mensual contra bvl_mensual). ***En el sitio.***
+  2:00-3:00  P1: fundamentales OR/MR, EQY_SH_OUT, índice local retorno total.
+  3:00-4:00  P2: consenso, sentimiento de noticias, CPAC/BAP, §7.2(a).
+             Aquí es donde vale husmear FLDS por campos no anticipados.
+  últimos 30' Cierre §11.
+
+
+========================================================================
+11. HIGIENE DE SALIDA — LO QUE SALVA LA SUSTENTACIÓN
+========================================================================
+  [ ] 1. PEGAR COMO VALORES ANTES DE IRSE. Las fórmulas BDH devuelven #N/A
+         fuera del terminal. Guardar DOS libros: uno con fórmulas (es la
+         documentación de cómo se extrajo) y uno con valores (el de trabajo).
+
+  [ ] 2. ENCABEZADO DE PROCEDENCIA EN CADA HOJA: ticker literal, campo,
+         overrides, rango, fecha y hora de extracción, fórmula completa. Sin
+         eso, en tres meses no se puede decir de dónde salió una columna y el
+         anexo metodológico se vuelve imposible de escribir.
+
+  [ ] 3. LICENCIA Y REPOSITORIO. No publicar como dataset. Añadir
+         `data/raw/bloomberg/` al .gitignore ANTES de copiar nada, y
+         verificarlo con `git check-ignore -v`. Citar "Bloomberg L.P.,
+         consultado el 2026-09-05".
+
+  [ ] 4. CAPA CONGELADA, NO DEPENDENCIA. Volcar a parquet con fecha en el
+         nombre. Si el pipeline pasa a REQUERIR Bloomberg, deja de ser
+         reproducible el día que se acabe el acceso — y ese es justo el patrón
+         de deriva ya registrado como riesgo propio del proyecto.
+
+  [ ] 5. PRESUPUESTO. Solo P0 son ~7 × 3,480 × 9 ~ 220 mil puntos históricos.
+         Revisar DAPI antes y después de P0. Si el tope aprieta, sacrificar
+         EQY_WEIGHTED_AVG_PX antes que las puntas.
+
+  [ ] 6. DOS COPIAS EN MEDIOS DISTINTOS antes de salir del edificio.
+
+
+========================================================================
+12. PREGUNTAS QUE HAY QUE HACER EN EL SITIO
+========================================================================
+  Al operador del terminal o a la biblioteca, apenas llegando:
+
+  [ ] ¿Cuáles son las reglas de redistribución para uso académico? ¿Se puede
+      incluir la data en un anexo de tesis? ¿Se puede publicar el análisis
+      derivado (estadísticos, regresiones) sin la data cruda?   [acta §E-5]
+  [ ] ¿Qué módulos están en la licencia? Interesan específicamente LQA, BTCA,
+      y los campos BEST_ (consenso).
+  [ ] ¿Hay tope institucional de descarga compartido entre usuarios?
+  [ ] ¿Se puede volver? ¿Con qué frecuencia? Esto cambia si conviene bajar
+      todo hoy o priorizar y volver.
+  [ ] ¿Hay Excel con el add-in instalado, o solo el terminal? Si es solo
+      terminal, todo pasa por HP/exportar y el volumen de trabajo por sesión
+      cae mucho — replanificar en el sitio.
+
+
+========================================================================
+13. DESPUÉS DE LA VISITA — QUÉ TOCAR EN EL REPO
+========================================================================
+  No hacerlo el mismo día. Anotado aquí para que no se pierda.
+
+  [ ] Volcar los Excel a parquet en data/raw/bloomberg/ con fecha en el nombre.
+  [ ] Correr la reconciliación completa contra bvl_mensual y contra el snapshot
+      de puntas del 27-jul-2026. Documentar en un hallazgos_bloomberg.txt con
+      el mismo criterio con que se validó Yahoo (probe_yahoo_confiabilidad.py).
+      Si falla, se declara parcial y NO se usa — igual que Yahoo.
+  [ ] Si el volumen pasa: rehacer ejecutabilidad §6.3-6.4 con datos diarios y
+      anotar la mitigación en riesgos (convención: se anota, no se borra).
+  [ ] Si el spread pasa: recalcular el c* por bisección con la serie, no con el
+      snapshot. Es el resultado central de D7.
+  [ ] Anotar en inconsistencias_documento_vs_implementacion.txt la entrada
+      nueva sobre justificacion_cierre_vs_ohlcv.txt (§4.3).
+  [ ] Pasar los índices externos por probe_macro_exposicion.py (§7.3).
+  [ ] Actualizar la sección E del acta con lo que efectivamente se consiguió y
+      lo que no. La convención del proyecto es registrar el resultado, no solo
+      el plan.

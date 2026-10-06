@@ -1,0 +1,596 @@
+TAXONOMÍA DE EVENTOS Y TRATAMIENTO DE LA RELEVANCIA — R5 (SENTIMIENTO)
+Tesis: Aprendizaje por refuerzo profundo aplicado a la Bolsa de Valores de Lima
+Autor: Rodrigo Holguin — Asesor: Dr. E. Villanueva
+Creado: 2026-08-18. Deriva de la decisión D11 (docs/decisiones_pendientes_OE1.txt).
+========================================================================
+
+PROPÓSITO
+------------------------------------------------------------------------
+Especifica QUÉ se le pide al clasificador en R5 y CÓMO se convierte su salida
+en features del panel. Sustituye al esquema anterior (score continuo con
+polaridad libre), invalidado por la medición de julio 2026.
+Evidencia de base: docs/validacion_etiquetado_r5.txt.
+Decisión que lo ordena: D11 en docs/decisiones_pendientes_OE1.txt.
+
+
+========================================================================
+1. EL PROBLEMA DE RELEVANCIA (medido, no supuesto)
+========================================================================
+Protocolo: 180 noticias estratificadas por (activo x etiqueta), anotadas A CIEGAS
+en relevancia + sentimiento + categoría. Script: scripts/valida_etiquetado_r5.py
+(--muestra / --evalua, semilla 20221466).
+
+HALLAZGOS QUE OBLIGAN EL REDISEÑO:
+  a) RELEVANCIA 26% (reponderada a población). A nivel de corpus completo el
+     titular nombra a la empresa en solo 9-18% de los casos.
+  b) ACUERDO 54.4% (51.3% reponderado; 61.1% en las relevantes), KAPPA 0.32.
+     Con kappa 0.32 un score CONTINUO es falsa precisión: un promedio de
+     {+1,-1,0} que da 0.333 comunica un matiz que la medición no tiene.
+  c) EL ERROR DOMINANTE NO ES EL SIGNO. Las inversiones pos<->neg son solo 4.4%.
+     El error es POLARIDAD ESPURIA: **49% de las etiquetas con signo provienen de
+     noticias que no hablan de la empresa**. CAUSA EN EL CÓDIGO: _SYSTEM_PROMPT
+     no ofrece abstención, así que el modelo SIEMPRE emite un signo.
+  d) `confidence` NO DISCRIMINA: 0.750 de media en los errores vs 0.730 en los
+     aciertos. Inservible como filtro y como magnitud.
+  e) COMPOSICIÓN DEL RUIDO: los resúmenes del índice BVL son 61% del corpus de
+     CORAREC1, 53% de BUENAVC1 y 37% de ALICORC1; las notas de tipo de cambio son
+     23% de CREDITC1; SAGAC1 tenía 80% de ruido puro.
+  f) LOS TITULARES DE ÍNDICE NO SON RESCATABLES. Sí nombran a la empresa con su
+     retorno exacto ("Aceros Arequipa (3.00%)"), así que el match es legítimo,
+     pero su etiqueta acierta el signo del movimiento de la propia acción
+     **50.5% (n=838, binomial p=0.81) = azar**. Y NO se arregla leyendo el cuerpo:
+     ahí la "noticia" sería el retorno del día, que R3 ya tiene mejor y antes.
+     -> Se descartan, no se reparan.
+  g) DUPLICADOS POR SINDICACIÓN 4.3% (13.5% en CORAREC1).
+  h) 50-78% de los días CON noticia tenían su score calculado SOLO con noticias
+     irrelevantes.
+
+CONCLUSIÓN: el canal no falla por elegir mal el signo; falla porque asigna signo
+a cosas que no son noticias de la empresa. Cualquier esquema de representación
+elegante aplicado sobre esto decae ruido con más estilo. LIMPIAR ANTES DE CODIFICAR.
+
+
+========================================================================
+2. LOS TRES FIXES PREVIOS A LA CORRIDA (§8 de validacion_etiquetado_r5.txt)
+========================================================================
+Los tres REDUCEN el volumen a clasificar 30-60% en los activos ruidosos: alivian
+el cuello de botella de Ollama, no lo encarecen. Por eso la corrida de 7 activos
+puede salir más barata que la de 5.
+
+FIX 1 — FILTRO REGEX PRE-LLM. Los resúmenes de índice tienen títulos muy
+  reconocibles ("BVL cierra...", "Bolsa de Valores de Lima...", listas de
+  nemónicos con porcentajes). Se descartan ANTES de gastar una llamada al LLM.
+  Es el fix más barato y el que más volumen elimina.
+FIX 2 — ABSTENCIÓN EXPLÍCITA. Implementada por la vía estructural de §3: las
+  categorías de magnitud CERO SON la abstención. -> PROMPT_VERSION pasa a "v2"
+  e INVALIDA el caché (data/interim/sentiment_cache/cache_{TICKER}.json).
+FIX 3 — DEDUPLICACIÓN por (título normalizado, fecha) para matar la sindicación.
+
+MEDICIÓN OBLIGATORIA ANTES DE CLASIFICAR (barata, sin LLM): el filtro de
+relevancia y la dedup operan sobre TÍTULOS, así que se puede descargar MediaCloud
+de los 5 activos nuevos (paso 1 de R5 igual), aplicar FIX 1 y FIX 3, y CONTAR los
+días con evento por activo en el split de train — sin gastar un segundo de Ollama.
+Ese es el número que gobierna la calibración de §5 y hoy no existe para los
+activos nuevos (los probes de julio usan `story_count`, que devuelve un entero;
+ninguno descarga el corpus).
+
+
+========================================================================
+3. DISEÑO: DOS DECISIONES ESTRUCTURALES
+========================================================================
+(A) LA POLARIDAD SOLO SE PIDE PARA CATEGORÍAS DE MAGNITUD > 0.
+    El modelo clasifica primero el TIPO de evento; la polaridad solo aplica si el
+    tipo tiene magnitud. Así el modo de falla dominante (polaridad espuria, 49%)
+    DESAPARECE POR CONSTRUCCIÓN, no por un prompt mejor redactado.
+    SE FUERZA EN CÓDIGO: categoría de magnitud cero -> polaridad = null, diga lo
+    que diga el modelo. No se confía en que obedezca el prompt.
+
+(B) LAS CATEGORÍAS DE MAGNITUD CERO SON LA ABSTENCIÓN.
+    No hace falta un "no sé" separado: el modelo tiene casilleros explícitos para
+    "esto no es un hecho de la empresa", que es una pregunta más fácil y objetiva
+    que pedirle que se autoevalúe.
+
+POR QUÉ CLASIFICAR EL TIPO Y NO PEDIR LA MAGNITUD AL LLM: clasificar el TIPO es
+una tarea objetiva y factible para un modelo chico; juzgar IMPORTANCIA es una
+segunda autoevaluación del mismo modelo cuya única autoevaluación existente
+(`confidence`) resultó ruido medido. Además la magnitud ex-ante es AUDITABLE en la
+sustentación ("definí que unos resultados pesan más que un patrocinio") en vez de
+"el LLM dijo alto".
+
+
+========================================================================
+4. LA TAXONOMÍA (borrador aprobado 2026-08-18, sujeto a validación)
+========================================================================
+15 categorías en 4 tramos de magnitud. La magnitud es EX-ANTE, fijada por el autor.
+
+--- TRAMO ALTO (magnitud 1.0) ---
+  resultados            EEFF, utilidad, ingresos, márgenes, guidance de resultados.
+  ma_reestructuracion   Adquisiciones, fusiones, venta de subsidiarias, escisiones.
+  crisis_evento_adverso Accidentes, derrames, colapsos, fraude, investigaciones,
+                        sanciones grandes, conflicto social, huelgas.
+  regulatorio_material  Cambio regulatorio/tarifario que golpea directo al negocio
+                        (tarifas Osinergmin -> LUSURC1; SBS/BCRP -> CREDITC1).
+
+--- TRAMO MEDIO (magnitud 0.6) ---
+  estrategia_inversion  Capex, expansión, nuevas plantas/tiendas/minas, entrada a
+                        nuevos mercados.
+  dividendo_capital     Dividendos, recompras, emisiones, follow-on, bonos, deuda.
+  operacional           Producción, ventas, volúmenes despachados, contratos
+                        ganados.
+  gobierno_corporativo  Cambios de CEO/directorio, renuncias.
+
+--- TRAMO BAJO (magnitud 0.3) ---
+  analisis_opinion      Recomendaciones de analistas, precio objetivo, rating
+                        crediticio. Raro en prensa peruana (3 medios).
+  sector_macro          Noticia del SECTOR sin hecho propio de la empresa (demanda
+                        de cemento, precio del estaño).
+                        CANDIDATA A BAJAR A 0: parcialmente redundante con las 6
+                        features macro del panel y con el propio precio.
+
+--- TRAMO CERO (magnitud 0.0) — ESTO ES EL FILTRO DE RELEVANCIA ---
+  indice_bursatil       Resúmenes de cierre BVL, listas de ganadores/perdedores.
+                        CERO POR MEDICIÓN: acierta el signo 50.5% (n=838, p=0.81).
+  patrocinio_rse        Auspicios, donaciones, campañas escolares, deporte, RSE.
+  marketing_promocion   Ofertas, lanzamientos de producto, aperturas como
+                        publicidad. Crítico para INRETC1 (Plaza Vea / InkaFarma
+                        generan mucho de esto).
+  mencion_incidental    La empresa aparece de pasada; la nota es de otra cosa.
+                        Cubre el 23% de CREDITC1 que eran notas de tipo de cambio.
+  no_relevante          No habla de la empresa. (El 80% de ruido puro de SAGAC1.)
+
+RIESGO CONOCIDO DEL BORRADOR: 15 categorías está EN EL LÍMITE para gemma3:4b.
+MITIGACIÓN: (1) agruparlas en el prompt por tramo de magnitud, para que el modelo
+razone por eliminación; (2) MEDIRLO con el protocolo de 180 notas ya existente. Si
+la matriz de confusión muestra que colapsa categorías vecinas, se FUSIONAN las del
+MISMO tramo sin costo alguno sobre las features (candidatas naturales:
+estrategia_inversion + operacional, ambas 0.6). Fusionar dentro de un tramo no
+cambia ninguna columna del panel.
+
+
+========================================================================
+5. DE LA ETIQUETA AL FEATURE (se calcula en R6, no en R5)
+========================================================================
+>> ENMENDADO POR D15 (2026-08-29) E IMPLEMENTADO EL 2026-09-01. Lo que sigue
+   describe el diseño de D11(iii), que quedó SUPERSEDIDO en dos puntos. El
+   párrafo inmediato es lo VIGENTE; el resto de la sección se conserva porque su
+   argumentación (pos/neg separados, la EWMA como intensidad acumulada, el punto
+   de arquitectura) sigue valiendo entera.
+
+   LO VIGENTE — 9 COLUMNAS, NO 6:
+       sent_pos_ewma_{5,20,60}
+       sent_neu_ewma_{5,20,60}     <- NUEVA: `neutral` entra al canal
+       sent_neg_ewma_{5,20,60}
+   DOS CAMBIOS RESPECTO DE ABAJO:
+   (a) LA MAGNITUD YA NO ES EL PESO DEL EVENTO. Dejó de ser multiplicador y
+       quedó SOLO como puerta de relevancia: magnitud 0 = abstención, y todo
+       evento relevante pesa 1. Las EWMAs se calculan sobre CONTEOS, no sobre
+       magnitud acumulada. Razón (del asesor): no le corresponde al autor
+       atribuir un número cardinal al positivo/neutro/negativo. Razón técnica: el
+       sesgo estaba en el COLAPSO (mag = 1.0·n_alto + 0.6·n_medio + 0.3·n_bajo),
+       no en los números — la normalización causal por columna de D6 borra
+       cualquier factor de escala constante.
+   (b) `neutral` ENTRA. Antes no aparecía en ninguna columna: mag_pos/mag_neg lo
+       mandaban a 0 por construcción, y con él se perdía el 23.3% de la masa
+       relevante (medido contra la SALIDA DEL MODELO; el 57.9% que circuló antes
+       está medido contra la anotación humana, que aplica la convención "M&A
+       siempre neutral" — ver D15 §CORRECCIÓN DE LA PREMISA).
+   BRAZOS DE ABLACIÓN PRE-REGISTRADOS, expuestos en `feature_views`:
+       mercado_sentimiento              9 columnas (base)
+       mercado_sentimiento_tramos      18 columnas (alto vs resto separados)
+       mercado_sentimiento_restringido  9 columnas, solo artículos cuyo TITULAR
+                                        nombra a la empresa (D17)
+
+   TEXTO ORIGINAL DE D11(iii), CONSERVADO POR TRAZABILIDAD:
+Cada evento aporta como PESO su magnitud ex-ante y se acumula en EWMAs SEPARADAS
+por signo y por escala temporal:
+    sent_pos_ewma_{5,20,60}   y   sent_neg_ewma_{5,20,60}      -> 6 columnas.
+
+POR QUÉ POS/NEG SEPARADOS y no una sola serie firmada:
+  - Una serie firmada COLAPSA: una buena y una mala el mismo día dan 0,
+    indistinguible de "no pasó nada". Separadas dan (1,1), estado distinto y
+    aprendible.
+  - Permite REACCIÓN ASIMÉTRICA (malas noticias pesan más y decaen más lento),
+    que una serie firmada prohíbe por construcción.
+  - NO reintroduce la falsa precisión rechazada en D11(i): el 0.333 problemático
+    venía de PROMEDIAR DENTRO DEL DÍA. Una EWMA sobre el tiempo de eventos
+    ponderados por magnitud es intensidad acumulada, no un matiz de opinión.
+
+SE CONSERVAN las 4 columnas crudas actuales (sentiment_score_last,
+days_since_news, has_news, n_articles). `days_since_news` es probablemente
+informativa por sí sola y sirve de BASELINE del canal.
+
+PUNTO CLAVE DE ARQUITECTURA: R5 emite CATEGORÍA + POLARIDAD por artículo. Todo lo
+demás (magnitudes, vidas medias, agregación) se calcula río abajo en
+build_dataset. Es causal por construcción (la EWMA solo mira atrás) y cuesta
+milisegundos -> CUALQUIER recalibración posterior NO requiere re-pagar el LLM.
+Por eso las decisiones de §6 pueden diferirse sin bloquear la corrida.
+
+
+========================================================================
+6. LO QUE QUEDA ABIERTO Y CÓMO SE DECIDE DESPUÉS
+========================================================================
+Ninguno de estos puntos bloquea la corrida de R5, porque todos se resuelven sobre
+su salida sin volver a llamar al LLM. Se decide en este orden:
+
+(1) CONTEO REAL DE EVENTOS por activo en el split de train.
+    CÓMO: descargar MediaCloud de los 5 nuevos + FIX 1 + FIX 3 + contar. Sin LLM.
+    CUÁNDO: antes de lanzar la clasificación.
+    PARA QUÉ: gobierna (2) y (3), y confirma o refuta la extrapolación optimista
+    registrada en D11 (CPACASC1 ~480, INRETC1 ~400, FERREYC1 ~170, LUSURC1 ~95,
+    MINSURI1 ~74).
+
+(2) MAGNITUD FIJA vs APRENDIDA POR TRAMO -> ver D12. Se decide con los conteos de
+    (1) y se compara como brazo de ablación en R8.
+
+(3) VIDAS MEDIAS de las EWMAs (5/20/60 d es la propuesta inicial) y corte final de
+    magnitudes. Recalibración pura sobre el panel.
+
+(4) sector_macro: ¿0.3 o 0.0? Se decide viendo si aporta sobre las 6 features
+    macro que ya están en el panel.
+
+(5) RE-VALIDAR EL ETIQUETADO con el mismo protocolo (scripts/valida_etiquetado_r5.py,
+    180 notas, misma semilla) DESPUÉS de la corrida v2. Métricas objetivo: subir
+    relevancia muy por encima del 26% y kappa por encima de 0.32, y llevar la
+    polaridad espuria (hoy 49% de las etiquetas con signo) cerca de cero — esta
+    última debería caer por construcción gracias a §3(A).
+
+CRITERIO DE ABANDONO DEL CANAL (decidido por el autor, ver D11): si tras la
+limpieza y con los mecanismos de heterogeneidad el canal no supera al baseline en
+la ablación de R8 (vista `mercado` vs `mercado_sentimiento`), EL CANAL NO SE TOMA.
+"La señal de sentimiento de prensa no aporta valor explotable en la BVL para este
+universo" es un resultado legítimo y reportable.
+
+========================================================================
+7. AUDITORÍA DE R5 PREVIA A LA CORRIDA (2026-08-18)
+========================================================================
+Motivo: la corrida del universo de 7 es cara (LLM local, días de cómputo), así
+que se auditó R5 completo antes de lanzarla. Scripts reproducibles:
+  scripts/diag_r5_integridad.py   — integridad de datos y configuración
+  scripts/diag_r5_titulares.py    — titulares reales: ancla y regex de índice
+  scripts/analiza_t1_noticias.py  — evidencia para la ejecución en t+1
+
+7.1 HALLAZGOS CRÍTICOS (corregidos en la implementación)
+  (a) _build_query NO tenía entrada para 5 de los 7 activos vigentes: MINSURI1,
+      INRETC1, CPACASC1, FERREYC1 y LUSURC1 caían al default f'"{asset.name}"'.
+      El caso grave era INRETC1 -> '"InRetail Peru Corp"', una razón social que
+      casi no aparece en prensa; los 8,615 artículos que sustentaron su entrada
+      al universo vinieron de '"InRetail" OR "Supermercados Peruanos" OR
+      "Plaza Vea" OR "InkaFarma"'. La corrida habría invalidado en silencio la
+      decisión de universo.
+  (b) El caché de sentimiento guarda solo {sentiment, confidence}: NO registra
+      versión de prompt ni modelo, y classify_dataframe solo pregunta
+      `if key not in cache`. Subir PROMPT_VERSION a "v2" NO habría invalidado
+      nada: CREDITC1 y ALICORC1 habrían reusado sus 9,518 etiquetas v1 en
+      silencio, sin error ni aviso.
+  (c) fetch_phase salta parquets existentes y no había --force: los corpus de
+      CREDITC1 y ALICORC1 (junio, queries viejas) habrían convivido con corpus
+      nuevos de los otros 5. Universo con dos regímenes de descarga.
+
+7.2 EL ANCLA _FINANCIAL ES CONTRAPRODUCENTE — MEDIDO, Y CAMBIA EL DISEÑO
+  Experimento natural: CORAREC1 se descargó SIN ancla; el resto CON ella. Al
+  simular el ancla sobre los títulos de CORAREC1 pasa el 74.8%. Pero lo que pasa
+  y lo que NO pasa invierte por completo la intención del filtro:
+    PASAN (vocabulario de mercado): "La bolsa limeña perdió 0,25% por mal dato en
+      Estados Unidos", "BVL cierra en alza apoyada por precios del oro", "La BVL
+      anotó pérdidas por mal desempeño de acciones mineras".
+    NO PASAN (eventos REALES de la empresa, justo los de magnitud alta):
+      "Aceros Arequipa adquiere activos en Florida y crea operación en Estados
+      Unidos" (ma_reestructuracion), "Indecopi suprime derechos antidumping
+      contra alambrón chino" (regulatorio_material), "Aceros Arequipa cerraría el
+      año con facturación menor al 2015" (resultados).
+  CAUSA: los términos del ancla (bolsa, BVL, accion, mercado, empresa) SON el
+  vocabulario de las crónicas de índice. Las noticias corporativas reales usan
+  vocabulario específico del negocio (adquiere, antidumping, facturación, planta).
+  El ancla admite preferentemente el ruido y rechaza la señal.
+  DECISIÓN: se ELIMINA el ancla _FINANCIAL. El problema que pretendía resolver
+  (nombres ambiguos: Buenaventura la ciudad, Falabella de Chile) es de
+  DESAMBIGUACIÓN DE NOMBRE, no de relevancia, y se resuelve con términos de
+  contexto específicos por activo. La RELEVANCIA la resuelve la taxonomía (§4),
+  que es exactamente para lo que se diseñó.
+  NOTA METODOLÓGICA: MediaCloud aplica la query sobre el TEXTO COMPLETO, no solo
+  el título, así que simular el ancla sobre títulos es una prueba MÁS ESTRICTA
+  que la real. Sirve como indicación de dirección, no como réplica exacta.
+
+7.3 CALIBRACIÓN DEL REGEX DE ÍNDICE (FIX 1), sobre titulares reales
+  Cobertura de la versión ampliada, por activo:
+    CORAREC1 52.6% | BUENAVC1 48.2% | ALICORC1 28.5% | CREDITC1 6.6% | SAGAC1 0.8%
+  Contraste con la anotación de referencia (§1e): 61% / 53% / 37%. O sea el regex captura
+  ~80-86% del ruido de índice estimado: SUBESTIMA a propósito.
+  ENCUADRE CORRECTO: el regex es un OPTIMIZADOR DE COSTO, no el mecanismo de
+  corrección. Su trabajo es no pagarle al LLM por lo obvio; lo que se le escape lo
+  atrapa la categoría `indice_bursatil` de la taxonomía. Por eso NO se debe
+  sobre-ajustar el regex: un falso positivo descarta una noticia real sin apelación,
+  mientras que un falso negativo solo cuesta una llamada al LLM. Asimetría
+  deliberada hacia el falso negativo.
+  El patrón de "(3.00%)" en el título captura CERO: ese formato está en el CUERPO
+  del artículo, no en el titular (consistente con §1f).
+
+7.4 AMBIGÜEDAD INTRADÍA Y EJECUCIÓN EN t+1 — EVIDENCIA PARA LA TESIS
+  PROBLEMA: `publish_date` de MediaCloud es FECHA SIN HORA (verificado: 100% de
+  los artículos en la hora 00; dtype object). No se puede saber si una nota salió
+  antes o después del cierre de la BVL (15:00 Lima). Si el agente pudiera operar
+  el MISMO día T, podría estar usando información ya incorporada al precio.
+  OJO — POR QUÉ EL TEST DE LOOK-AHEAD DE JULIO NO BASTA: aquel concluyó "no hay
+  look-ahead" porque corr(sent_t, ret_t) ~ 0, pero se midió sobre un corpus 74%
+  ruido. Una correlación nula no prueba ausencia cuando las etiquetas no
+  significan nada. Hay que RE-CORRERLO tras la limpieza, cuando tenga poder.
+
+  MEDICIÓN (scripts/analiza_t1_noticias.py). Usa solo |retorno| y la BANDERA de
+  noticia, NUNCA la polaridad -> es INDEPENDIENTE del etiquetado roto, que es
+  precisamente lo que está en duda. Excluye días sin cotización.
+
+  RESULTADO 1 — el día de la noticia NO se dispara. Agregado:
+      |ret| sin noticia 0.0064 | con noticia 0.0085 (1.32x) | noticia real 0.0087
+      (1.36x) | solo índice 0.0074 (1.16x).
+  Una elevación de ~36% (0.64% -> 0.87% diario) es MODERADA, no un salto.
+
+  RESULTADO 2 — LA VENTANA DE EVENTO ES PLANA. Es el hallazgo que sostiene la
+  decisión. |ret| medio en T-2..T+2 alrededor de noticia real:
+      CREDITC1: 0.0101 0.0101 0.0100 0.0100 0.0101   (base 0.0069)
+      ALICORC1: 0.0094 0.0100 0.0102 0.0103 0.0100   (base 0.0086)
+  No hay pico en T que luego decaiga: hay un NIVEL ELEVADO Y CONSTANTE en toda la
+  ventana. Los días con noticia no son días donde ocurre un salto: son días que
+  pertenecen a PERIODOS de volatilidad elevada. En ALICORC1 el máximo de la
+  ventana está en T+1 (0.0103), no en T.
+
+  RESULTADO 3 — T+1 ofrece el MISMO entorno que T:
+      |ret| en T+1 tras noticia real / base: CREDITC1 1.45x, ALICORC1 1.22x
+      (contra 1.45x y 1.18x el mismo día T). Estadísticamente indistinguible.
+
+  RESULTADO 4 — los movimientos extremos (top 5% de |ret|) se sobre-representan
+  solo levemente en días con noticia: CREDITC1 73.9% vs 60.7% de días con noticia;
+  ALICORC1 35.8% vs 28.2%. Coherente con "días algo más volátiles", NO con
+  "la noticia causa el salto".
+
+  CONCLUSIÓN DEFENDIBLE EN LA SUSTENTACIÓN: ejecutar en t+1 NO tiene costo
+  medible, porque la información no se manifiesta como un salto el mismo día que
+  luego se agota, sino como un régimen de volatilidad elevada igualmente presente
+  en T+1. La ambigüedad intradía de `publish_date` queda neutralizada sin
+  sacrificar oportunidad.
+  LÍMITE DE LO QUE ESTO PRUEBA (declararlo): son |retornos|, una medida de
+  MAGNITUD, no de dirección. Sostiene que el CONJUNTO DE OPORTUNIDAD en T+1 es el
+  mismo que en T; NO prueba que la señal DIRECCIONAL sobreviva a T+1 — eso exige
+  etiquetas confiables y se mide después de la corrida limpia.
+  ANOMALÍA EXPLICADA: BUENAVC1 (0.81x), CORAREC1 (0.70x) y SAGAC1 (0.65x) dan
+  razones MENORES a 1 (días con noticia más CALMOS). Son los tres activos
+  ILÍQUIDOS (23.7%, 20.8%, 4.1% de días operados) y los tres SALIERON del universo.
+  En ellos los días sin noticia incluyen los saltos mecánicos al retomar cotización
+  tras rachas stale. Los dos activos que SIGUEN en el universo (CREDITC1, ALICORC1)
+  muestran el patrón limpio -> el universo nuevo, todo líquido, debería comportarse
+  como ellos.
+  ADVERTENCIA: las banderas se construyeron sobre el corpus SUCIO; "noticia real"
+  aquí significa solo "no es crónica de índice" (sigue incluyendo patrocinios y
+  menciones incidentales). RE-CORRER este análisis tras la limpieza.
+
+7.5 AMPLITUD DE LA QUERY TRAS ELIMINAR EL ANCLA — DECIDIDO CON MEDICIÓN
+  PREOCUPACIÓN LEGÍTIMA DEL AUTOR (2026-08-18): sin el ancla _FINANCIAL las
+  queries quedan amplias y entra ruido del tipo "BCP patrocina torneo deportivo".
+
+  PRINCIPIO QUE ORDENA LA DECISIÓN — ASIMETRÍA DE COSTOS:
+    - Un artículo irrelevante que ENTRA cuesta ~12 s de LLM y luego la taxonomía
+      lo manda a magnitud 0. Costo: computacional, recuperable.
+    - Un artículo relevante que NO SE DESCARGA se pierde PARA SIEMPRE. Y los
+      eventos son el recurso escaso de todo el canal (33-577 por activo).
+  Por eso la RECALL manda en la query, y la PRECISIÓN se resuelve río abajo. Es la
+  misma asimetría ya adoptada para el regex (§7.3), aplicada a la descarga.
+
+  ARQUITECTURA EN TRES CAPAS, cada una con su trabajo:
+    1. QUERY AMPLIA           -> maximiza recall. Solo desambigua NOMBRES.
+    2. PREFILTRO REGEX        -> quita lo inequívoco y barato. Optimiza costo.
+    3. TAXONOMÍA (LLM)        -> decide relevancia de verdad. Es la corrección.
+
+  MEDICIÓN DEL PREFILTRO CONTRA LA ANOTACIÓN MANUAL (scripts/diag_r5_prefiltro.py).
+  Ground truth: data/interim/r5_validacion_anotada.csv, 180 noticias con
+  `rel_humana` anotada a ciegas en julio (30.0% relevantes). OJO: esa
+  anotación la hizo el ASISTENTE, no un humano — ver
+  docs/seleccion_modelo_R5.txt §1B.
+      Descartadas por el prefiltro : 46/180 (25.6%)
+      De ellas, RELEVANTES (error) : **0**  -> tasa de error 0.0%
+      Relevantes perdidas          : 0 de 54 (0.0%)
+      Relevancia entre las que pasan: 30.0% -> **40.3%**
+  O sea: el prefiltro sube la relevancia del corpus 10 puntos SIN costar una sola
+  noticia real, contra la anotación de referencia. Es la evidencia que autoriza a
+  ampliar la query.
+  AHORRO DE VOLUMEN sobre el corpus completo (11,566 artículos): 17.5% global,
+  muy desigual por activo -> CORAREC1 56.7%, BUENAVC1 49.3%, ALICORC1 31.5%,
+  CREDITC1 8.2%, SAGAC1 1.8%. En horas de LLM: 6.8 h de 38.6 h.
+
+  SOBRE EL CASO "BCP patrocina torneo": está MEDIDO y es menor. En CREDITC1 el
+  prefiltro de patrocinio marca 51 de 7,933 artículos (0.6%). El ruido dominante
+  de BCP NO es el patrocinio sino la MENCIÓN INCIDENTAL en notas de tipo de cambio
+  (23% del corpus, §1e), que no es atrapable por regex sin riesgo —esas notas
+  citan al banco como fuente de la cotización— y que por diseño resuelve la
+  categoría `mencion_incidental` de la taxonomía.
+
+  >> RIESGO LATENTE DETECTADO Y CORREGIDO (importante, y la anotación NO podía
+     revelarlo): el patrón de deportes incluía `mundial`, que captura
+     "potencia mundial", "líder mundial", "precio mundial", "Banco Mundial" —
+     vocabulario CENTRAL de la minería y los commodities. Con MINSURI1 en el
+     universo ("Minsur, segundo productor MUNDIAL de estaño") habría matado
+     noticias reales. Se ELIMINA `mundial` del patrón.
+     LECCIÓN GENERAL: la muestra anotada es del universo VIEJO y no contiene
+     minería de estaño, cemento, utilities ni retail moderno. Un 0% de error sobre
+     ella NO garantiza 0% sobre los 5 activos nuevos. El prefiltro debe re-medirse
+     cuando exista corpus nuevo, y ante la duda se deja pasar (asimetría de §7.3).
+
+  QUERIES ADOPTADAS (solo desambiguación de nombre, sin ancla financiera):
+      CREDITC1  "Banco de Credito del Peru" OR Credicorp OR (BCP AND (banco OR financiero))
+      MINSURI1  "Minsur"
+      ALICORC1  "Alicorp"
+      INRETC1   "InRetail" OR "Supermercados Peruanos" OR "Plaza Vea" OR "InkaFarma"
+      CPACASC1  "Cementos Pacasmayo" OR (Pacasmayo AND (cemento OR cementera OR planta))
+      FERREYC1  "Ferreycorp" OR "Ferreyros"
+      LUSURC1   "Luz del Sur"
+  PENDIENTE ANTES DE DESCARGAR: correr `story_count` con estas queries para
+  conocer el volumen exacto al que nos comprometemos (7 llamadas, minutos).
+
+7.6 PROTOCOLO DEL PILOTO (antes de la corrida completa)
+  Objetivo: saber si gemma3:4b sostiene la taxonomía ANTES de gastar días. La
+  tarea de v2 es MÁS DIFÍCIL que la de v1 (15 categorías desde un titular, contra
+  3 etiquetas de polaridad), así que no se puede asumir que el modelo actual sirva.
+
+  PILOTO A — DECISIVO Y GRATIS: las 180 noticias YA ANOTADAS.
+    `r5_validacion_anotada.csv` tiene `rel_humana` (0/1) y `categoria`
+    (empresa/sector/mercado/ruido) anotadas a ciegas. Mapeo directo: categoría de
+    magnitud > 0  <=>  rel_humana = 1. O sea la RELEVANCIA del prompt v2 se puede
+    medir contra la referencia existente SIN anotar nada nuevo (referencia
+    producida por el ASISTENTE, no humana: ver seleccion_modelo_R5.txt §1B).
+    Métricas: exactitud de relevancia, matriz de confusión contra `categoria`,
+    tasa de fallo de parseo, segundos por artículo.
+    Costo: ~36 min por modelo en CPU local. Es el test que decide si se cambia de
+    modelo.
+    LÍNEA BASE A SUPERAR: v1 daba 26% de relevancia efectiva y kappa 0.32.
+
+  PILOTO B — DISTRIBUCIÓN Y THROUGHPUT: muestra aleatoria estratificada por activo
+    de ~10% del corpus (~1,000 artículos). No hay ground truth; se verifica que la
+    distribución de categorías sea sensata (que no colapse todo en una), que las
+    15 categorías se usen, y se mide el rendimiento real para estimar la corrida.
+
+  MODELOS CANDIDATOS a comparar en el Piloto A: gemma3:4b (incumbente),
+  gemma3:12b, qwen2.5:7b/14b, llama3.1:8b. La viabilidad de los grandes depende de
+  si la corrida se hace en CPU local (~12 s/art) o en el servidor académico con GPU.
+
+7.7 VOLUMEN REAL DE LAS QUERIES v2 (medido 2026-08-18, token rotado)
+  scripts/mide_volumen_queries.py — `story_count` con la MISMA query que usa
+  fetch_stories, colección Perú Nacional, 2005-2025.
+
+    Activo     en colección   ~tras allowlist   ~a clasificar
+    CREDITC1         19,439             6,804           5,613
+    INRETC1           8,616             3,016           2,488
+    FERREYC1          3,649             1,277           1,054
+    ALICORC1          2,873             1,006             830
+    LUSURC1           2,057               720             594
+    MINSURI1          1,620               567             468
+    CPACASC1          1,529               535             441
+    TOTAL            39,783                            11,487
+  (allowlist ~35% y prefiltro ~17.5% son tasas MEDIDAS en el corpus viejo; el
+   conteo de colección es exacto.)
+
+  >> HALLAZGO MATERIAL — PACASMAYO NO ERA EL SEGUNDO MEJOR CUBIERTO.
+     El scorecard de julio le atribuía 14.3 art/semana (~10,390 artículos), el
+     segundo del universo. Con la query desambiguada
+     '"Cementos Pacasmayo" OR (Pacasmayo AND (cemento OR cementera OR planta))'
+     el conteo cae a **1,529: una reducción del 85%**. La diferencia era la
+     PROVINCIA y la CIUDAD de Pacasmayo, no la empresa.
+     Esto CONFIRMA la sospecha registrada al corregir la tabla de eventos (D11):
+     "volumen alto en un nombre industrial de bajo perfil es la firma de la
+     contaminación". Aquí la contaminación no era de índice sino toponímica.
+     CONSECUENCIAS:
+       - El orden de cobertura mediática del universo cambia: Pacasmayo pasa de
+         2º a ÚLTIMO. Ranking real: CREDITC1 19.4k, INRETC1 8.6k, FERREYC1 3.6k,
+         ALICORC1 2.9k, LUSURC1 2.1k, MINSURI1 1.6k, CPACASC1 1.5k.
+       - La extrapolación de eventos de D11 (CPACASC1 ~480) queda INVALIDADA por
+         arriba: con 1,529 artículos crudos su volumen es del orden de MINSURI1,
+         o sea ~75-100 eventos, no ~480. Alimenta directamente a D12.
+       - NO invalida su presencia en el universo: Pacasmayo entró por LIQUIDEZ
+         (72.1% de días operados, el mejor de los candidatos), no por prensa.
+         Lo que cae es la expectativa sobre su canal de sentimiento.
+     Los demás activos coinciden con el probe (INRETC1 8,616 vs 8,615;
+     MINSURI1 1,620 vs ~1.6k; FERREYC1 3,649 vs ~3.6k; LUSURC1 2,057 vs ~2.0k):
+     el único que se movió es el único cuya query cambió de fondo.
+
+7.8 COSTO REAL DE LA CORRIDA — EL PROMPT v2 ES 4x MÁS LENTO
+  Medido con llamadas reales a gemma3:4b en CPU local (scripts/test_ollama_v2.py):
+  **35-55 s por artículo (media ~47 s)**, contra los 10-13 s de v1.
+  CAUSA: el prompt de sistema de v2 lleva la taxonomía completa (15 categorías con
+  su glosa), y en CPU el procesamiento del prompt domina el tiempo. No es el
+  modelo: es la longitud del contexto.
+  PROYECCIÓN sobre los 11,487 artículos a clasificar:
+      CPU local, 47 s/art  ->  150 h = 6.2 días continuos   [INVIABLE]
+      servidor,   5 s/art  ->   16 h
+      servidor,   2 s/art  ->    6.4 h
+      servidor,   1 s/art  ->    3.2 h
+  CONCLUSIÓN: el servidor con GPU deja de ser una comodidad y pasa a ser la RUTA
+  CRÍTICA de R5. Además es lo que habilita modelos de 12B-27B si el Piloto A
+  muestra que gemma3:4b no sostiene la taxonomía.
+  MITIGACIONES ADICIONALES si hiciera falta (no aplicadas aún): reutilización de
+  caché KV del prompt de sistema entre llamadas, y concurrencia
+  (OLLAMA_NUM_PARALLEL) para saturar la GPU.
+
+7.9 RESULTADO DEL PILOTO A (2026-08-18, gemma3:4b, 180 noticias anotadas)
+  scripts/piloto_r5_taxonomia.py + scripts/analiza_piloto_whatif.py
+  Salida por noticia: data/interim/piloto_r5_gemma3_4b.csv
+
+  LO QUE FUNCIONÓ
+    - 0.0% de fallos de parseo (134 llamadas). `format:json` + temperature 0
+      resolvieron el problema; en v1 los fallos se degradaban a "neutral" en
+      silencio.
+    - El PREFILTRO se comportó como se midió: 46 de 180 sin gastar LLM.
+    - `indice_bursatil`: 56 predicciones, 0% de ellas relevantes. Precisión
+      perfecta en la categoría que más volumen mueve.
+    - `mencion_incidental` 0% relevante (n=4), `ma_reestructuracion` 100% (n=5),
+      `operacional` 100% (n=2), `estrategia_inversion` 75% (n=16),
+      `resultados` 69% (n=13). La taxonomía SÍ discrimina donde el modelo
+      la entiende.
+    - Usa 14 de 15 categorías: no colapsa.
+    - Velocidad real 26.9 s/artículo (el 47 s de §7.8 estaba inflado por
+      contención de CPU con el propio piloto). Reproyección: 11,487 art x 27 s =
+      86 h = 3.6 días en CPU local. SIGUE SIENDO INVIABLE sin servidor.
+
+  LO QUE FALLÓ — Y ES UN DEFECTO DE DISEÑO PROPIO, NO DEL MODELO
+    Métricas de relevancia con la taxonomía tal como se especificó:
+      exactitud 65.6% | precisión 46.3% | recall 92.6% | espuria 42.7%
+    El modelo es MASIVAMENTE SOBRE-INCLUSIVO: llama relevantes a 108 de 180
+    cuando solo 54 lo son.
+
+    CULPABLE ÚNICO: `sector_macro`, al que YO asigné magnitud 0.3 (= relevante).
+    Se convirtió en el BASURERO del modelo:
+      55 predicciones (30.6% de la muestra), de las cuales solo 29.1% son
+      relevantes según la referencia. Desglose: ruido 24, mercado 15, sector 11,
+      empresa 5.
+    Y `no_relevante` NO SE USÓ NUNCA (0 predicciones): el modelo prefiere
+    "sector_macro" antes que declarar que la noticia no habla de la empresa.
+    Es un problema de PROMPT (la categoría de descarte es poco atractiva frente
+    a una que suena informativa), no de capacidad.
+
+    EL CASO CREDITC1 LO DEMUESTRA. Es el peor activo (38.9% de exactitud) y la
+    causa es exactamente esa: de sus 19 predicciones `sector_macro`, **18 son
+    irrelevantes**. Son las notas de tipo de cambio (23% de su corpus, §1e): el
+    modelo lee "el dólar cerró a X según el BCP" y lo llama noticia de sector.
+
+  CUANTIFICACIÓN DEL ARREGLO (what-if sobre el mismo output, sin re-llamar):
+      Escenario                          exact   prec  recall     F1  espuria
+      A. actual (sector_macro = 0.3)     65.6%  46.3%   92.6%  61.7%   42.7%
+      B. sector_macro -> 0               78.3%  64.2%   63.0%  63.6%   32.6%
+      C. B + analisis_opinion -> 0       76.7%  62.5%   55.6%  58.8%   33.3%
+    -> Se adopta el escenario B. `sector_macro` pasa a MAGNITUD 0.0.
+    Ya estaba señalada como "candidata a bajar a 0" en §4 por redundancia con las
+    6 features macro del panel; el piloto agrega una segunda razón, más fuerte:
+    es el sumidero de todo lo que el modelo no reconoce.
+    COSTO ACEPTADO: el recall cae de 92.6% a 63.0%. De las 16 relevantes que se
+    pierden, 11 son "sector" (marginales por definición) y solo 5 son "empresa"
+    —o sea se pierde el 15.6% de la noticia corporativa genuina— a cambio de casi
+    duplicar la precisión. Con 30% de tasa base, la precisión es lo escaso.
+    C se descarta: `analisis_opinion` tiene 80% de precisión, es de las buenas.
+
+  >> CORRECCIÓN A UNA AFIRMACIÓN ANTERIOR DE ESTE DOCUMENTO (§3A). Se dijo que la
+     polaridad espuria "DESAPARECE POR CONSTRUCCIÓN". **Es falso y el piloto lo
+     refuta**: 42.7% contra 49.0% de v1, apenas mejor. El mecanismo de §3A elimina
+     UNA VÍA (que el modelo no tenga dónde abstenerse) pero NO impide que
+     clasifique un artículo irrelevante DENTRO de una categoría con magnitud > 0,
+     que es lo que pasó con sector_macro. Con el escenario B baja a 32.6%: mejora
+     real, pero sigue lejos de cero. La afirmación correcta es: §3A elimina la
+     polaridad espuria CONDICIONADA A QUE LA CATEGORÍA SEA CORRECTA.
+
+  CATEGORÍAS CON FUGA Y POCA EVIDENCIA (n muy chico, no concluir todavía):
+    crisis_evento_adverso 20% relevante (n=5), gobierno_corporativo 25% (n=4),
+    regulatorio_material 0% (n=2), dividendo_capital 0% (n=1). Re-medir con
+    muestra mayor antes de tocarles la magnitud.
+  FALSO NEGATIVO A VIGILAR: `marketing_promocion` (magnitud 0) tiene 36.4% de
+    relevantes reales (n=11). Importa para INRETC1, donde el lanzamiento de
+    producto puede ser noticia económica de verdad.
+
+  PLAN ANTES DE CAMBIAR DE MODELO (el orden importa: cambiar de modelo ahora
+  confundiría un defecto de diseño con falta de capacidad):
+    1. sector_macro -> magnitud 0.0.                              [decidido]
+    2. Prompt v2.1: hacer atractivas `no_relevante` y
+       `mencion_incidental` (glosas más explícitas, y una regla que diga que
+       ante la duda sobre si la nota habla de la EMPRESA se usa mencion_incidental),
+       y acotar `sector_macro` a "habla del sector SIN nombrar a la empresa".
+    3. Re-correr el Piloto A con gemma3:4b y comparar contra estas cifras.
+    4. SOLO ENTONCES probar modelos mayores (gemma3:12b, qwen2.5:14b) en el
+       servidor, con la misma muestra y las mismas métricas.
+
+========================================================================
+FIN DEL DOCUMENTO
+========================================================================

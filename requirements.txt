@@ -10,3 +10,8 @@ mediacloud>=4.2        # noticias (Media Cloud API v4)
 # anthropic>=0.39
 # google-generativeai>=0.8
 # openai>=1.40
+
+# OE1 — entorno y agente (verificado en Python 3.14.3 el 2026-09-03)
+gymnasium>=0.29        # API del entorno
+stable-baselines3>=2.3 # PPO (primario) y SAC (robustez) — D3
+torch>=2.2             # backend de SB3; 2.12.1+cpu funciona en 3.14
