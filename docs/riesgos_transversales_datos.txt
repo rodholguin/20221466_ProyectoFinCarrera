@@ -616,6 +616,35 @@ FUNDAMENTALES (R4)
   - Forward-fill trimestral (hasta ~4.5 meses stale): no hay bandera de
     antigüedad del fundamental (análoga a days_since_news). Considerar una
     columna quarters_since_fundamental / days_since_known. [abierto — mejora]
+  - FERREYCORP ES UN HOLDING DESDE 2012 Y R4 USA SU ESTADO INDIVIDUAL
+    [abierto — detectado 2026-10-06 al regenerar los notebooks; corrección
+    DIFERIDA por decisión del autor]. Ferreyros pasó a ser subsidiaria y el
+    estado individual de Ferreycorp S.A.A. solo refleja la matriz. Medido en el
+    caché SMV (obtener_InfoFinanciera, Q4, individual vs consolidado):
+        año   ingreso I / C        pasivo/activo I / C   utilidad I / C
+        2011  792,346 / 1,042,822      0.63 / 0.71       39,864 / 39,913
+        2012        0 / 1,251,738      0.26 / 0.65       96,568 / 57,216
+        2015   74,168 / 1,262,045      0.41 / 0.64       37,767 / 37,768
+        2023   20,529 / 2,000,728      0.05 / 0.59      141,977 / 141,977
+    EFECTO: net_margin, roa, debt_equity y debt_ratio de FERREYC1 posteriores a
+    2011 NO son comparables (margen neto 2025-Q4 = 787%). La utilidad coincide
+    (método de participación) salvo en 2012, así que roe, eps_ttm y pe son en
+    general válidos. Es el mismo caso que InRetail (que ya usa `smv_tipo: C`).
+    MINSURI1 tiene un efecto PARCIAL (individual = 37% del ingreso consolidado y
+    utilidad 126.8 vs 177.5 millones US$ en 2023): evaluar también.
+    Alicorp: individual ~47% del ingreso consolidado (subsidiarias en el
+    exterior) pero la utilidad casi coincide: menor, a declarar.
+    ALCANCE DEL DAÑO: entra al panel de R6 y por lo tanto a los brazos
+    `mercado_fundamentales` y `completa` de la ablación de R8 (diagnósticos a
+    3 semillas). No afecta solo_mercado, macro ni sentimiento.
+    CORRECCIÓN PROPUESTA (pendiente): `smv_tipo: C` para FERREYC1 en config.yaml
+    (y decidir MINSURI1), regenerar R4 (gen_fundamentals.py --force; el caché
+    "C" ya existe desde 2012, solo faltaría 2005-2011) y R6, re-ejecutar los
+    notebooks de fundamentales e integración, y re-correr los brazos de R8 que
+    usan fundamentales antes de la corrida definitiva. Revisar también que el
+    known_date use la fecha del hecho CONSOLIDADO (lección de InRetail).
+    Mientras tanto, las figuras de exploracion_fundamentales_bvl.ipynb lo
+    advierten (nota en §5, asterisco en títulos, margen recortado en §6).
 
 
 ========================================================================

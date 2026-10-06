@@ -27,7 +27,7 @@ cells = []
 
 # ── Título ───────────────────────────────────────────────────────────────────
 cells.append(md_cell(
-    "# Integración del Dataset Unificado — R6 (5 Empresas BVL)\n\n"
+    "# Integración del Dataset Unificado — R6 (7 Empresas BVL, universo vigente)\n\n"
     "Construcción y validación del panel único `(ticker, date)` que combina "
     "mercado + indicadores técnicos (R3), sentimiento de noticias (R5) y "
     "fundamentales trimestrales (R4) sobre el calendario bursátil de la BVL — "
@@ -39,18 +39,23 @@ cells.append(md_cell(
     "| Ticker | Empresa | Sector |\n"
     "|--------|---------|--------|\n"
     "| CREDITC1 | Banco de Crédito del Perú | Banca |\n"
-    "| BUENAVC1 | Cía. de Minas Buenaventura | Minería |\n"
     "| ALICORC1 | Alicorp | Alimentos |\n"
-    "| SAGAC1 | Saga Falabella | Retail |\n"
-    "| CORAREC1 | Aceros Arequipa | Manufactura |\n\n"
+    "| INRETC1 | InRetail Peru Corp | Retail / farmacias |\n"
+    "| CPACASC1 | Cementos Pacasmayo | Construcción |\n"
+    "| FERREYC1 | Ferreycorp | Bienes de capital |\n"
+    "| LUSURC1 | Luz del Sur | Electricidad |\n"
+    "| MINSURI1 | Minsur | Minería (estaño/cobre) |\n\n"
+    "Panel vigente: 7 activos x 3,512 fechas (2012-01-02 a 2025-12-30), con la "
+    "corrección de fecha de la BVL del 2026-09-12 y el canal de sentimiento "
+    "rediseñado (conteos categóricos y EWMAs; ver `docs/taxonomia_eventos_R5.txt`).\n\n"
     "**Decisiones cubiertas en este notebook:**\n"
     "1. Calendario bursátil construido en R6 (no en el entorno DRL, OE1).\n"
     "2. Sentimiento: roll-forward de noticias en día no bursátil + "
-    "reagregación, sin decaimiento precalculado (4 columnas crudas).\n"
+    "reagregación (los CONTEOS se suman; solo el score se promedia).\n"
     "3. Ancla sintética de `days_since_news` en el día 0 de cada activo.\n"
     "4. Fundamentales propagados con `merge_asof` (sin look-ahead).\n"
-    "5. Días sin cotización: precio \"stale\" + indicadores recalculados + "
-    "bandera `is_no_trade`.\n"
+    "5. Días sin cotización (`is_no_trade`) y días con precio arrastrado "
+    "(`is_stale`): precio sostenido + indicadores recalculados.\n"
     "6. Corrección de `rsi_14` (bug de fórmula preexistente de R3, no "
     "imputación de datos faltantes).\n"
     "7. Valoración fundamental: P/E y Dividend Yield diarios en el panel "
@@ -81,19 +86,26 @@ cells.append(code_cell(
     "    build_trading_calendar, _align_sentiment_to_calendar, feature_views,\n"
     ")\n"
     "from src.fundamentals.fundamentals_client import compute_ratios\n"
+    "# Las rutas del cliente de R4 son relativas a la raíz del repo; el notebook corre\n"
+    "# desde notebooks/. Sin esto el conteo híbrido de acciones (Informe Bursátil\n"
+    "# Mensual de la BVL) no se encuentra y se cae al capital del balance.\n"
+    "import src.fundamentals.fundamentals_client as _fc\n"
+    "_fc._BVL_MENSUAL_CACHE = pathlib.Path('../data/interim/bvl_mensual.parquet')\n"
     "from src.universe import Config\n\n"
     "DATA_INTERIM = pathlib.Path('../data/interim')\n"
     "DATA_RAW = pathlib.Path('../data/raw')\n"
     "DATA_PROCESSED = pathlib.Path('../data/processed')\n\n"
-    "TICKERS = ['CREDITC1', 'BUENAVC1', 'ALICORC1', 'SAGAC1', 'CORAREC1']\n"
+    "TICKERS = ['CREDITC1', 'ALICORC1', 'INRETC1', 'CPACASC1', 'FERREYC1', 'LUSURC1', 'MINSURI1']\n"
     "NOMBRES = {\n"
     "    'CREDITC1': 'BCP',\n"
-    "    'BUENAVC1': 'Buenaventura',\n"
     "    'ALICORC1': 'Alicorp',\n"
-    "    'SAGAC1':   'Saga Falabella',\n"
-    "    'CORAREC1': 'Aceros Arequipa',\n"
+    "    'INRETC1':  'InRetail',\n"
+    "    'CPACASC1': 'Pacasmayo',\n"
+    "    'FERREYC1': 'Ferreycorp',\n"
+    "    'LUSURC1':  'Luz del Sur',\n"
+    "    'MINSURI1': 'Minsur',\n"
     "}\n"
-    "COLORES = ['#2196F3', '#F44336', '#4CAF50', '#FF9800', '#9C27B0']\n"
+    "COLORES = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2']\n"
     "COLOR_MAP = dict(zip(TICKERS, COLORES))\n\n"
     "sns.set_theme(style='whitegrid', palette='tab10')\n"
     "plt.rcParams.update({'figure.dpi': 110, 'axes.titlesize': 11})\n\n"
@@ -112,7 +124,7 @@ cells.append(code_cell(
 cells.append(md_cell(
     "## 2. Calendario bursátil: construido en R6, no en el entorno (OE1)\n\n"
     "`build_trading_calendar()` toma la UNIÓN de fechas con cotización de "
-    "cualquiera de los 5 activos (no el calendario de uno solo) — esa es la "
+    "cualquiera de los 7 activos (no el calendario de uno solo) — esa es la "
     "decisión de diseño: el panel define qué días existen como fila, el "
     "entorno DRL solo consume ese índice ya resuelto. Cada activo individual "
     "puede tener menos filas propias (iliquidez, ver sección 6); eso se "
@@ -143,10 +155,9 @@ cells.append(md_cell(
     "viernes) y recupera cobertura que antes se perdía fuera del calendario. "
     "Si ese día hábil ya tenía noticia propia, se reagregan con media "
     "ponderada por `n_articles` (consistente con `daily_aggregation: mean` "
-    "de R5). El panel guarda 4 columnas CRUDAS — `sentiment_score_last`, "
-    "`days_since_news`, `has_news`, `n_articles` — sin ningún decaimiento "
-    "precalculado: por sugerencia del asesor, la tasa de decaimiento la "
-    "aprende el propio agente DRL a partir de `days_since_news`.",
+    "de R5) y las columnas de CONTEO por categoría se SUMAN. Sobre esos conteos se "
+    "construyen las EWMAs del canal (`sent_{pos,neu,neg}_ewma_{5,20,60}`); se conservan "
+    "además las columnas de contexto `days_since_news`, `has_news`, `n_articles`.",
     "cell-05",
 ))
 
@@ -173,21 +184,27 @@ cells.append(code_cell(
 ))
 
 cells.append(md_cell(
-    "**Ejemplo real de colisión y reagregación** — noticia del sábado "
-    "2013-07-20 (score 0.0, 2 artículos) se funde con la del lunes nativo "
-    "2013-07-22 (score 1.0, 1 artículo). Media ponderada esperada: "
-    "`(0.0×2 + 1.0×1) / 3 = 0.333`.",
+    "**Ejemplo real de colisión y reagregación** — se busca en CREDITC1 la primera "
+    "fecha de fin de semana con noticias cuyo lunes siguiente también tenía noticias "
+    "propias: en el panel, los conteos del lunes son la SUMA de ambos días.",
     "cell-07",
 ))
 
 cells.append(code_cell(
     "ej = sentiment_raw['CREDITC1'].copy()\n"
     "ej['date'] = pd.to_datetime(ej['date'])\n"
-    "print('Crudo (R5), antes de alinear al calendario:')\n"
-    "display(ej[(ej['date'] >= '2013-07-19') & (ej['date'] <= '2013-07-23')])\n\n"
-    "print('Panel R6, después del roll-forward + reagregación:')\n"
-    "display(unified.loc[(unified['ticker'] == 'CREDITC1') & (unified['date'] == '2013-07-22'),\n"
-    "                     ['date', 'has_news', 'n_articles', 'sentiment_score_last']])",
+    "fechas = set(ej['date'])\n"
+    "finde = ej[~ej['date'].isin(cal)]\n"
+    "for d in finde['date']:\n"
+    "    destino = cal[cal.searchsorted(d)]\n"
+    "    if destino in fechas and destino.year >= 2013:\n"
+    "        break\n"
+    "cols = ['date', 'n_articles', 'n_relevantes', 'sentiment_score']\n"
+    "print(f'Crudo (R5): {d.date()} (no bursátil) y {destino.date()} (día hábil siguiente)')\n"
+    "display(ej[ej['date'].isin([d, destino])][cols])\n"
+    "print('Panel R6 tras el roll-forward (los conteos se suman):')\n"
+    "display(unified.loc[(unified['ticker'] == 'CREDITC1') & (unified['date'] == destino),\n"
+    "                    ['date', 'has_news', 'n_articles', 'n_relevantes']])",
     "cell-08",
 ))
 
@@ -203,7 +220,9 @@ cells.append(md_cell(
 ))
 
 cells.append(code_cell(
-    "fig, axes = plt.subplots(2, 5, figsize=(20, 6.5))\n"
+    "fig, axes = plt.subplots(2, 7, figsize=(24, 6.5))\n"
+    "fig.suptitle('Días hábiles desde la última noticia, por activo: escala cruda (arriba) y log1p (abajo)',\n"
+    "             fontsize=13, fontweight='bold')\n"
     "for ax, t in zip(axes[0], TICKERS):\n"
     "    vals = unified.loc[unified['ticker'] == t, 'days_since_news']\n"
     "    ax.hist(vals, bins=40, color=COLOR_MAP[t])\n"
@@ -243,9 +262,10 @@ cells.append(md_cell(
     "## 5. Fundamentales: propagación con `merge_asof` (sin look-ahead)\n\n"
     "`pd.merge_asof(..., direction='backward')` sobre `known_date` asigna a "
     "cada día de mercado el ÚLTIMO trimestre que ya era público en esa "
-    "fecha — nunca un trimestre futuro. El primer `known_date` de los 5 "
-    "activos es 2005-05-15, muy anterior al inicio del horizonte de mercado "
-    "(2012-01-02), así que no hay huecos de NaN al inicio del panel.",
+    "fecha — nunca un trimestre futuro. `known_date` es la fecha REAL del hecho de "
+    "importancia en la BVL cuando existe, y si no un lag de respaldo calibrado por "
+    "activo (D20). InRetail tiene fundamentales desde su salida a bolsa (2012); el "
+    "resto, desde 2005.",
     "cell-13",
 ))
 
@@ -258,7 +278,7 @@ cells.append(code_cell(
     "    sub = unified[unified['ticker'] == t]\n"
     "    ax.step(sub['date'], sub['roe'], where='post', label=NOMBRES[t], color=COLOR_MAP[t])\n"
     "ax.set_title('ROE propagado con merge_asof — cada escalón es un nuevo trimestre conocido')\n"
-    "ax.legend(ncol=5, fontsize=8)\n"
+    "ax.legend(ncol=4, fontsize=8)\n"
     "plt.tight_layout()\n"
     "plt.show()",
     "cell-14",
@@ -267,9 +287,12 @@ cells.append(code_cell(
 cells.append(code_cell(
     "sub = unified[(unified['ticker'] == 'CREDITC1') &\n"
     "              (unified['date'] >= '2019-01-01') & (unified['date'] <= '2021-12-31')]\n"
-    "fig, ax = plt.subplots(figsize=(11, 3.5))\n"
-    "ax.step(sub['date'], sub['roe'], where='post', color=COLOR_MAP['CREDITC1'])\n"
-    "ax.set_title('CREDITC1 — zoom 2019-2021: escalones trimestrales de ROE (forward-fill desde known_date)')\n"
+    "fig, ax = plt.subplots(figsize=(11, 3.8))\n"
+    "ax.step(sub['date'], sub['roe'] * 100, where='post', color=COLOR_MAP['CREDITC1'], lw=1.6)\n"
+    "for kd in sub['known_date'].dropna().unique():\n"
+    "    ax.axvline(pd.Timestamp(kd), color='grey', lw=0.6, ls=':')\n"
+    "ax.set_ylabel('ROE trimestral (%)')\n"
+    "ax.set_title('CREDITC1 2019-2021: escalones de ROE; cada línea punteada es un known_date')\n"
     "plt.tight_layout()\n"
     "plt.show()",
     "cell-15",
@@ -288,8 +311,9 @@ cells.append(md_cell(
     "- **DY** = dividendos por acción TTM (PEN) / `close_raw`.\n\n"
     "Las acciones en circulación se reconstruyen de la SMV "
     "(`(Capital Emitido − tesorería) / nominal`), con el `quantity` de la BVL "
-    "como ancla/validación y el Form 20-F de la SEC para BUENAVC1 (capital en "
-    "USD sin nominal limpio). Metodología y validación completas: "
+    "y el conteo HÍBRIDO vigente (emitidas según el Informe Bursátil Mensual de la "
+    "BVL menos la tesorería de la SMV; InRetail por tramos; Minsur con el total "
+    "económico). Metodología y validación completas: "
     "`docs/pipeline_extraccion_datos.txt` §3.10.2 y "
     "`docs/hallazgos_fundamentales_R4.txt` §5.9.",
     "cell-15b",
@@ -313,7 +337,7 @@ cells.append(code_cell(
     "              color=COLOR_MAP[t], lw=1.0, label=NOMBRES[t])\n"
     "    axdy.plot(g['date'], g['dy'] * 100, color=COLOR_MAP[t], lw=1.0, label=NOMBRES[t])\n"
     "axpe.set_title('P/E diario (recortado a [0, 60] para visualización; NaN en años de pérdida)')\n"
-    "axpe.set_ylabel('P/E (×)'); axpe.legend(ncol=5, fontsize=8)\n"
+    "axpe.set_ylabel('P/E (×)'); axpe.legend(ncol=4, fontsize=8)\n"
     "axdy.set_title('Dividend Yield diario (%) — dividendo TTM por acción / close_raw')\n"
     "axdy.set_ylabel('DY (%)')\n"
     "plt.tight_layout(); plt.show()",
@@ -340,9 +364,12 @@ cells.append(code_cell(
 
 # ── Sección 6: días sin cotización ───────────────────────────────────────────
 cells.append(md_cell(
-    "## 6. Días sin cotización (`is_no_trade`): precio stale, no imputación de OHLCV\n\n"
-    "Al reindexar sobre el calendario común, los activos de baja liquidez "
-    "quedan con filas sin cotización propia. Se arrastra el último "
+    "## 6. Días sin cotización y precio arrastrado (`is_no_trade`, `is_stale`)\n\n"
+    "Dos fenómenos distintos: `is_no_trade` = el activo no tiene fila propia ese "
+    "día (en el universo vigente casi solo InRetail antes de su salida a bolsa); "
+    "`is_stale` = la BVL publica un cierre IDÉNTICO al del día anterior (precio de "
+    "referencia arrastrado, sin cambio). El segundo es la iliquidez dominante: "
+    "3% a 44% de los días según el activo. En ambos casos se arrastra el último "
     "`close_total_return` conocido y se RECALCULAN los indicadores técnicos "
     "sobre la serie ya completa (`technical_indicators.add_indicators`) en "
     "vez de arrastrar a ciegas los valores de los indicadores — así "
@@ -359,26 +386,48 @@ cells.append(code_cell(
     "    return mask[mask].groupby(grp[mask]).size()\n\n"
     "rows = []\n"
     "for t in TICKERS:\n"
-    "    sub = unified[unified['ticker'] == t].sort_values('date')\n"
-    "    mask = sub['is_no_trade'].astype(bool)\n"
-    "    runs = episodios(mask)\n"
+    "    sub = unified[unified['ticker'] == t].sort_values('date').reset_index(drop=True)\n"
+    "    nt = episodios(sub['is_no_trade'].astype(bool))\n"
+    "    st = episodios(sub['is_stale'].astype(bool))\n"
     "    rows.append({\n"
-    "        'ticker': t, 'dias_no_trade': int(mask.sum()), 'episodios': len(runs),\n"
-    "        'racha_max_sesiones': int(runs.max()) if len(runs) else 0,\n"
+    "        'ticker': t, 'dias_no_trade': int(sub['is_no_trade'].sum()),\n"
+    "        'racha_max_no_trade': int(nt.max()) if len(nt) else 0,\n"
+    "        'dias_stale_%': round(sub['is_stale'].mean() * 100, 1),\n"
+    "        'rachas_stale': len(st), 'racha_max_stale': int(st.max()) if len(st) else 0,\n"
     "    })\n"
     "display(pd.DataFrame(rows))",
     "cell-17",
 ))
 
 cells.append(code_cell(
-    "sub = unified[(unified['ticker'] == 'SAGAC1') &\n"
-    "              (unified['date'] >= '2012-08-15') & (unified['date'] <= '2012-09-25')]\n"
-    "fig, ax = plt.subplots(figsize=(11, 4))\n"
-    "ax.plot(sub['date'], sub['close_total_return'], marker='o', color=COLOR_MAP['SAGAC1'])\n"
-    "for _, r in sub[sub['is_no_trade'] == 1].iterrows():\n"
-    "    ax.axvspan(r['date'], r['date'] + pd.Timedelta(days=1), color='red', alpha=0.15)\n"
-    "ax.set_title('SAGAC1 — racha de 4 sesiones sin operar (rojo): precio stale, '\n"
-    "             'salto real al reanudar el 2012-09-10 (-3.4%)')\n"
+    "# La racha de precio arrastrado más larga del universo vigente (calculada, no fijada)\n"
+    "mejor = None\n"
+    "for t in TICKERS:\n"
+    "    g = unified[unified['ticker'] == t].sort_values('date').reset_index(drop=True)\n"
+    "    m = g['is_stale'].astype(bool)\n"
+    "    grp = (m != m.shift()).cumsum()\n"
+    "    for _, bloque in g[m].groupby(grp[m]):\n"
+    "        if mejor is None or len(bloque) > mejor[2]:\n"
+    "            mejor = (t, bloque['date'].iloc[0], len(bloque), bloque['date'].iloc[-1])\n"
+    "t_ej, ini, n_racha, fin = mejor\n"
+    "g = unified[unified['ticker'] == t_ej].sort_values('date').reset_index(drop=True)\n"
+    "i_fin = g.index[g['date'] == fin][0]\n"
+    "reanuda = g.loc[i_fin + 1]\n"
+    "win = g[(g['date'] >= ini - pd.Timedelta(days=30)) & (g['date'] <= fin + pd.Timedelta(days=30))]\n\n"
+    "fig, (ax, ax2) = plt.subplots(2, 1, figsize=(12, 6), sharex=True,\n"
+    "                              gridspec_kw={'height_ratios': [3, 1.3]})\n"
+    "ax.plot(win['date'], win['close_raw'], marker='o', ms=3, color=COLOR_MAP[t_ej])\n"
+    "ax.axvspan(ini, fin, color='red', alpha=0.12, label=f'{n_racha} sesiones con precio arrastrado (is_stale=1)')\n"
+    "ax.annotate(f'reanuda {reanuda[\"date\"]:%Y-%m-%d}: {reanuda[\"ret_1d\"]:+.2%}',\n"
+    "            xy=(reanuda['date'], reanuda['close_raw']), xytext=(30, -55),\n"
+    "            textcoords='offset points', arrowprops=dict(arrowstyle='->', color='black', lw=1), fontsize=9)\n"
+    "ax.set_ylabel('Cierre crudo (S/)')\n"
+    "ax.legend(loc='upper left', fontsize=9)\n"
+    "ax.set_title(f'{t_ej} ({NOMBRES[t_ej]}) — racha de precio arrastrado más larga del universo: '\n"
+    "             f'{ini:%Y-%m-%d} a {fin:%Y-%m-%d}', fontweight='bold')\n"
+    "ax2.bar(win['date'], win['ret_1d'] * 100, width=1.0, color='#546E7A')\n"
+    "ax2.axvspan(ini, fin, color='red', alpha=0.12)\n"
+    "ax2.set_ylabel('ret_1d (%)')\n"
     "plt.tight_layout()\n"
     "plt.show()",
     "cell-18",
@@ -430,17 +479,18 @@ cells.append(code_cell(
 cells.append(code_cell(
     "print('RSI == 100 (sin pérdidas, con ganancia):', int((unified['rsi_14'] == 100).sum()))\n"
     "print('RSI == 50  (ventana totalmente plana)   :', int((unified['rsi_14'] == 50).sum()))\n\n"
-    "sub = unified[(unified['ticker'] == 'SAGAC1') &\n"
-    "              (unified['date'] >= '2012-08-30') & (unified['date'] <= '2012-09-12')]\n"
-    "display(sub[['date', 'close_total_return', 'is_no_trade', 'rsi_14']])",
+    "# En la misma racha de la sección 6 el RSI converge a 50 (ventana plana)\n"
+    "sub = g[(g['date'] >= fin - pd.Timedelta(days=7)) & (g['date'] <= reanuda['date'])]\n"
+    "display(sub[['date', 'close_total_return', 'is_stale', 'rsi_14']])",
     "cell-21",
 ))
 
 # ── Sección 8: vistas de señales ─────────────────────────────────────────────
 cells.append(md_cell(
     "## 8. Vistas de señales para los experimentos DRL (R8)\n\n"
-    "Las 4 configuraciones de señales que pide R8 NO son datasets separados: "
-    "son selecciones de columnas sobre este mismo panel único.",
+    "Las configuraciones de señales de R8 NO son datasets separados: son selecciones "
+    "de columnas sobre este mismo panel único. (Las vistas que consume el agente se "
+    "definen en `src/env/features.py`; esta función lista las de R6.)",
     "cell-22",
 ))
 
@@ -466,13 +516,13 @@ cells.append(code_cell(
     "print(f\"Activos: {unified['ticker'].nunique()} | \"\n"
     "      f\"Calendario: {len(cal)} días ({cal.min().date()} -> {cal.max().date()})\")\n"
     "cov = unified.groupby('ticker')['has_news'].mean() * 100\n"
-    "print(f\"Cobertura de sentimiento tras roll-forward: {cov.min():.1f}% (SAGAC1) \"\n"
-    "      f\"a {cov.max():.1f}% (CREDITC1), promedio {cov.mean():.1f}%\")\n"
+    "print(f\"Días con algún artículo tras roll-forward: {cov.min():.1f}% ({cov.idxmin()}) \"\n"
+    "      f\"a {cov.max():.1f}% ({cov.idxmax()}), promedio {cov.mean():.1f}%\")\n"
     "print(f\"Días is_no_trade: {int(unified['is_no_trade'].sum())} \"\n"
     "      f\"({unified['is_no_trade'].mean() * 100:.2f}% del panel)\")\n"
     "print('NaN en columnas clave: ' + ', '.join(\n"
     "    f\"{c}={unified[c].isna().sum()}\"\n"
-    "    for c in ['sentiment_score_last', 'days_since_news', 'has_news', 'n_articles',\n"
+    "    for c in ['sent_pos_ewma_20', 'sent_neg_ewma_20', 'days_since_news', 'has_news', 'n_articles',\n"
     "              'roe', 'roa', 'rsi_14', 'close_total_return']\n"
     "))",
     "cell-25",
