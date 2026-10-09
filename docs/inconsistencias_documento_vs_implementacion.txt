@@ -69,6 +69,13 @@ TENSIÓN REAL, no formal: cada algoritmo multiplica el contador de
 ACCIÓN: alinear en una de dos direcciones, y quede escrito cuál:
         (a) el documento baja a PPO + SAC, justificando la exclusión de DDPG; o
         (b) D3 se enmienda a los tres, aceptando el costo en la deflación.
+>> RESUELTA EL 2026-09-26 POR (b), decisión del autor: el documento prometía
+   DDPG para la comparación y se cumple. D3 enmendada (ver el registro de
+   decisiones). Implementado en src/agents/algoritmos.py; `ablacion_r8.py
+   --algo {ppo,sac,ddpg}`; tests en tests/test_agentes_r7.py. SAC y DDPG
+   operan el MISMO entorno a través de un envoltorio de acción biyectivo
+   (artanh), que no cambia el conjunto de carteras alcanzables. El costo en la
+   deflación se acepta: cada algoritmo que se corra es una configuración más.
 
 
 ========================================================================
@@ -287,7 +294,8 @@ RESUMEN OPERATIVO
 ========================================================================
   CORREGIR EL DOCUMENTO (5): FinRL, gemma3:4b, "scores", "API de LLM",
                              intervalos de confianza.
-  DECIDIR CUÁL MANDA (2):    algoritmos (PPO/DDPG/SAC vs D3);
+  DECIDIR CUÁL MANDA (2):    algoritmos (PPO/DDPG/SAC vs D3) — RESUELTA
+                             2026-09-26: manda el documento, los tres;
                              configuraciones de señales (ver punto 3).
   IMPLEMENTAR (2):           baseline Markowitz; Sortino y retorno anualizado.
                              >> LOS DOS RESUELTOS EL 2026-09-18. Ver las

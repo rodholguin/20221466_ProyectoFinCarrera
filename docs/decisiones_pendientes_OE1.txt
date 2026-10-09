@@ -31,7 +31,7 @@ ya no cabe en la cabeza.
   ---  --------------------------------------  --------------------------------
   D1   alcance del agente                      CERRADA — portafolio
   D2   espacio de acción                       CERRADA — ENMENDADA: acción relativa
-  D3   algoritmo                               CERRADA — PPO primario
+  D3   algoritmo                               ENMENDADA 09-26 — PPO primario + SAC + DDPG
   D4   función de recompensa                   REABIERTA 09-19 — el tamiz reprueba a las 3
   D5   observación: ventana y recurrencia      CERRADA — ventana apilada, sin RNN
   D6   normalización causal                    CERRADA — expanding por activo
@@ -178,6 +178,44 @@ DECISIONES (en orden de resolución sugerido)
     estacionariedad.
     SAC entra como UNA verificación de robustez, no como brazo de la grilla:
     cada brazo adicional castiga el Sharpe deflactado (ver D10).
+    >> ENMENDADA EL 2026-09-26 (decisión del autor): PPO, SAC Y DDPG. El
+       documento de tesis (O3, R7) compromete la comparación de los tres, y
+       la inconsistencia #2 se resuelve a favor del documento. PPO sigue
+       siendo el PRIMARIO; el costo en el contador de D10 se acepta.
+       IMPLEMENTACIÓN, y lo que la hace comparable:
+       - src/agents/algoritmos.py construye los tres con la MISMA red
+         (64x64), gamma y batch. `ablacion_r8.py --algo`.
+       - SAC y DDPG ven el entorno a través de `AccionAcotada`: exponen
+         x ∈ [-1, 1] y el entorno recibe artanh(x), así que el movimiento es
+         action_scale·x EXACTO. Es una biyección: mismas carteras alcanzables
+         que PPO, x=0 sigue siendo "no operar", y transición, costos, máscara
+         y recompensa no se tocan. Sin él, SB3 reescalaría a [-10, 10] y el
+         tanh del entorno aplastaría dos veces (satura con |u| > 0.3).
+       - La exploración NO tiene defecto: `--sac-ent-coef` (coeficiente de
+         entropía FIJO; el 'auto' de SB3 no está calibrado) y `--ddpg-sigma`.
+         Se calibran POR ROTACIÓN EN TRAIN, como D22.
+         >> CALIBRADA EL 2026-10-09 (scripts/calibra_exploracion_r7.py, pliegue
+            0, solo train, sin mirar retornos ni validación, sin registro).
+            Regla escrita antes de medir: el valor cuyo PEAJE DEL RUIDO
+            (rotación estocástica − determinista) quede más cerca del de la
+            referencia PPO log_std=−2 en modo delta = 5.99 rot/año.
+              DDPG  σ = 0.16      peaje 5.86 ± 0.50 (5 semillas) = 0.98x
+                    (σ 0.15 → 0.88x · σ 0.17 → 1.08x)
+              SAC   ent_coef 0.03 peaje 5.90 ± 2.17 (3 semillas) = 0.98x
+                    (0.02 → 0.60x · 0.035 → 1.09x · 0.05 → 1.68x)
+            FIJADOS: `--ddpg-sigma 0.16` y `--sac-ent-coef 0.03`. La medición
+            de SAC con UNA semilla no era monótona (0.05 → 1.77x, 0.07 →
+            1.59x); con tres sí, y por eso se repitió. Su dispersión (±2.2) es
+            mayor que la de DDPG porque en SAC el ruido lo aprende la red.
+            Artefactos: data/interim/artefactos_oe1/exploracion_r7*.json.
+            COSTO MEDIDO: SAC ~16 ms/paso con 1 entorno (≈7x PPO), así que la
+            comparación R7 se corre en solo_mercado y completa, no en las 4
+            vistas (ver resultados §7.16).
+       - Off-policy con 1 entorno (PPO sigue con 4): con varios, SB3 hace un
+         paso de gradiente cada n_envs transiciones y cambia la razón de
+         repetición del replay.
+       - La configuración de PPO en el registro queda IDÉNTICA (mismo hash):
+         lo verifica un test contra las corridas ya registradas.
     DELIBERACIÓN ORIGINAL (se conserva):
     - Acción continua: PPO, SAC, DDPG/TD3.
     - Acción discreta: DQN (y variantes).
@@ -2845,6 +2883,8 @@ Se registra para que no vuelva a pasar lo de "decidido y no implementado".
          macro entra por ser plausible: pasa por `probe_macro_exposicion.py`
          sobre el universo vigente, que es el mismo filtro que ELIMINÓ al oro
          (0 de 7 activos) y RECHAZÓ al estaño.
+      [2026-10-09: re-medido con R4 consolidado: interacción −1.3pp de retorno
+       y −1.09 de Sharpe; la conclusión "se estorban" se mantiene. §7.13.]
       3. §7.13 midió que los canales SE ESTORBAN (interacción −3.9pp de retorno
          y −0.86 de Sharpe). Sumar dimensiones tiene costo demostrado, no solo
          beneficio hipotético.

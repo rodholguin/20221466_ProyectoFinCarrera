@@ -41,6 +41,12 @@ Uso:
     python scripts/ablacion_r8.py                       # 4 vistas x 3 pliegues x 3 semillas
     python scripts/ablacion_r8.py --seeds 10 --folds 3  # la corrida en serio
     python scripts/ablacion_r8.py --views solo_mercado mercado_fundamentales
+    python scripts/ablacion_r8.py --algo sac --sac-ent-coef <calibrado> --out <ruta>
+
+ALGORITMO (R7, D3 enmendada el 2026-09-26): `--algo` elige PPO, SAC o DDPG,
+construidos por src/agents/algoritmos.py con la misma red y el mismo entorno.
+SAC y DDPG exigen su perilla de exploracion EXPLICITA (calibrada por rotacion
+en train, como D22) y un `--out` propio.
 """
 from __future__ import annotations
 
@@ -74,6 +80,14 @@ from src.env.registro import conteo, registra  # noqa: E402
 # comparables y nadie se daría cuenta — es exactamente la deriva que este
 # proyecto ya sufrió tres veces.
 from train_ppo_oe1 import construye_env, evalua  # noqa: E402
+
+from src.agents import (  # noqa: E402
+    ALGORITMOS,
+    config_registro,
+    construye_modelo,
+    envuelve,
+    exploracion,
+)
 
 SALIDA = Path("data/interim/artefactos_oe1/ablacion_r8.json")
 WARMUP = 250
@@ -134,11 +148,17 @@ def main() -> None:
                     help="lambda de mv / logret_dd (ver d4_tamiz_recompensas.py::calibra_escala)")
     ap.add_argument("--kappa", type=float, default=None,
                     help="kappa de dsr_rot")
-    ap.add_argument("--log-std", type=float, default=-2.0)
+    ap.add_argument("--algo", default="ppo", choices=list(ALGORITMOS))
+    ap.add_argument("--log-std", type=float, default=-2.0, help="exploracion de PPO (D22)")
+    ap.add_argument("--sac-ent-coef", type=float, default=None,
+                    help="coeficiente de entropia FIJO de SAC; sin defecto (calibrar por rotacion)")
+    ap.add_argument("--ddpg-sigma", type=float, default=None,
+                    help="sigma del ruido de accion de DDPG; sin defecto (calibrar por rotacion)")
     ap.add_argument("--action-mode", default="delta", choices=["delta", "logits"])
     ap.add_argument("--action-scale", type=float, default=0.05)
     ap.add_argument("--rebalance-every", type=int, default=1)
-    ap.add_argument("--n-envs", type=int, default=4)
+    ap.add_argument("--n-envs", type=int, default=None,
+                    help="entornos en paralelo (defecto: 4 para PPO, 1 para SAC/DDPG)")
     # El artefacto se PARAMETRIZA porque este script ya no corre una sola vez:
     # una corrida parcial (una vista suelta, u otra recompensa) sobrescribia el
     # JSON de la ablacion entera y se perdia. El defecto no cambia, asi que las
@@ -147,13 +167,24 @@ def main() -> None:
                     help="ruta del artefacto JSON de salida")
     args = ap.parse_args()
     salida = Path(args.out)
+    try:
+        explora = exploracion(args.algo, log_std=args.log_std,
+                              ent_coef=args.sac_ent_coef, sigma=args.ddpg_sigma)
+    except ValueError as e:
+        ap.error(str(e))
+    if args.algo != "ppo" and args.action_mode != "delta":
+        ap.error(f"{args.algo.upper()} solo corre con --action-mode delta (ver AccionAcotada)")
+    if args.algo != "ppo" and salida == SALIDA:
+        ap.error(f"{args.algo.upper()} necesita --out propio: el defecto es el artefacto de la ablacion PPO")
+    # Off-policy con 1 entorno: con varios, SB3 hace un paso de gradiente cada
+    # n_envs transiciones y cambia la razon de repeticion del replay.
+    n_envs = args.n_envs if args.n_envs is not None else (4 if args.algo == "ppo" else 1)
 
-    from stable_baselines3 import PPO
     from stable_baselines3.common.env_util import make_vec_env
 
     t0 = time.time()
     print("=" * 84)
-    print("R8 — ABLACIÓN DE CANALES")
+    print(f"R8 — ABLACIÓN DE CANALES  ·  {args.algo.upper()}  {explora}")
     print("=" * 84)
     print(f"vistas   : {', '.join(args.views)}")
     print(f"pliegues : {args.folds}  ·  semillas: {args.seeds}  ·  pasos: {args.timesteps:,}")
@@ -210,33 +241,27 @@ def main() -> None:
                 "fold": p.idx,
                 "action_mode": args.action_mode,
                 "action_scale": args.action_scale,
-                "log_std_init": args.log_std,
                 "timesteps": args.timesteps,
-                "algoritmo": "PPO",
-                "net_arch": [64, 64],
+                # Para PPO son exactamente {algoritmo, net_arch, log_std_init},
+                # como antes: el hash de sus configuraciones no cambia.
+                **config_registro(args.algo, explora),
             }
             por_semilla = []
             for semilla in range(args.seeds):
                 entorno = make_vec_env(
-                    lambda: construye_env(
-                        panel, costos, p.rango("train"), entrenando=True, cfg_extra=cfg_extra
+                    lambda: envuelve(
+                        construye_env(
+                            panel, costos, p.rango("train"), entrenando=True, cfg_extra=cfg_extra
+                        ),
+                        args.algo,
                     ),
-                    n_envs=args.n_envs,
+                    n_envs=n_envs,
                     seed=semilla,
                 )
-                modelo = PPO(
-                    "MlpPolicy",
-                    entorno,
-                    seed=semilla,
-                    verbose=0,
-                    n_steps=512,
-                    batch_size=256,
-                    gamma=0.99,
-                    ent_coef=0.0,
-                    policy_kwargs={"net_arch": [64, 64], "log_std_init": args.log_std},
-                )
+                modelo = construye_modelo(args.algo, entorno, semilla=semilla,
+                                          explora=explora, timesteps=args.timesteps)
                 modelo.learn(total_timesteps=args.timesteps, progress_bar=False)
-                s = evalua(modelo, panel, costos, p.rango("val"), cfg_extra)
+                s = evalua(modelo, panel, costos, p.rango("val"), cfg_extra, algo=args.algo)
                 s["seed"] = semilla
                 por_semilla.append(s)
                 # D10: se anota ANTES de mirar si el resultado gusta.
