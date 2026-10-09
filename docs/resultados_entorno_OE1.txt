@@ -1644,6 +1644,43 @@ negativa y grande. Correrlas ahora seria gastar 18 corridas del contador para
 detallar por que se estorban tres canales que, sueltos, tampoco mueven la vara
 de D9. Quedan como trabajo futuro explicito.
 
+>> RE-MEDIDO EL 2026-10-09 CON LOS FUNDAMENTALES CORREGIDOS (R4 a estados
+   CONSOLIDADOS y utilidad atribuible; ver riesgos_transversales_datos.txt,
+   R4). Se re-corrieron las 4 vistas y `completa`, mismo protocolo, mismas
+   semillas. REPRODUCIBILIDAD: solo_mercado, mercado_macro y
+   mercado_sentimiento dieron EXACTAMENTE los mismos números, semilla por
+   semilla (no usan fundamentales). Las cifras de arriba se conservan como
+   las de la corrida del 18/19-sep; las VIGENTES son estas:
+
+  brazo                      ret     sharpe   sortino   maxDD     rot    costo S/
+  mercado_macro            +1.4pp    +0.384   +0.415   -1.0pp   -0.39    -9,125
+  mercado_sentimiento      +1.8pp    +0.452   +0.653   -2.0pp   +0.73   +10,661
+  mercado_fundamentales    -0.6pp    +0.333   +0.395   -3.7pp   -0.10       -70
+  completa                 +1.3pp    +0.081   +0.341   -3.7pp   +0.24    +3,787
+
+                             ret     sharpe   sortino   maxDD     rot
+  suma de los 3 canales    +2.6pp    +1.169   +1.463   -6.6pp   +0.24
+  completa (medida)        +1.3pp    +0.081   +0.341   -3.7pp   +0.24
+  INTERACCION              -1.3pp    -1.088   -1.122   +3.0pp   +0.00
+
+  QUÉ SE SOSTIENE: los canales SE ESTORBAN. En Sharpe la interacción es
+  incluso más negativa (-1.09 contra -0.86): `completa` se queda con el 7% de
+  la suma de los aportes sueltos. QUÉ CAMBIA: (1) en retorno la interacción
+  baja de -3.9pp a -1.3pp: el -3.9pp NO SE CITA MÁS. (2) El brazo de
+  fundamentales pasa a restar retorno (-0.6pp, 4/9 positivos) aunque mejora
+  Sharpe, y EMPEORA EL DRAWDOWN EN 9 DE 9 celdas. (3) Se CAE el patrón
+  "monótono con la dimensión": fundamentales (241 dims) rinde ahora peor que
+  completa (381 dims), así que esa hipótesis pierde su apoyo descriptivo para
+  la corrida de 10 semillas. (4) D9: ni fundamentales ni completa le ganan a
+  la caja en NINGÚN pliegue (completa: +0.4% / -5.9% / -2.0% contra caja
+  +1.9% / +0.3% / +5.4%; antes completa ganaba en el pliegue 0).
+  Sigue valiendo la primera lectura: con 3 semillas NADA de esto es hallazgo.
+  Artefactos: ablacion_r8.json y ablacion_r8_completa.json (los del 18/19-sep
+  quedaron reemplazados; sus cifras están arriba).
+  REGISTRO D10: las re-corridas tienen la misma estrategia y NO suman al
+  contador (31 configuraciones distintas). Ver la nota de src/env/registro.py
+  sobre `reward_kwargs: {}`.
+
 
 ------------------------------------------------------------------------
 7.14 BRAZOS DE RECOMPENSA — PREDICCIONES ESCRITAS ANTES DE CORRER
