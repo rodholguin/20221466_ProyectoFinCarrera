@@ -117,11 +117,38 @@ def test_caja_rinde_exacto():
     res = run_policy(env, CashOnly())
 
     t0, tf = env.t0, env.t
-    factores = 1.0 + p.rf_daily[t0:tf]
+    factores = 1.0 + p.rf_paso[t0:tf]
     esperado = env.cfg.initial_capital * np.concatenate([[1.0], np.cumprod(factores)])
 
     assert np.allclose(res["equity"], esperado, rtol=1e-12), "la caja no rinde la rf compuesta"
     assert res["equity"][-1] > res["equity"][0], "la caja debería crecer con rf > 0"
+
+
+def test_caja_devenga_por_dia_calendario():
+    """BUG hallado el 2026-10-29: la caja cobraba UN día por paso hábil.
+
+    Con días hábiles (lunes a viernes), viernes -> lunes son tres días de
+    interés. Cobrando uno, la caja rendía 252/365 de la tasa: 2.65% anual en vez
+    de 3.88% en el panel real 2013-2025. En un año, la caja tiene que rendir la
+    tasa anual (salvo la diferencia entre interés simple y compuesto).
+    """
+    from dataclasses import replace
+
+    habiles = np.array(
+        [d for d in np.arange("2021-01-04", "2022-01-04", dtype="datetime64[D]")
+         if np.is_busday(d)]
+    )
+    base = panel_sintetico(n_dias=len(habiles))
+    p = replace(base, dates=habiles)
+    lunes = int(np.nonzero(np.is_busday(habiles, weekmask="Mon"))[0][1])
+    assert p.dias_al_siguiente[lunes - 1] == 3, "viernes -> lunes no son tres días"
+    assert p.dias_al_siguiente[lunes] == 1
+
+    env = _env(p, rebalance_every=1)
+    res = run_policy(env, CashOnly())
+    dias = (habiles[env.t] - habiles[env.t0]).astype(int)
+    anual = (res["equity"][-1] / res["equity"][0]) ** (365 / dias) - 1
+    assert abs(anual - RF_ANUAL) < 0.001, f"la caja rinde {anual:.4%} anual con una tasa de {RF_ANUAL:.2%}"
 
 
 # --------------------------------------------------------------------------
@@ -392,7 +419,7 @@ def test_delta_accion_cero_no_opera_nunca():
 
     assert np.allclose(env.history["turnover"], 0.0), "a=0 produjo operaciones"
     assert sum(env.history["cost"]) == 0.0, "a=0 pagó costo"
-    factores = 1.0 + p.rf_daily[env.t0 : env.t]
+    factores = 1.0 + p.rf_paso[env.t0 : env.t]
     esperado = env.cfg.initial_capital * np.concatenate([[1.0], np.cumprod(factores)])
     assert np.allclose(env.equity_curve, esperado, rtol=1e-12), (
         "sin operar, el patrimonio debería ser exactamente la caja capitalizada"

@@ -85,7 +85,10 @@ _RUIDO_CAJA = 1e-6
 #: 2026-10-29.2: ejecutor realista — la banda D7 va sobre la orden FINAL, el
 #: faltante de caja se cubre comprando menos, y el agente observa la cartera
 #: ejecutada en vez de la pedida.
-VERSION_SIMULADOR = "2026-10-29.2"
+#: 2026-10-29.3: la caja devenga por DÍA CALENDARIO (D9) y el caso base de
+#: costos pasa a `costos_observados` (spread diario de Bloomberg) en lugar del
+#: snapshot del 2026-07-27.
+VERSION_SIMULADOR = "2026-10-29.3"
 
 #: Tope de vueltas del ejecutor. Converge en 1-3; es una guarda contra un
 #: modelo de costos mal armado, no un parámetro.
@@ -225,7 +228,9 @@ class PortfolioEnv(_BASE):
         ejecutados = self._weights(e)
 
         # --- avance de e a e+1: la caja rinde exactamente un día (D9) ---
-        self.cash *= 1.0 + self.panel.rf_daily[e]
+        # D9: la caja devenga por DÍA CALENDARIO (viernes -> lunes son tres);
+        # es `panel.rf_paso[e]`, escrito así para no rearmar el arreglo cada paso.
+        self.cash *= 1.0 + self.panel.rf_daily[e] * self.panel.dias_al_siguiente[e]
         self.t = e + 1
         v_next = self._value(self.t)
 
@@ -479,7 +484,7 @@ class PortfolioEnv(_BASE):
             return {}
         ann = 252.0
         vol = float(r.std(ddof=1)) * np.sqrt(ann)
-        rf_diaria = self.panel.rf_daily[self.t0 : self.t]
+        rf_diaria = self.panel.rf_paso[self.t0 : self.t]
         # Desviación contra la tasa libre de riesgo DEL DÍA, no contra su
         # promedio: la tasa del BCRP se mueve de 0.25% a 7.75% en el horizonte,
         # y usar el promedio mediría contra un umbral que no existió.
