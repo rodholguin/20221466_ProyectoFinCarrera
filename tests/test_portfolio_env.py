@@ -259,6 +259,106 @@ def test_banda_no_la_burla_el_reescalado():
     assert abs(env.history["cost"][-1] - esperado) < 1e-6
 
 
+def _ordenes_por_paso(env, politica):
+    """Corre la política y devuelve, por paso, los nocionales EJECUTADOS por activo."""
+    ejecutar = env._execute
+    ordenes = []
+
+    def espia(target, e, v_pre):
+        antes = env.units.copy()
+        salida = ejecutar(target, e, v_pre)
+        ordenes.append((e, (env.units - antes) * env.panel.prices[e]))
+        return salida
+
+    env._execute = espia
+    run_policy(env, politica)
+    return ordenes
+
+
+def test_ninguna_orden_ejecutada_queda_bajo_la_banda():
+    """D7 al pie de la letra: "las órdenes por debajo de ese nocional no se ejecutan".
+
+    Hasta el 2026-10-29 la banda se aplicaba al PESO OBJETIVO y después los
+    recortes (por exceso de pesos o para pagar el costo) podían achicar una
+    orden real por debajo del piso: 365 órdenes así en el 1/N diario del panel
+    real. La banda va sobre la orden que se manda, no sobre la intención.
+    """
+    p = panel_sintetico(n_dias=250, n_activos=7)
+    env = PortfolioEnv(p, _costo_con_minimo(p.tickers), EnvConfig(action_mode="weights"))
+    banda = env.band
+    assert banda > 9_000
+    for _, nocional in _ordenes_por_paso(env, EqualWeight()):
+        chicas = (nocional != 0) & (np.abs(nocional) < banda)
+        assert not chicas.any(), f"se ejecutaron órdenes bajo la banda: {nocional[chicas]}"
+
+
+def test_sin_caja_se_compra_menos_y_no_se_toca_lo_demas():
+    """Si la caja no alcanza para comprar y pagar las comisiones, se COMPRA MENOS.
+
+    Un inversionista no vende un activo que no pensaba tocar para financiar
+    las comisiones de otro: achica la compra. Ningún activo que no tenía orden
+    puede terminar con una, y ninguna venta puede crecer.
+    """
+    p = panel_sintetico(n_activos=3)
+    env = PortfolioEnv(p, _costo_con_minimo(p.tickers), EnvConfig(action_mode="weights"))
+    e = env.t
+    v = env.cfg.initial_capital
+    # 100% invertido, sin caja. Pide vender A0 y comprar A1 en la MISMA
+    # cantidad: lo vendido no alcanza para comprar y pagar las dos comisiones.
+    env.units = np.array([0.5, 0.3, 0.2]) * v / p.prices[e]
+    env.cash = 0.0
+    v_pre = env._value(e)
+    objetivo = np.array([0.4, 0.4, 0.2, 0.0])
+    antes = env.units.copy()
+    costo, _ = env._execute(objetivo, e, v_pre)
+
+    nocional = (env.units - antes) * p.prices[e]
+    assert nocional[2] == 0.0, "se abrió una orden en un activo que no se iba a operar"
+    assert abs(nocional[0] - (-0.1 * v_pre)) < 1e-6, "la venta cambió de tamaño"
+    assert 0 < nocional[1] < 0.1 * v_pre, "la compra no se achicó para pagar el costo"
+    assert env.cash >= 0.0
+    assert abs(v_pre - costo - env._value(e)) < 1e-6, "no cuadra: valor final ≠ valor inicial − costo"
+
+
+def test_sin_banda_una_venta_que_no_paga_su_comision_no_se_manda():
+    # Modo de diagnóstico (band_notional=0) con el mínimo de S/40: vender S/10
+    # con la caja en cero dejaría la cuenta en negativo. Nadie manda esa orden.
+    p = panel_sintetico(n_activos=3)
+    env = PortfolioEnv(p, _costo_con_minimo(p.tickers),
+                       EnvConfig(action_mode="weights", band_notional=0.0))
+    e = env.t
+    env.units = np.array([0.5, 0.3, 0.2]) * env.cfg.initial_capital / p.prices[e]
+    env.cash = 0.0
+    v_pre = env._value(e)
+    objetivo = np.array([0.5, 0.3, 0.2, 0.0])
+    objetivo[0] -= 10.0 / v_pre
+    objetivo[3] += 10.0 / v_pre
+    antes = env.units.copy()
+    costo, _ = env._execute(objetivo, e, v_pre)
+    assert costo == 0.0 and np.array_equal(env.units, antes)
+
+
+def test_el_agente_observa_la_cartera_que_tiene_no_la_que_pidio():
+    """Los pesos de la observación y del historial son los EJECUTADOS.
+
+    Si la banda cancela una orden, la cartera real difiere del objetivo; el
+    agente tiene que ver lo que tiene, no lo que pidió.
+    """
+    p = panel_sintetico(n_activos=3)
+    env = PortfolioEnv(p, _costo_con_minimo(p.tickers), EnvConfig(action_mode="weights"))
+    e = env.t
+    v = env.cfg.initial_capital
+    env.units = np.array([0.336, 0.336, 0.318]) * v / p.prices[e]
+    env.cash = v * 0.01
+    env.step(np.array([1.0, 1.0, 1.0, 0.0]))  # pide 1/N: A0 y A1 caen bajo la banda
+
+    valor = env.units * p.prices[e]
+    reales = np.append(valor, env.cash) / (valor.sum() + env.cash)
+    assert np.allclose(env.w_post, reales), "la observación muestra pesos que la cartera no tiene"
+    assert np.allclose(env.history["weights"][-1], reales)
+    assert not np.allclose(env.w_post[:3], 1 / 3), "la orden de A0/A1 debió cancelarse"
+
+
 def test_banda_se_deriva_del_minimo_por_orden():
     # S/40 de mínimo con 0.43% de comisión => S/9,302. Es el piso ECONÓMICO por
     # debajo del cual rebalancear un activo es irracional (D7).

@@ -1941,6 +1941,54 @@ LO QUE QUEDA, Y ES DECISION DE MODELADO, NO DEFECTO: al recortar a los que
 operan, una orden puede quedar por debajo de la banda (365 en el 1/N diario
 del horizonte, ninguna menor a S/1). Volver a aplicar la banda tras el
 recorte es iterativo y cambia el contrato de D7; queda anotado.
+>> RESUELTO EL MISMO DIA (VERSION_SIMULADOR 2026-10-29.2), ver 8.2.
+
+------------------------------------------------------------------------
+8.2 EJECUTOR REALISTA (2026-10-29.2): LA BANDA VA SOBRE LA ORDEN QUE SE MANDA
+------------------------------------------------------------------------
+POR QUE. El texto de D7 que va a la tesis dice "las ordenes por debajo de
+ese nocional no se ejecutan". El simulador aplicaba la banda al PESO
+OBJETIVO y despues recortaba (por exceso de pesos o para pagar el costo),
+asi que ordenes reales quedaban bajo el piso: 365 en el 1/N diario, 27 en el
+mensual. La regla se tiene que poder defender frente a como opera una cuenta
+real, y una cuenta real no funciona asi.
+
+COMO EJECUTA AHORA (`PortfolioEnv._execute`), en el orden en que lo haria un
+inversionista:
+  1. calcula la orden de cada activo (objetivo - actual); el ruido de coma
+     flotante no es orden y lo enmascarado (D8) no se toca;
+  2. NO manda ninguna orden menor que la banda (S/9,302): D7 sobre la orden
+     final, no sobre la intencion;
+  3. si la caja no alcanza para las compras mas las comisiones, COMPRA MENOS
+     (en proporcion a cada compra). No vende un activo que no pensaba tocar
+     ni agranda una venta para pagar la comision de otro;
+  4. si al achicarse una compra cae bajo la banda, la cancela; lo que sobra
+     queda en caja (y rinde, D9);
+  5. una venta que no paga ni su propia comision no se manda. Con la banda
+     derivada no ocurre; solo en el modo de diagnostico band_notional=0.
+  Si aun asi faltara caja, el entorno FALLA (guarda temprana) en vez de
+  cuadrar en silencio. En 19,560 pasos de acciones aleatorias sobre el panel
+  real (delta y logits, escalas 0.05/0.2/1.0) no salto nunca.
+
+LO QUE OBSERVA EL AGENTE: los pesos de la cartera EJECUTADA. Antes se
+guardaba el objetivo, y si una orden se cancelaba el agente "veia" una
+cartera que no tenia. El objetivo sigue disponible en `info["weights_pedidos"]`.
+
+CUANTO CAMBIA (sobre la correccion de 8.1):
+                    laptop vieja   8.1 (fantasmas)   8.2 (ejecutor)   costo 8.2
+  1/N diario           +8.47%          +16.70%          +17.53%       S/226k
+  1/N semanal         +15.10%          +18.06%          +18.53%       S/172k
+  1/N mensual         +17.19%          +17.13%          +17.92%       S/113k
+  Ordenes bajo la banda: 0 en todas las politicas.
+  Validacion de R8 (laptop vieja -> ahora): 1/N diario p0 +11.84 -> +12.15,
+  p1 -8.71 -> -7.97, p2 -7.52 -> -7.04; 1/N mensual entre -0.03 y +0.29pp;
+  Markowitz +-0.17pp. Los tres algoritmos siguen deterministas.
+
+SUPUESTOS QUE SIGUEN DECLARADOS (no cambian con esto): las cifras del
+tarifario (IGV, por lado, si S/1.8 MM negocia bajo el 0.43% retail), el
+spread como snapshot y no serie (Bloomberg), y unidades fraccionarias del
+indice de retorno total en vez de acciones enteras (con ordenes >= S/9,302 y
+precios de S/1-10 el redondeo pesa < 0.1%).
 
 
 ========================================================================
