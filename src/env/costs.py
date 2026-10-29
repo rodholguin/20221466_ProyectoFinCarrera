@@ -38,8 +38,10 @@ web el 2026-09-03, NO por el tarifario oficial:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 # Comisión SAB retail publicada (Renta 4 Perú, mercado local web). PENDIENTE de
 # confirmar contra el tarifario primario antes de que entre a la tesis.
@@ -176,6 +178,61 @@ def snapshot_cost_model(tickers: list[str], **kwargs) -> CostModel:
     # El snapshot es ida y vuelta -> la mitad por lado.
     half = np.array([SPREAD_SNAPSHOT_BPS[t] / 2.0 for t in tickers], dtype=float)
     return CostModel(tickers=list(tickers), half_spread_bps=half, **kwargs)
+
+
+#: Volcado de Bloomberg (scripts/gen_liquidez_bloomberg.py).
+LIQUIDEZ_BLOOMBERG = Path("data/interim/liquidez_bloomberg.parquet")
+
+
+def serie_spread_bps(tickers: list[str], dates, ruta: Path | str = LIQUIDEZ_BLOOMBERG,
+                     desde_indice: int = 0) -> np.ndarray:
+    """(T, n) spread OBSERVADO de ida y vuelta, en pbs, alineado al calendario dado.
+
+    Es el spread cotizado PROMEDIO del día según Bloomberg
+    (AVERAGE_BID_ASK_SPREAD / PX_LAST). Se usa el valor de cada día tal cual,
+    sin recortar colas: es lo observado, y recortarlo sería un parámetro elegido
+    a mano. Un día sin dato (sin cotizaciones o relleno de Bloomberg) hereda el
+    último spread observado; antes del primer dato se usa el primero (solo
+    afecta al calentamiento, que el entorno nunca opera).
+
+    Es contemporáneo a la ejecución y no es look-ahead: es el costo que se paga
+    al operar ese día, no información para decidir (el agente no lo observa).
+
+    `desde_indice`: desde dónde se EXIGE cobertura (el primer día operable).
+    Se cae si un activo no tiene ningún dato o si en el tramo operable queda un
+    hueco que no se pueda arrastrar.
+    """
+    ruta = Path(ruta)
+    if not ruta.exists():
+        raise FileNotFoundError(f"no existe {ruta}; corre scripts/gen_liquidez_bloomberg.py")
+    df = pd.read_parquet(ruta, columns=["date", "ticker", "spread_bps"])
+    ancho = df.pivot(index="date", columns="ticker", values="spread_bps")
+    faltan = [t for t in tickers if t not in ancho.columns]
+    if faltan:
+        raise KeyError(f"sin spread de Bloomberg para {faltan}")
+    fechas = pd.to_datetime(np.asarray(dates))
+    # Se arrastra sobre el calendario de Bloomberg y LUEGO se lleva al del panel:
+    # un feriado de uno que no lo es del otro no deja hueco.
+    union = ancho.index.union(fechas)
+    serie = ancho.reindex(union)[list(tickers)].ffill().reindex(fechas)
+    if serie.iloc[desde_indice:].isna().any().any():
+        malos = serie.columns[serie.iloc[desde_indice:].isna().any()].tolist()
+        raise ValueError(f"el spread de {malos} tiene huecos en el tramo operable")
+    serie = serie.bfill()
+    if (serie <= 0).any().any():
+        raise ValueError("spread no positivo en la serie de Bloomberg")
+    return serie.to_numpy(dtype=float)
+
+
+def costos_observados(panel, **kwargs) -> CostModel:
+    """CostModel con el spread OBSERVADO día a día (Bloomberg). Caso base desde 2026-10-29.
+
+    Reemplaza al snapshot del 2026-07-27, que subestimaba ~10x el spread de
+    Alicorp, InRetail y Minsur (8/13/14 pbs contra medianas anuales de 62-390).
+    Ver docs/resultados_entorno_OE1.txt §8.3.
+    """
+    spread = serie_spread_bps(panel.tickers, panel.dates, desde_indice=panel.first_tradable_index)
+    return CostModel(tickers=list(panel.tickers), half_spread_bps=spread / 2.0, **kwargs)
 
 
 def zero_cost_model(tickers: list[str]) -> CostModel:

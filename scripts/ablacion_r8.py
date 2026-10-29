@@ -89,7 +89,7 @@ from src.env import (  # noqa: E402
     PortfolioEnv,
     load_panel,
     run_policy,
-    snapshot_cost_model,
+    costos_observados,
 )
 from src.env.features import VISTAS_ABLACION  # noqa: E402
 from src.env.panel import DEFAULT_PANEL  # noqa: E402
@@ -353,7 +353,7 @@ def main() -> None:
             "columnas_por_activo": len(panel.features.columns),
             "dim_observacion": dim,
         }
-        costos = snapshot_cost_model(panel.tickers)
+        costos = costos_observados(panel)
         print(f"\n{'=' * 84}\n{vista}  ({len(panel.features.columns)} cols/activo · obs {dim})\n{'=' * 84}")
         resultados["vistas"].setdefault(vista, {})
 

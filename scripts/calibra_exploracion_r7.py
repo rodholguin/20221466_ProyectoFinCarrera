@@ -49,7 +49,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from train_ppo_oe1 import construye_env  # noqa: E402
 
 from src.agents import construye_modelo, envuelve, exploracion  # noqa: E402
-from src.env import load_panel, snapshot_cost_model  # noqa: E402
+from src.env import load_panel, costos_observados  # noqa: E402
 from src.env.folds import walk_forward  # noqa: E402
 
 SALIDA = Path("data/interim/artefactos_oe1/exploracion_r7.json")
@@ -81,7 +81,7 @@ def main() -> None:
     args = ap.parse_args()
 
     panel = load_panel(view="solo_mercado", warmup=WARMUP)
-    costos = snapshot_cost_model(panel.tickers)
+    costos = costos_observados(panel)
     primer_util = max(panel.features.warmup + 1, panel.first_tradable_index)
     p = walk_forward(panel.n_steps, n_folds=args.folds, start=primer_util)[args.fold]
     tramo = p.rango("train")

@@ -51,7 +51,7 @@ def corre_una(args) -> dict:
     from stable_baselines3.common.env_util import make_vec_env
 
     from src.agents import construye_modelo, envuelve, exploracion
-    from src.env import load_panel, snapshot_cost_model
+    from src.env import load_panel, costos_observados
     from src.env.folds import walk_forward
     from train_ppo_oe1 import construye_env, evalua
 
@@ -64,7 +64,7 @@ def corre_una(args) -> dict:
     n_envs = 4 if args.algo == "ppo" else 1
 
     panel = load_panel(view=args.view, warmup=WARMUP)
-    costos = snapshot_cost_model(panel.tickers)
+    costos = costos_observados(panel)
     primer_util = max(panel.features.warmup + 1, panel.first_tradable_index)
     p = walk_forward(panel.n_steps, n_folds=3, start=primer_util)[args.fold]
 

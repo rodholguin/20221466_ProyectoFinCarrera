@@ -10,7 +10,7 @@ Mapa del paquete:
 
 Las decisiones y su porqué viven en `docs/decisiones_pendientes_OE1.txt`.
 """
-from .costs import CostModel, snapshot_cost_model, zero_cost_model
+from .costs import CostModel, costos_observados, snapshot_cost_model, zero_cost_model
 from .features import VIEWS, build_features
 from .panel import PanelData, load_panel
 from .policies import (
@@ -27,6 +27,7 @@ from .rewards import DifferentialDownside, DifferentialSharpe, NetLogReturn, mak
 
 __all__ = [
     "CostModel",
+    "costos_observados",
     "snapshot_cost_model",
     "zero_cost_model",
     "VIEWS",

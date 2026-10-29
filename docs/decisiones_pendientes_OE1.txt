@@ -490,6 +490,12 @@ DECISIONES (en orden de resolución sugerido)
          órdenes reales bajo el piso (365 en el 1/N diario). Y si la caja no
          alcanza para comprar y pagar comisiones, se COMPRA MENOS, como en una
          cuenta real. Ver resultados_entorno_OE1.txt §8.1-8.2.
+      >> SPREAD OBSERVADO EN VEZ DEL SNAPSHOT (2026-10-29). La estructura
+         no cambia; cambia el dato: el medio spread ahora es el spread
+         cotizado PROMEDIO del día de Bloomberg (AVERAGE_BID_ASK_SPREAD),
+         día por día y activo por activo, en vez del snapshot constante del
+         2026-07-27, que subestimaba ~10x a Alicorp, InRetail y Minsur.
+         Ver resultados_entorno_OE1.txt §8.3.
     DELIBERACIÓN ORIGINAL (se conserva):
     Modelo y valores realistas para la BVL (comisiones + impacto de mercado, alto
     en nombres ralos). Si se ponen a cero, el agente sobre-opera de forma irreal.
@@ -522,6 +528,12 @@ DECISIONES (en orden de resolución sugerido)
     cero mientras la tasa de referencia no lo hace, el entorno castiga
     estructuralmente al agente por defenderse y sesga la política a estar
     siempre invertido. La misma rf se usa como sustraendo en Sharpe/Sortino.
+    >> IMPLEMENTACIÓN CORREGIDA EL 2026-10-29 (la decisión no cambia). "/365"
+       es la tasa POR DÍA CALENDARIO, pero el entorno la cobraba una vez por
+       paso HÁBIL: de viernes a lunes, un día en vez de tres. La caja rendía
+       2.65% anual en vez de 3.88% (2013-2025), justo el castigo a defenderse
+       que esta decisión quería evitar. Ahora devenga por días calendario
+       (`PanelData.rf_paso`). Ver resultados_entorno_OE1.txt §8.3.
     MATIZ AL ESPECIALISTA: dijo "ponerla a largo plazo", que sugiere depósito a
     plazo. Un depósito a plazo no es líquido a diario y choca con un agente que
     puede rebalancear. Se remunera la caja a la tasa de referencia diaria

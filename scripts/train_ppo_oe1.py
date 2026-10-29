@@ -47,7 +47,7 @@ from src.env import (  # noqa: E402
     PortfolioEnv,
     load_panel,
     run_policy,
-    snapshot_cost_model,
+    costos_observados,
 )
 from src.env.folds import walk_forward  # noqa: E402
 from src.env.registro import conteo, registra  # noqa: E402
@@ -112,7 +112,7 @@ def main() -> None:
     from stable_baselines3.common.env_util import make_vec_env
 
     panel = load_panel(view=args.view, warmup=250)
-    costos = snapshot_cost_model(panel.tickers)
+    costos = costos_observados(panel)
     # El primer índice utilizable no es 0: hay que esperar el calentamiento de
     # D6 y que los 7 activos coticen (InRetail sale a bolsa en 2012-10).
     primer_util = max(panel.features.warmup + 1, panel.first_tradable_index)

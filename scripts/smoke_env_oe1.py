@@ -23,7 +23,7 @@ from src.env import (  # noqa: E402
     RandomDirichlet,
     load_panel,
     run_policy,
-    snapshot_cost_model,
+    costos_observados,
     zero_cost_model,
 )
 
@@ -32,7 +32,7 @@ import numpy as np  # noqa: E402
 
 def main() -> None:
     panel = load_panel(view="solo_mercado", warmup=250)
-    costos = snapshot_cost_model(panel.tickers)
+    costos = costos_observados(panel)
     sin_costo = zero_cost_model(panel.tickers)
 
     print(
