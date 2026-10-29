@@ -189,6 +189,76 @@ def test_banda_bloquea_ordenes_chicas():
     assert np.allclose(res["weights"][-1][env.cash_slot], 1.0), "no quedó todo en caja"
 
 
+def _costo_con_minimo(tickers):
+    return CostModel(tickers=tickers, half_spread_bps=10.0, commission_rate=0.0043, min_fee=40.0)
+
+
+def test_ruido_de_caja_no_genera_ordenes_fantasma():
+    """BUG hallado el 2026-10-29 al cambiar de laptop.
+
+    `v_pre` sale de un producto punto y la suma de los nocionales objetivo de
+    una suma elemento a elemento: con la caja en cero, `v_pre - sum(val_tgt)`
+    puede dar -1e-10 sin que falte un sol. El entorno lo leía como "no alcanza
+    la caja", reescalaba TODOS los activos y dejaba órdenes de ~3e-11 que
+    pagaban la comisión MÍNIMA cada una (S/330 por día con 7 activos). Si ese
+    -1e-10 aparece o no depende de la CPU: la misma corrida daba otro número en
+    otra máquina.
+    """
+    p = panel_sintetico(n_activos=7)
+    env = PortfolioEnv(p, _costo_con_minimo(p.tickers), EnvConfig(action_mode="weights"))
+    e = env.t
+    precios = p.prices[e]
+    # Se busca una cartera 100% invertida en la que el redondeo deje la caja
+    # "negativa": es el caso real, no uno fabricado.
+    rng = np.random.default_rng(0)
+    for _ in range(10_000):
+        env.units = rng.uniform(1_000, 5_000, size=7)
+        env.cash = 0.0
+        v_pre = env._value(e)
+        w = env._weights(e)
+        if v_pre - float((env.units * precios).sum()) < 0:
+            break
+    else:  # pragma: no cover - depende de la aritmética, pero aparece en <100 intentos
+        raise AssertionError("no se encontró un caso de caja negativa por redondeo")
+
+    unidades = env.units.copy()
+    costo, rotacion = env._execute(w, e, v_pre)
+    assert costo == 0.0, f"se cobraron S/{costo:.2f} por mantener la misma cartera"
+    assert rotacion == 0.0
+    assert np.array_equal(env.units, unidades), "se movieron unidades sin orden real"
+
+
+def test_banda_no_la_burla_el_reescalado():
+    """BUG hallado el 2026-10-29: la banda congela un activo y el reescalado lo mueve.
+
+    Si la suma de pesos pasa de 1 tras la banda, el entorno reescalaba TODOS
+    los activos libres, también los que la banda acababa de congelar: quedaban
+    órdenes de pocos soles que pagaban la comisión mínima, exactamente lo que
+    la banda existe para impedir. El recorte tiene que salir de los que SÍ
+    operan.
+    """
+    p = panel_sintetico(n_activos=3)
+    env = PortfolioEnv(p, _costo_con_minimo(p.tickers),
+                       EnvConfig(action_mode="weights", rebalance_every=1))
+    e = env.t
+    v = env.cfg.initial_capital
+    # Banda = S/9,302 (0.52% de S/1.8 MM). A0 y A1 quedan a 0.27% de 1/3: la
+    # banda los congela. A2 está a 1.53%: opera.
+    w_ini = np.array([0.336, 0.336, 0.318])
+    env.units = w_ini * v / p.prices[e]
+    env.cash = v * 0.01
+
+    unidades = env.units.copy()
+    env.step(np.array([1.0, 1.0, 1.0, 0.0]))  # 1/N, sin caja
+    assert np.array_equal(env.units[:2], unidades[:2]), "el reescalado movió activos congelados por la banda"
+    assert env.units[2] > unidades[2], "A2 debió comprar"
+    assert env.cash >= 0.0
+    # Una sola orden: la de A2.
+    esperado = float(_costo_con_minimo(p.tickers).cost_of_trades(
+        np.array([0.0, 0.0, (env.units[2] - unidades[2]) * p.prices[e][2]]), e).sum())
+    assert abs(env.history["cost"][-1] - esperado) < 1e-6
+
+
 def test_banda_se_deriva_del_minimo_por_orden():
     # S/40 de mínimo con 0.43% de comisión => S/9,302. Es el piso ECONÓMICO por
     # debajo del cual rebalancear un activo es irracional (D7).

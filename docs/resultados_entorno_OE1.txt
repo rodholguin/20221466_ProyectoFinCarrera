@@ -1889,6 +1889,59 @@ deflactado— no se mueve: volver a correr una configuracion YA probada para
 dibujarla no es una prueba nueva de estrategia. El contador de `corridas`
 si sube, que es lo honesto.
 
+------------------------------------------------------------------------
+8.1 CORRECCION DEL SIMULADOR (2026-10-29): ORDENES FANTASMA Y BANDA BURLADA
+------------------------------------------------------------------------
+COMO SE ENCONTRO. Al pasar a la laptop nueva NADA reprodujo: ni DDPG ni PPO
+(semilla 1 de solo_mercado p0: -0.91% en la vieja, +2.11% en la nueva) y,
+lo decisivo, ni siquiera el 1/N diario (val p0: +11.84% vs +11.67%). Con
+costo CERO el 1/N daba identico: el panel estaba bien. Se descartaron
+pandas 2/3, pyarrow 22/26 y numpy 2.3-2.5. Dentro de cada maquina los tres
+algoritmos SON deterministas (scripts/verifica_determinismo.py: pesos
+identicos bit a bit, tambien con 3 procesos a la vez).
+
+LOS DOS DEFECTOS, en src/env/portfolio_env.py:
+  (a) ORDENES FANTASMA. `v_pre` sale de un producto punto y la suma de los
+      nocionales objetivo de otra suma; con la caja en cero el redondeo deja
+      un residuo de ~-1e-10 cuyo SIGNO DEPENDE DE LA CPU. `_execute` lo leia
+      como "no alcanza la caja", reescalaba todos los activos y quedaban
+      ordenes de ~3e-11 soles que pagaban la COMISION MINIMA cada una: S/330
+      por dia con 7 activos, ~90 dias en el 1/N diario del horizonte. Esa es
+      la causa de que cada maquina diera otro numero (y de que el agente
+      aprendiera con otra recompensa).
+  (b) LA BANDA BURLADA. La banda D7 congela los activos con orden menor que
+      el piso economico (S/9,302), pero si despues la suma de pesos pasaba
+      de 1, el reescalado movia TODOS los libres, tambien los congelados:
+      ordenes de pocos soles con su comision minima. Lo mismo al cubrir el
+      costo con la caja en cero: se abria una orden de ~costo/7 en cada
+      activo quieto.
+CORRECCION: un faltante de caja menor que 1e-6 soles no es faltante; el
+recorte (por exceso de pesos o por el costo) sale de los activos que YA
+operan, y solo si no alcanzan se toca al resto; sin orden, las unidades no
+se recalculan. Tests nuevos en tests/test_portfolio_env.py que fallaban con
+el codigo viejo y reproducen el caso real.
+
+CUANTO CAMBIA (1/N diario, horizonte completo): +8.47% -> +16.70%, costo
+S/355k -> S/250k; ordenes menores a S/1: ~630 -> 0. 1/N mensual +17.19% ->
++17.13%; comprar y mantener identico. En los tramos de validacion de R8 los
+baselines se mueven de 0.0 a +0.5pp (1/N diario p0 +11.84 -> +12.08,
+p1 -8.71 -> -8.22, p2 -7.52 -> -7.11; Markowitz +-0.05pp).
+
+CONSECUENCIA: TODO numero de OE1 anterior al 2026-10-29 (baselines, R7, R8,
+D25, tamiz, brazos de recompensa) se produjo con el simulador viejo. Las
+CONCLUSIONES se revalidan re-corriendo; las cifras viejas se conservan en
+sus secciones como historicas. `VERSION_SIMULADOR` (portfolio_env.py) viaja
+en los artefactos y DENTRO DEL `resultado` de cada corrida del registro
+(campo `simulador`), igual que el campo `panel` de la cuarentena: el hash no
+cambia —la estrategia es la misma— y el contador de configuraciones
+distintas no se mueve. ablacion_r8.py se niega a retomar un artefacto de
+otra version: los .parcial.json de DDPG del 11-oct quedan inservibles.
+
+LO QUE QUEDA, Y ES DECISION DE MODELADO, NO DEFECTO: al recortar a los que
+operan, una orden puede quedar por debajo de la banda (365 en el 1/N diario
+del horizonte, ninguna menor a S/1). Volver a aplicar la banda tras el
+recorte es iterativo y cambia el contrato de D7; queda anotado.
+
 
 ========================================================================
 9. QUE FALTA, Y QUE BLOQUEA QUE

@@ -71,6 +71,19 @@ _BASE = gym.Env if _GYM else object
 #: cartera 100% en caja (un 0/0 disfrazado).
 _RUIDO_RETORNO = 1e-12
 
+#: Piso de ruido de la CAJA, en soles. Una caja de -1e-10 tras ejecutar es
+#: redondeo de sumar nocionales de ~1e6, no un faltante (ver `_execute`). Es el
+#: mismo umbral con el que el entorno ya declaraba una caja negativa como error.
+_RUIDO_CAJA = 1e-6
+
+#: Versión de la MECÁNICA del simulador (contabilidad, costos, banda). Se sube
+#: cuando un cambio altera los resultados con la MISMA configuración, que es
+#: justo lo que el hash de D10 no ve. Viaja en los artefactos y en cada
+#: resultado del registro; retomar una corrida de otra versión se rechaza.
+#: 2026-10-29: sin órdenes fantasma por ruido de caja; la banda y el faltante
+#: de caja ya no abren órdenes en activos que no operan.
+VERSION_SIMULADOR = "2026-10-29"
+
 
 @dataclass
 class EnvConfig:
@@ -311,11 +324,18 @@ class PortfolioEnv(_BASE):
                 if abs(target[i] - w_cur[i]) * v_pre < self.band:
                     target[i] = w_cur[i]
 
-        # la caja absorbe el residuo; si no alcanza, se escalan los activos libres
+        # la caja absorbe el residuo; si no alcanza, se recortan los activos que
+        # OPERAN. Hasta el 2026-10-29 se escalaban todos los libres, también los
+        # que la banda acababa de congelar: quedaban órdenes de pocos soles que
+        # pagaban la comisión mínima, justo lo que la banda existe para impedir.
+        # Solo si los que operan no alcanzan a cubrir el exceso se toca al resto.
         suma_activos = float(target[: self.n_assets].sum())
         if suma_activos > 1.0:
-            libres = ~masked
             exceso = suma_activos - 1.0
+            libres = ~masked
+            operan = libres & (target[: self.n_assets] != w_cur[: self.n_assets])
+            if float(target[: self.n_assets][operan].sum()) > exceso:
+                libres = operan
             val_libres = float(target[: self.n_assets][libres].sum())
             if val_libres > 0:
                 escala = max(0.0, (val_libres - exceso) / val_libres)
@@ -334,36 +354,56 @@ class PortfolioEnv(_BASE):
         # Ruido de coma flotante NO es una orden. Sin este ajuste, una diferencia
         # de 1e-16 dispararía la comisión MÍNIMA (S/40) por activo y por día.
         tol = 1e-8 * v_pre
-        val_tgt = np.where(np.abs(val_tgt - val_cur) < tol, val_cur, val_tgt)
+
+        def sin_ruido(v: np.ndarray) -> np.ndarray:
+            return np.where(np.abs(v - val_cur) < tol, val_cur, v)
+
+        val_tgt = sin_ruido(val_tgt)
 
         cost = 0.0
-        # Dos pasadas: el costo sale de la caja y, si no alcanza, se reducen los
-        # activos LIBRES (nunca los enmascarados, que por D8 no se pueden tocar).
+        # Dos pasadas: el costo sale de la caja y, si no alcanza, se compra
+        # MENOS. Hasta el 2026-10-29 había dos agujeros acá:
+        #  * Una caja de -1e-10 se leía como faltante. `v_pre` sale de un
+        #    producto punto y la suma de nocionales de otra suma: con la caja en
+        #    cero, el redondeo deja ese residuo y su SIGNO depende de la CPU. Se
+        #    reescalaba todo y quedaban órdenes de 3e-11 que pagaban el mínimo
+        #    (S/330 por día con 7 activos): la misma corrida daba otro número en
+        #    otra máquina. Ahora un faltante menor que el ruido no es faltante.
+        #  * El faltante se cubría escalando TODOS los libres, también los que no
+        #    operaban: cada uno abría una orden de ~costo/7 y pagaba su mínimo.
+        #    Ahora sale de los que YA operan (se compra menos o se vende un poco
+        #    más); solo si ellos no alcanzan se toca al resto.
         for _ in range(2):
             notionals = np.abs(val_tgt - val_cur)
             notionals[masked] = 0.0
             cost = float(self.costs.cost_of_trades(notionals, e, self.panel.stale[e]).sum())
             cash_after = v_pre - float(val_tgt.sum()) - cost
-            if cash_after >= 0.0:
+            if cash_after >= -_RUIDO_CAJA:
                 break
             libres = ~masked
+            operan = libres & (val_tgt != val_cur)
+            if float(val_tgt[operan].sum()) > -cash_after:
+                libres = operan
             val_libres = float(val_tgt[libres].sum())
             if val_libres <= 0:
                 break
             escala = max(0.0, (val_libres + cash_after) / val_libres)
             val_tgt[libres] *= escala
+            val_tgt = sin_ruido(val_tgt)
 
         notionals = np.abs(val_tgt - val_cur)
         notionals[masked] = 0.0
         turnover = float(notionals.sum() / v_pre) if v_pre > 0 else 0.0
 
-        nuevas = val_tgt / prices
+        # Sin orden, las unidades no se recalculan: val/precio no devuelve las
+        # mismas unidades bit a bit y la cartera "se movería" sin operar.
+        nuevas = np.where(val_tgt == val_cur, self.units, val_tgt / prices)
         # D8 al pie de la letra: lo enmascarado no se toca, ni siquiera por
         # redondeo. Se copia la unidad anterior en vez de recalcularla.
         nuevas[masked] = self.units[masked]
         self.units = nuevas
         self.cash = v_pre - float(val_tgt.sum()) - cost
-        if self.cash < -1e-6:
+        if self.cash < -_RUIDO_CAJA:
             raise RuntimeError(f"caja negativa tras ejecutar ({self.cash:.6f}); revisa el costo")
         self.cash = max(self.cash, 0.0)
         return cost, turnover
