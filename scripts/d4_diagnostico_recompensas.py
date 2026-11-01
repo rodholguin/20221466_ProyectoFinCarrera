@@ -57,7 +57,7 @@ from src.env import (  # noqa: E402
     PortfolioEnv,
     load_panel,
     run_policy,
-    snapshot_cost_model,
+    costos_observados,
 )
 from src.env.folds import walk_forward  # noqa: E402
 from src.env.rewards import make_reward  # noqa: E402
@@ -330,7 +330,7 @@ def main() -> None:
     args = ap.parse_args()
 
     panel = load_panel(view="solo_mercado", warmup=WARMUP)
-    costos = snapshot_cost_model(panel.tickers)
+    costos = costos_observados(panel)
     primer_util = max(panel.features.warmup + 1, panel.first_tradable_index)
     pliegues = walk_forward(panel.n_steps, n_folds=args.folds, start=primer_util)
     p = pliegues[args.fold]

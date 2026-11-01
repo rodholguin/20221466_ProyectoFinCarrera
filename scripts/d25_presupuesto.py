@@ -43,7 +43,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from src.env import load_panel, snapshot_cost_model  # noqa: E402
+from src.env import load_panel, costos_observados  # noqa: E402
 from src.env.folds import walk_forward  # noqa: E402
 from src.env.registro import conteo, registra  # noqa: E402
 from train_ppo_oe1 import construye_env, evalua  # noqa: E402
@@ -147,7 +147,7 @@ def main() -> None:
     print("La MESETA decide el presupuesto. La validación se mide pero NO decide.\n")
 
     panel = load_panel(view=args.view, warmup=WARMUP)
-    costos = snapshot_cost_model(panel.tickers)
+    costos = costos_observados(panel)
     primer_util = max(panel.features.warmup + 1, panel.first_tradable_index)
     pliegues = walk_forward(panel.n_steps, n_folds=args.folds, start=primer_util)
     p = pliegues[args.fold]

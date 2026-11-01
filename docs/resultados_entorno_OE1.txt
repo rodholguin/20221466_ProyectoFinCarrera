@@ -1644,6 +1644,43 @@ negativa y grande. Correrlas ahora seria gastar 18 corridas del contador para
 detallar por que se estorban tres canales que, sueltos, tampoco mueven la vara
 de D9. Quedan como trabajo futuro explicito.
 
+>> RE-MEDIDO EL 2026-10-09 CON LOS FUNDAMENTALES CORREGIDOS (R4 a estados
+   CONSOLIDADOS y utilidad atribuible; ver riesgos_transversales_datos.txt,
+   R4). Se re-corrieron las 4 vistas y `completa`, mismo protocolo, mismas
+   semillas. REPRODUCIBILIDAD: solo_mercado, mercado_macro y
+   mercado_sentimiento dieron EXACTAMENTE los mismos números, semilla por
+   semilla (no usan fundamentales). Las cifras de arriba se conservan como
+   las de la corrida del 18/19-sep; las VIGENTES son estas:
+
+  brazo                      ret     sharpe   sortino   maxDD     rot    costo S/
+  mercado_macro            +1.4pp    +0.384   +0.415   -1.0pp   -0.39    -9,125
+  mercado_sentimiento      +1.8pp    +0.452   +0.653   -2.0pp   +0.73   +10,661
+  mercado_fundamentales    -0.6pp    +0.333   +0.395   -3.7pp   -0.10       -70
+  completa                 +1.3pp    +0.081   +0.341   -3.7pp   +0.24    +3,787
+
+                             ret     sharpe   sortino   maxDD     rot
+  suma de los 3 canales    +2.6pp    +1.169   +1.463   -6.6pp   +0.24
+  completa (medida)        +1.3pp    +0.081   +0.341   -3.7pp   +0.24
+  INTERACCION              -1.3pp    -1.088   -1.122   +3.0pp   +0.00
+
+  QUÉ SE SOSTIENE: los canales SE ESTORBAN. En Sharpe la interacción es
+  incluso más negativa (-1.09 contra -0.86): `completa` se queda con el 7% de
+  la suma de los aportes sueltos. QUÉ CAMBIA: (1) en retorno la interacción
+  baja de -3.9pp a -1.3pp: el -3.9pp NO SE CITA MÁS. (2) El brazo de
+  fundamentales pasa a restar retorno (-0.6pp, 4/9 positivos) aunque mejora
+  Sharpe, y EMPEORA EL DRAWDOWN EN 9 DE 9 celdas. (3) Se CAE el patrón
+  "monótono con la dimensión": fundamentales (241 dims) rinde ahora peor que
+  completa (381 dims), así que esa hipótesis pierde su apoyo descriptivo para
+  la corrida de 10 semillas. (4) D9: ni fundamentales ni completa le ganan a
+  la caja en NINGÚN pliegue (completa: +0.4% / -5.9% / -2.0% contra caja
+  +1.9% / +0.3% / +5.4%; antes completa ganaba en el pliegue 0).
+  Sigue valiendo la primera lectura: con 3 semillas NADA de esto es hallazgo.
+  Artefactos: ablacion_r8.json y ablacion_r8_completa.json (los del 18/19-sep
+  quedaron reemplazados; sus cifras están arriba).
+  REGISTRO D10: las re-corridas tienen la misma estrategia y NO suman al
+  contador (31 configuraciones distintas). Ver la nota de src/env/registro.py
+  sobre `reward_kwargs: {}`.
+
 
 ------------------------------------------------------------------------
 7.14 BRAZOS DE RECOMPENSA — PREDICCIONES ESCRITAS ANTES DE CORRER
@@ -1851,6 +1888,183 @@ de `configuraciones_distintas` —que es el que alimenta el Sharpe
 deflactado— no se mueve: volver a correr una configuracion YA probada para
 dibujarla no es una prueba nueva de estrategia. El contador de `corridas`
 si sube, que es lo honesto.
+
+------------------------------------------------------------------------
+8.1 CORRECCION DEL SIMULADOR (2026-10-29): ORDENES FANTASMA Y BANDA BURLADA
+------------------------------------------------------------------------
+COMO SE ENCONTRO. Al pasar a la laptop nueva NADA reprodujo: ni DDPG ni PPO
+(semilla 1 de solo_mercado p0: -0.91% en la vieja, +2.11% en la nueva) y,
+lo decisivo, ni siquiera el 1/N diario (val p0: +11.84% vs +11.67%). Con
+costo CERO el 1/N daba identico: el panel estaba bien. Se descartaron
+pandas 2/3, pyarrow 22/26 y numpy 2.3-2.5. Dentro de cada maquina los tres
+algoritmos SON deterministas (scripts/verifica_determinismo.py: pesos
+identicos bit a bit, tambien con 3 procesos a la vez).
+
+LOS DOS DEFECTOS, en src/env/portfolio_env.py:
+  (a) ORDENES FANTASMA. `v_pre` sale de un producto punto y la suma de los
+      nocionales objetivo de otra suma; con la caja en cero el redondeo deja
+      un residuo de ~-1e-10 cuyo SIGNO DEPENDE DE LA CPU. `_execute` lo leia
+      como "no alcanza la caja", reescalaba todos los activos y quedaban
+      ordenes de ~3e-11 soles que pagaban la COMISION MINIMA cada una: S/330
+      por dia con 7 activos, ~90 dias en el 1/N diario del horizonte. Esa es
+      la causa de que cada maquina diera otro numero (y de que el agente
+      aprendiera con otra recompensa).
+  (b) LA BANDA BURLADA. La banda D7 congela los activos con orden menor que
+      el piso economico (S/9,302), pero si despues la suma de pesos pasaba
+      de 1, el reescalado movia TODOS los libres, tambien los congelados:
+      ordenes de pocos soles con su comision minima. Lo mismo al cubrir el
+      costo con la caja en cero: se abria una orden de ~costo/7 en cada
+      activo quieto.
+CORRECCION: un faltante de caja menor que 1e-6 soles no es faltante; el
+recorte (por exceso de pesos o por el costo) sale de los activos que YA
+operan, y solo si no alcanzan se toca al resto; sin orden, las unidades no
+se recalculan. Tests nuevos en tests/test_portfolio_env.py que fallaban con
+el codigo viejo y reproducen el caso real.
+
+CUANTO CAMBIA (1/N diario, horizonte completo): +8.47% -> +16.70%, costo
+S/355k -> S/250k; ordenes menores a S/1: ~630 -> 0. 1/N mensual +17.19% ->
++17.13%; comprar y mantener identico. En los tramos de validacion de R8 los
+baselines se mueven de 0.0 a +0.5pp (1/N diario p0 +11.84 -> +12.08,
+p1 -8.71 -> -8.22, p2 -7.52 -> -7.11; Markowitz +-0.05pp).
+
+CONSECUENCIA: TODO numero de OE1 anterior al 2026-10-29 (baselines, R7, R8,
+D25, tamiz, brazos de recompensa) se produjo con el simulador viejo. Las
+CONCLUSIONES se revalidan re-corriendo; las cifras viejas se conservan en
+sus secciones como historicas. `VERSION_SIMULADOR` (portfolio_env.py) viaja
+en los artefactos y DENTRO DEL `resultado` de cada corrida del registro
+(campo `simulador`), igual que el campo `panel` de la cuarentena: el hash no
+cambia —la estrategia es la misma— y el contador de configuraciones
+distintas no se mueve. ablacion_r8.py se niega a retomar un artefacto de
+otra version: los .parcial.json de DDPG del 11-oct quedan inservibles.
+
+LO QUE QUEDA, Y ES DECISION DE MODELADO, NO DEFECTO: al recortar a los que
+operan, una orden puede quedar por debajo de la banda (365 en el 1/N diario
+del horizonte, ninguna menor a S/1). Volver a aplicar la banda tras el
+recorte es iterativo y cambia el contrato de D7; queda anotado.
+>> RESUELTO EL MISMO DIA (VERSION_SIMULADOR 2026-10-29.2), ver 8.2.
+
+------------------------------------------------------------------------
+8.2 EJECUTOR REALISTA (2026-10-29.2): LA BANDA VA SOBRE LA ORDEN QUE SE MANDA
+------------------------------------------------------------------------
+POR QUE. El texto de D7 que va a la tesis dice "las ordenes por debajo de
+ese nocional no se ejecutan". El simulador aplicaba la banda al PESO
+OBJETIVO y despues recortaba (por exceso de pesos o para pagar el costo),
+asi que ordenes reales quedaban bajo el piso: 365 en el 1/N diario, 27 en el
+mensual. La regla se tiene que poder defender frente a como opera una cuenta
+real, y una cuenta real no funciona asi.
+
+COMO EJECUTA AHORA (`PortfolioEnv._execute`), en el orden en que lo haria un
+inversionista:
+  1. calcula la orden de cada activo (objetivo - actual); el ruido de coma
+     flotante no es orden y lo enmascarado (D8) no se toca;
+  2. NO manda ninguna orden menor que la banda (S/9,302): D7 sobre la orden
+     final, no sobre la intencion;
+  3. si la caja no alcanza para las compras mas las comisiones, COMPRA MENOS
+     (en proporcion a cada compra). No vende un activo que no pensaba tocar
+     ni agranda una venta para pagar la comision de otro;
+  4. si al achicarse una compra cae bajo la banda, la cancela; lo que sobra
+     queda en caja (y rinde, D9);
+  5. una venta que no paga ni su propia comision no se manda. Con la banda
+     derivada no ocurre; solo en el modo de diagnostico band_notional=0.
+  Si aun asi faltara caja, el entorno FALLA (guarda temprana) en vez de
+  cuadrar en silencio. En 19,560 pasos de acciones aleatorias sobre el panel
+  real (delta y logits, escalas 0.05/0.2/1.0) no salto nunca.
+
+LO QUE OBSERVA EL AGENTE: los pesos de la cartera EJECUTADA. Antes se
+guardaba el objetivo, y si una orden se cancelaba el agente "veia" una
+cartera que no tenia. El objetivo sigue disponible en `info["weights_pedidos"]`.
+
+CUANTO CAMBIA (sobre la correccion de 8.1):
+                    laptop vieja   8.1 (fantasmas)   8.2 (ejecutor)   costo 8.2
+  1/N diario           +8.47%          +16.70%          +17.53%       S/226k
+  1/N semanal         +15.10%          +18.06%          +18.53%       S/172k
+  1/N mensual         +17.19%          +17.13%          +17.92%       S/113k
+  Ordenes bajo la banda: 0 en todas las politicas.
+  Validacion de R8 (laptop vieja -> ahora): 1/N diario p0 +11.84 -> +12.15,
+  p1 -8.71 -> -7.97, p2 -7.52 -> -7.04; 1/N mensual entre -0.03 y +0.29pp;
+  Markowitz +-0.17pp. Los tres algoritmos siguen deterministas.
+
+SUPUESTOS QUE SIGUEN DECLARADOS (no cambian con esto): las cifras del
+tarifario (IGV, por lado, si S/1.8 MM negocia bajo el 0.43% retail), el
+spread como snapshot y no serie (Bloomberg), y unidades fraccionarias del
+indice de retorno total en vez de acciones enteras (con ordenes >= S/9,302 y
+precios de S/1-10 el redondeo pesa < 0.1%).
+>> El spread como snapshot queda RESUELTO en 8.3.
+
+------------------------------------------------------------------------
+8.3 LA CAJA DEVENGA POR DIA CALENDARIO Y EL SPREAD ES EL OBSERVADO
+    (VERSION_SIMULADOR 2026-10-29.3)
+------------------------------------------------------------------------
+(a) LA CAJA (D9). D9 dice "la tasa del BCRP dividida entre 365": es una
+    tasa POR DIA CALENDARIO. El entorno la cobraba UNA vez por paso, y los
+    pasos son dias HABILES: de viernes a lunes cobraba un dia en vez de tres,
+    y la caja rendia 252/365 de la tasa. Medido 2013-2025: +40.5% (2.65%
+    anual) contra +64.1% (3.88% anual) devengando por dia calendario, con una
+    tasa BCRP media de 3.81%. Castigaba justo lo que D9 queria no castigar
+    —defenderse en caja— e inflaba el exceso sobre la tasa libre de riesgo de
+    toda cartera de acciones (Sharpe, Sortino, Markowitz). CORRECCION:
+    `PanelData.rf_paso` = tasa diaria x dias calendario hasta el siguiente
+    cierre; lo usan la caja, el Sharpe/Sortino y la tangencia de Markowitz.
+    Test: con un calendario de lunes a viernes, la caja rinde la tasa anual.
+
+(b) EL SPREAD. El caso base era un SNAPSHOT de las puntas del 2026-07-27,
+    constante en el tiempo. Se reemplaza por el spread COTIZADO PROMEDIO DEL
+    DIA de Bloomberg (AVERAGE_BID_ASK_SPREAD / PX_LAST), dia por dia y activo
+    por activo: `costos_observados(panel)` en src/env/costs.py, volcado en
+    data/interim/liquidez_bloomberg.parquet por scripts/gen_liquidez_bloomberg.py.
+    COMO SE VALIDO EL VOLCADO (grid P0 del 2026-09-05, hoja BASE):
+      - alineacion: la hoja uso una sola columna de fechas (Dts=H), el error
+        que ya corrio dos bloques en otra hoja. Aqui NO: la correlacion de
+        retornos PX_LAST vs cierre BVL tiene su pico en desfase 0 en los 7
+        (0.85-0.99). El generador lo re-verifica y se cae si cambia.
+      - relleno: el grid uso Fill=P; 5-11% de los dias repiten volumen y
+        monto del dia anterior. Se descartan (no se inventa liquidez).
+      - unidades: AVERAGE_BID_ASK_SPREAD viene en precio, no en %.
+      - las puntas de CIERRE (PX_BID/PX_ASK) NO sirven: son el libro residual
+        tras la subasta (hasta 3,999 pbs en 2015-2017).
+    CRITERIO: el valor de cada dia TAL CUAL, sin recortar colas (recortarlas
+    seria un parametro elegido a mano); un dia sin dato hereda el ultimo
+    spread observado. Cubre desde 2012-04 (InRetail 2012-10): todo el tramo
+    operable, que arranca el 2013-01-02.
+    LO QUE CORRIGE: el snapshot subestimaba ~10x a los nombres "baratos".
+      ida y vuelta, pbs        snapshot   mediana anual Bloomberg 2013-2025
+      ALICORC1                      8          82-166
+      INRETC1                      13          62-240
+      MINSURI1                     14          66-390
+      CPACASC1                     63          88-289
+      FERREYC1                     70          56-189
+      CREDITC1                    165          96-269
+      LUSURC1                     220         114-324 (466 en 2026, post-OPA)
+    Cruce con LQA (26-sep): LUSURC1 S/20k 2026 da 118.6 pbs por lado; el
+    medio spread observado de ese año es ~230. El promedio cotizado del dia
+    es CONSERVADOR frente al modelo de Bloomberg: se declara.
+
+CUANTO CAMBIA (horizonte completo 2013-2025, ambas correcciones):
+                         snapshot              spread observado
+                       ret     costo          ret      costo
+  solo caja          +64.1%        0        +64.1%         0
+  comprar y mantener  +0.7%   16,230         -0.4%    36,129
+  1/N diario         +17.4%  224,378         +6.5%   374,242
+  1/N mensual        +18.0%  112,671        +12.4%   185,899
+  1/N trimestral     +20.4%   82,415        +16.3%   142,465
+  Markowitz          +20.7% 1,060,715       -16.7% 1,416,208
+  LECTURA: con la caja bien remunerada y el costo observado, NINGUNA cartera
+  de acciones le gana a la caja en 2013-2025 y todas tienen Sharpe negativo.
+  El costo pasa a ser decisivo en el ranking: Markowitz, que rota mucho,
+  pasa de ganarle al 1/N a perder un sexto del capital.
+  Validacion (retorno total, spread observado):
+          caja   c.y m.   1/N d   1/N m   1/N t   Markowitz
+    p0   +2.7%  +15.2%  +10.7%  +11.2%  +12.5%   +45.3%
+    p1   +0.4%   -4.3%   -9.8%   -7.9%   -7.6%    +9.5%
+    p2   +7.9%   -8.5%   -7.9%   -8.2%   -8.2%   -21.8%
+
+QUE QUEDA ABIERTO: el tope de LIQUIDEZ. El simulador ejecuta cualquier orden
+en el dia, sin limite de participacion ni impacto: con el monto diario de
+Bloomberg, 26-42% de las ordenes del 1/N superan el 10% de lo negociado ese
+dia y la compra inicial de CREDITC1 es 31 veces el dia. La capacidad de §6.4
+de ejecutabilidad_y_costos_OE1.txt supone 10% de participacion; el simulador
+todavia no lo impone. El monto diario ya esta en el mismo volcado
+(`monto_pen`).
 
 
 ========================================================================

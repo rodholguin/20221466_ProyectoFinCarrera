@@ -71,6 +71,29 @@ _BASE = gym.Env if _GYM else object
 #: cartera 100% en caja (un 0/0 disfrazado).
 _RUIDO_RETORNO = 1e-12
 
+#: Piso de ruido de la CAJA, en soles. Una caja de -1e-10 tras ejecutar es
+#: redondeo de sumar nocionales de ~1e6, no un faltante (ver `_execute`). Es el
+#: mismo umbral con el que el entorno ya declaraba una caja negativa como error.
+_RUIDO_CAJA = 1e-6
+
+#: Versión de la MECÁNICA del simulador (contabilidad, costos, banda). Se sube
+#: cuando un cambio altera los resultados con la MISMA configuración, que es
+#: justo lo que el hash de D10 no ve. Viaja en los artefactos y en cada
+#: resultado del registro; retomar una corrida de otra versión se rechaza.
+#: 2026-10-29: sin órdenes fantasma por ruido de caja; la banda y el faltante
+#: de caja ya no abren órdenes en activos que no operan.
+#: 2026-10-29.2: ejecutor realista — la banda D7 va sobre la orden FINAL, el
+#: faltante de caja se cubre comprando menos, y el agente observa la cartera
+#: ejecutada en vez de la pedida.
+#: 2026-10-29.3: la caja devenga por DÍA CALENDARIO (D9) y el caso base de
+#: costos pasa a `costos_observados` (spread diario de Bloomberg) en lugar del
+#: snapshot del 2026-07-27.
+VERSION_SIMULADOR = "2026-10-29.3"
+
+#: Tope de vueltas del ejecutor. Converge en 1-3; es una guarda contra un
+#: modelo de costos mal armado, no un parámetro.
+_MAX_VUELTAS_EJECUCION = 50
+
 
 @dataclass
 class EnvConfig:
@@ -198,9 +221,16 @@ class PortfolioEnv(_BASE):
 
         target = self._resolve_target(action, e, v_pre)
         cost, turnover = self._execute(target, e, v_pre)
+        # Lo que el agente observa y lo que queda en el historial es la cartera
+        # EJECUTADA, no la pedida: si la banda canceló una orden o se compró
+        # menos por falta de caja, difieren (hasta el 2026-10-29 se guardaba
+        # `target`, y el agente "veía" una cartera que no tenía).
+        ejecutados = self._weights(e)
 
         # --- avance de e a e+1: la caja rinde exactamente un día (D9) ---
-        self.cash *= 1.0 + self.panel.rf_daily[e]
+        # D9: la caja devenga por DÍA CALENDARIO (viernes -> lunes son tres);
+        # es `panel.rf_paso[e]`, escrito así para no rearmar el arreglo cada paso.
+        self.cash *= 1.0 + self.panel.rf_daily[e] * self.panel.dias_al_siguiente[e]
         self.t = e + 1
         v_next = self._value(self.t)
 
@@ -211,13 +241,13 @@ class PortfolioEnv(_BASE):
         reward = self.reward_fn.step(net_return, turnover)
 
         self.step_count += 1
-        self.w_post = target
+        self.w_post = ejecutados
         self.history["date"].append(self.panel.dates[self.t])
         self.history["equity"].append(v_next)
         self.history["net_return"].append(net_return)
         self.history["cost"].append(cost)
         self.history["turnover"].append(turnover)
-        self.history["weights"].append(target.copy())
+        self.history["weights"].append(ejecutados.copy())
 
         terminated = False
         truncated = self.t >= self.t_last + 1
@@ -227,7 +257,8 @@ class PortfolioEnv(_BASE):
             "net_return": net_return,
             "cost": cost,
             "turnover": turnover,
-            "weights": target.copy(),
+            "weights": ejecutados.copy(),
+            "weights_pedidos": target.copy(),
             "date": self.panel.dates[self.t],
         }
         if _GYM:
@@ -303,67 +334,95 @@ class PortfolioEnv(_BASE):
                 target[libres] += exceso * target[libres] / s2
                 target[self.cash_slot] = self.cfg.max_cash_weight
 
-        # --- D7: banda de no-operación, derivada del mínimo por orden ---
-        if self.band > 0:
-            for i in range(self.n_assets):
-                if masked[i]:
-                    continue
-                if abs(target[i] - w_cur[i]) * v_pre < self.band:
-                    target[i] = w_cur[i]
-
-        # la caja absorbe el residuo; si no alcanza, se escalan los activos libres
-        suma_activos = float(target[: self.n_assets].sum())
-        if suma_activos > 1.0:
-            libres = ~masked
-            exceso = suma_activos - 1.0
-            val_libres = float(target[: self.n_assets][libres].sum())
-            if val_libres > 0:
-                escala = max(0.0, (val_libres - exceso) / val_libres)
-                target[: self.n_assets][libres] *= escala
-            suma_activos = float(target[: self.n_assets].sum())
-        target[self.cash_slot] = 1.0 - suma_activos
+        # La banda de D7 NO va acá: se aplica a la ORDEN que se manda, en
+        # `_execute`. Hasta el 2026-10-29 iba sobre el peso objetivo y los
+        # recortes posteriores podían dejar órdenes reales bajo el piso.
+        target[self.cash_slot] = 1.0 - float(target[: self.n_assets].sum())
         return target
 
     def _execute(self, target: np.ndarray, e: int, v_pre: float) -> tuple[float, float]:
-        """Convierte pesos objetivo en unidades, cobrando el costo. Devuelve (costo, rotación)."""
+        """Convierte pesos objetivo en órdenes y las ejecuta como lo haría un inversionista.
+
+        1. Ruido de coma flotante NO es una orden.
+        2. D7: ninguna orden bajo la banda se manda ("las órdenes por debajo de
+           ese nocional no se ejecutan"). Se aplica a la orden FINAL, no a la
+           intención: un recorte posterior puede achicar una orden bajo el piso.
+        3. Si la caja no alcanza para las compras más las comisiones, se COMPRA
+           MENOS. No se vende un activo que no se iba a tocar ni se agranda una
+           venta para pagar la comisión de otro: así opera una cuenta real.
+        4. Si al achicarse una compra cae bajo la banda, se cancela; lo que
+           sobra queda en caja.
+        5. Una venta que no paga ni su propia comisión no se manda (solo puede
+           ocurrir sin banda, en el modo de diagnóstico band_notional=0).
+
+        Historia: hasta el 2026-10-29 (a) una caja de -1e-10 por redondeo —cuyo
+        SIGNO depende de la CPU— se leía como faltante y dejaba órdenes de 3e-11
+        que pagaban la comisión mínima (S/330 por día con 7 activos; cada
+        máquina daba otro número), y (b) el faltante se cubría escalando todos
+        los activos, abriendo órdenes en los que no operaban. Ver
+        docs/resultados_entorno_OE1.txt §8.1.
+
+        Devuelve (costo, rotación).
+        """
         prices = self.panel.prices[e]
         val_cur = self.units * prices
-        val_tgt = target[: self.n_assets] * v_pre
         masked = self.panel.no_trade[e]
-
-        # Ruido de coma flotante NO es una orden. Sin este ajuste, una diferencia
-        # de 1e-16 dispararía la comisión MÍNIMA (S/40) por activo y por día.
         tol = 1e-8 * v_pre
-        val_tgt = np.where(np.abs(val_tgt - val_cur) < tol, val_cur, val_tgt)
+
+        val_tgt = target[: self.n_assets] * v_pre
+        # (1) y D8: sin orden por ruido, y lo enmascarado no se toca.
+        val_tgt = np.where((np.abs(val_tgt - val_cur) < tol) | masked, val_cur, val_tgt)
 
         cost = 0.0
-        # Dos pasadas: el costo sale de la caja y, si no alcanza, se reducen los
-        # activos LIBRES (nunca los enmascarados, que por D8 no se pueden tocar).
-        for _ in range(2):
-            notionals = np.abs(val_tgt - val_cur)
-            notionals[masked] = 0.0
-            cost = float(self.costs.cost_of_trades(notionals, e, self.panel.stale[e]).sum())
+        cash_after = 0.0
+        # Converge en 1-3 vueltas (cada una cancela órdenes o achica compras);
+        # el tope es una guarda, no un parámetro.
+        for _ in range(_MAX_VUELTAS_EJECUCION):
+            orden = val_tgt - val_cur
+            chicas = (orden != 0.0) & (np.abs(orden) < self.band)  # (2) y (4)
+            val_tgt[chicas] = val_cur[chicas]
+            orden = val_tgt - val_cur
+
+            cost = float(self.costs.cost_of_trades(np.abs(orden), e, self.panel.stale[e]).sum())
             cash_after = v_pre - float(val_tgt.sum()) - cost
-            if cash_after >= 0.0:
+            if cash_after >= -_RUIDO_CAJA:
                 break
-            libres = ~masked
-            val_libres = float(val_tgt[libres].sum())
-            if val_libres <= 0:
-                break
-            escala = max(0.0, (val_libres + cash_after) / val_libres)
-            val_tgt[libres] *= escala
+            compras = orden > 0.0  # (3)
+            total_compras = float(orden[compras].sum())
+            if total_compras > 0.0:
+                val_tgt[compras] -= min(1.0, -cash_after / total_compras) * orden[compras]
+                continue
+            # (5) Sin compras que achicar y aún falta: hay ventas que no pagan ni
+            # su propia comisión (vender S/10 pagando el mínimo de S/47). Nadie
+            # manda esa orden. Con la banda derivada no ocurre —la banda supera
+            # al mínimo—; solo con band_notional=0, el modo de diagnóstico.
+            costo_i = self.costs.cost_of_trades(np.abs(orden), e, self.panel.stale[e])
+            ruinosas = (orden < 0.0) & (-orden <= costo_i)
+            if not ruinosas.any():
+                break  # la guarda de abajo lo reporta
+            val_tgt[ruinosas] = val_cur[ruinosas]
+        if cash_after < -_RUIDO_CAJA:
+            # Guarda que falla temprano: con las reglas de arriba no debería
+            # pasar nunca (las ventas pagan su propia comisión y las compras se
+            # achican hasta cero). Si pasa, el modelo de costos está mal armado.
+            raise RuntimeError(
+                f"no se pudo cubrir el costo comprando menos (faltan {-cash_after:.6f}); "
+                "revisa el modelo de costos"
+            )
 
         notionals = np.abs(val_tgt - val_cur)
         notionals[masked] = 0.0
         turnover = float(notionals.sum() / v_pre) if v_pre > 0 else 0.0
 
-        nuevas = val_tgt / prices
+        # Sin orden, las unidades no se recalculan: val/precio no devuelve las
+        # mismas unidades bit a bit y la cartera "se movería" sin operar.
+        nuevas = np.where(val_tgt == val_cur, self.units, val_tgt / prices)
         # D8 al pie de la letra: lo enmascarado no se toca, ni siquiera por
         # redondeo. Se copia la unidad anterior en vez de recalcularla.
         nuevas[masked] = self.units[masked]
         self.units = nuevas
         self.cash = v_pre - float(val_tgt.sum()) - cost
-        if self.cash < -1e-6:
+        if self.cash < -_RUIDO_CAJA:
             raise RuntimeError(f"caja negativa tras ejecutar ({self.cash:.6f}); revisa el costo")
         self.cash = max(self.cash, 0.0)
         return cost, turnover
@@ -425,7 +484,7 @@ class PortfolioEnv(_BASE):
             return {}
         ann = 252.0
         vol = float(r.std(ddof=1)) * np.sqrt(ann)
-        rf_diaria = self.panel.rf_daily[self.t0 : self.t]
+        rf_diaria = self.panel.rf_paso[self.t0 : self.t]
         # Desviación contra la tasa libre de riesgo DEL DÍA, no contra su
         # promedio: la tasa del BCRP se mueve de 0.25% a 7.75% en el horizonte,
         # y usar el promedio mediría contra un umbral que no existió.

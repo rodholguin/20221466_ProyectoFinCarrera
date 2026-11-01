@@ -61,6 +61,20 @@ def registra(
     return huella
 
 
+def _estrategia(config: dict[str, Any]) -> dict[str, Any]:
+    """La parte de una configuración que define la ESTRATEGIA.
+
+    Fuera la semilla (una réplica no es una prueba nueva) y fuera las claves
+    VACÍAS (None, {}, []): no definen nada. Caso real: desde el 2026-09-19 los
+    scripts anotan `reward_kwargs: {}` para el DSR y las corridas del 18-sep no
+    traían la clave; la misma estrategia salía con dos huellas y la re-corrida
+    de R8 del 2026-10-09 inflaba el contador de 31 a 44 sin probar nada nuevo.
+    Solo afecta al CONTEO: las huellas guardadas en el registro no cambian.
+    """
+    return {k: v for k, v in config.items()
+            if k != "seed" and v is not None and v != {} and v != []}
+
+
 def conteo(ruta: Path | str = REGISTRO) -> dict[str, int]:
     """Cuántas corridas y cuántas configuraciones DISTINTAS se han probado.
 
@@ -83,9 +97,7 @@ def conteo(ruta: Path | str = REGISTRO) -> dict[str, int]:
             fila = json.loads(linea)
             corridas += 1
             huellas.add(fila["hash"])
-            cfg = dict(fila.get("config", {}))
-            cfg.pop("seed", None)  # la semilla no define una estrategia distinta
-            estrategias.add(hash_config(cfg))
+            estrategias.add(hash_config(_estrategia(fila.get("config", {}))))
             if fila.get("tramo") == "test":
                 con_test += 1
     return {

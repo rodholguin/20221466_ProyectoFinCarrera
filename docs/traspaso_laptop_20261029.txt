@@ -1,0 +1,60 @@
+TRASPASO A LA LAPTOP NUEVA — 2026-10-29
+=======================================
+
+Rama de trabajo: feat/oe1-r8-markowitz-d25 (master va 8+ commits atrás; NO trabajar en master).
+
+1. QUÉ ESTÁ EN GIT Y QUÉ NO
+---------------------------
+En git (basta `git clone` + `git checkout feat/oe1-r8-markowitz-d25`):
+  - todo el código (src/, scripts/, tests/), notebooks con salidas, docs/
+  - data/interim/registro_configuraciones.jsonl  ← bitácora D10, incluye las 11 corridas
+    DDPG de R8 del 11-oct que estaban sin commit
+  - docs/memoria_claude/  ← copia de la memoria de Claude Code (ver §3)
+
+NO está en git (.gitignore) — hay que COPIARLO A MANO (USB / Drive), ~2.6 GB:
+  data/raw/bloomberg/            4 MB   ¡NO REGENERABLE! licencia Bloomberg, no va a GitHub.
+                                        Incluye ahora capturas_lqa_20260926/ (las 5 fotos
+                                        de WhatsApp del LQA que estaban sueltas en la raíz).
+  data/raw/smv_cache/            2.4 GB regenerable pero lento (WSDL SMV)
+  data/raw/bvl_infmen/           187 MB regenerable con scripts/gen_bvl_mensual.py
+  data/raw/*.parquet, data/interim/*.parquet, data/processed/  (panel, mercado, noticias,
+                                        sentimiento) — regenerables R3→R6 pero con horas de LLM
+  data/interim/sentiment_cache/  4 MB   ahorra re-clasificar con el LLM
+  data/interim/artefactos_oe1/   3 MB   incluye ablacion_r8_ddpg_*.parcial.json y modelos/
+                                        (los .parcial se reconstruyen desde el registro)
+  data/interim/r5_validacion_*.csv      ANOTACIONES HUMANAS del autor (550) — NO regenerables
+
+Recomendación: copiar la carpeta data/ ENTERA y pegarla sobre el clon. Es lo más simple y
+no se pierde nada.
+
+2. ENTORNO EN LA LAPTOP NUEVA
+-----------------------------
+  - Python 3.14 (en la vieja: C:\Users\LENOVO\AppData\Local\Python\bin\python.exe; `python`
+    de la PATH era el stub de la Store). Crear venv en la raíz: python -m venv .venv
+  - pip install -r requirements.txt
+  - Variables de entorno (en la vieja estaban como variables de usuario de Windows, NO en .env):
+      MEDIACLOUD_API_TOKEN   (rotado el 2026-08-18; sacarlo de la cuenta de MediaCloud)
+      GEMINI_API_KEY         (opcional, piloto D16 nunca corrido)
+  - Correr con: $env:PYTHONPATH="<repo>"; $env:PYTHONIOENCODING="utf-8"; python -X utf8 ...
+  - Verificar: pytest (85+ tests) y que data/processed/dataset_unificado.parquet exista.
+  - Entregables Node (scripts/entregables): npm install en esa carpeta si se regeneran.
+
+3. MEMORIA DE CLAUDE CODE
+-------------------------
+Claude Code guarda la memoria FUERA del repo, en
+  C:\Users\<usuario>\.claude\projects\<ruta-del-repo-con-guiones>\memory\
+Si el repo queda otra vez en C:\tesis, la carpeta es ...\projects\C--tesis\memory\.
+Copiar docs/memoria_claude/*.md ahí (o pedirle a Claude que lo haga en la primera sesión).
+MEMORY.md es el índice. La memoria de la vieja laptop se copió tal cual al 2026-10-29.
+
+4. DÓNDE QUEDÓ EL TRABAJO (lo urgente)
+--------------------------------------
+Ver docs/memoria_claude/project_r8_sac_ddpg_corrida_20261011.md. Resumen:
+  - Ablación R8 con SAC/DDPG INCOMPLETA: DDPG 11/18 corridas (ya commiteadas en el registro),
+    SAC 0/18.
+  - DDPG NO es determinista con la misma semilla → verificar determinismo (también PPO)
+    con una corrida corta duplicada ANTES de la corrida definitiva.
+  - Antes de relanzar: implementar en scripts/ablacion_r8.py guardado por semilla + retomado
+    (saltar (vista, pliegue, semilla) ya hechas sin duplicar el registro).
+  - Servidor PUCP: acceso de `rholguin` pendiente con el administrador.
+Plan general: docs/pendientes_20260923.txt.

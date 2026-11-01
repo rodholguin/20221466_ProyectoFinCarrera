@@ -12,6 +12,7 @@ NaN silencioso dentro de la recompensa.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 
 import numpy as np
@@ -38,12 +39,36 @@ class PanelData:
     prices: np.ndarray  # (T, n) valuación total-return
     no_trade: np.ndarray  # (T, n) bool — restricción dura (D8)
     stale: np.ndarray  # (T, n) bool — recargo de costo, no prohibición (D8)
-    rf_daily: np.ndarray  # (T,) tasa libre de riesgo diaria (D9)
+    rf_daily: np.ndarray  # (T,) tasa libre de riesgo POR DÍA CALENDARIO (D9); ver rf_paso
     features: FeatureTensor
     #: Primer índice en el que TODOS los activos ya cotizan. Antes de esa fecha
     #: el universo no está completo (InRetail sale a bolsa en 2012-10) y el
     #: entorno no puede arrancar: no se puede tener lo que no está listado.
     first_tradable_index: int = 0
+
+    @cached_property
+    def dias_al_siguiente(self) -> np.ndarray:
+        """(T,) días CALENDARIO entre cada cierre y el siguiente (el último: 1).
+
+        Viernes -> lunes son 3. La caja devenga por día calendario, no por paso.
+        """
+        d = np.asarray(self.dates).astype("datetime64[D]")
+        dias = np.ones(len(d), dtype=float)
+        dias[:-1] = np.diff(d).astype(int)
+        return dias
+
+    @property
+    def rf_paso(self) -> np.ndarray:
+        """(T,) lo que rinde la caja de un cierre al siguiente (D9).
+
+        D9: "la tasa del banco central dividida entre 365" es la tasa POR DÍA
+        CALENDARIO, así que el paso cobra tantos días como transcurren: de
+        viernes a lunes, tres. Hasta el 2026-10-29 se cobraba un solo día por
+        paso hábil y la caja rendía 252/365 de la tasa (2.65% anual en vez de
+        3.88% en 2013-2025): castigaba justo lo que D9 quería no castigar.
+        Interés simple dentro del paso; entre pasos, compuesto.
+        """
+        return self.rf_daily * self.dias_al_siguiente
 
     @property
     def n_steps(self) -> int:

@@ -117,11 +117,38 @@ def test_caja_rinde_exacto():
     res = run_policy(env, CashOnly())
 
     t0, tf = env.t0, env.t
-    factores = 1.0 + p.rf_daily[t0:tf]
+    factores = 1.0 + p.rf_paso[t0:tf]
     esperado = env.cfg.initial_capital * np.concatenate([[1.0], np.cumprod(factores)])
 
     assert np.allclose(res["equity"], esperado, rtol=1e-12), "la caja no rinde la rf compuesta"
     assert res["equity"][-1] > res["equity"][0], "la caja debería crecer con rf > 0"
+
+
+def test_caja_devenga_por_dia_calendario():
+    """BUG hallado el 2026-10-29: la caja cobraba UN día por paso hábil.
+
+    Con días hábiles (lunes a viernes), viernes -> lunes son tres días de
+    interés. Cobrando uno, la caja rendía 252/365 de la tasa: 2.65% anual en vez
+    de 3.88% en el panel real 2013-2025. En un año, la caja tiene que rendir la
+    tasa anual (salvo la diferencia entre interés simple y compuesto).
+    """
+    from dataclasses import replace
+
+    habiles = np.array(
+        [d for d in np.arange("2021-01-04", "2022-01-04", dtype="datetime64[D]")
+         if np.is_busday(d)]
+    )
+    base = panel_sintetico(n_dias=len(habiles))
+    p = replace(base, dates=habiles)
+    lunes = int(np.nonzero(np.is_busday(habiles, weekmask="Mon"))[0][1])
+    assert p.dias_al_siguiente[lunes - 1] == 3, "viernes -> lunes no son tres días"
+    assert p.dias_al_siguiente[lunes] == 1
+
+    env = _env(p, rebalance_every=1)
+    res = run_policy(env, CashOnly())
+    dias = (habiles[env.t] - habiles[env.t0]).astype(int)
+    anual = (res["equity"][-1] / res["equity"][0]) ** (365 / dias) - 1
+    assert abs(anual - RF_ANUAL) < 0.001, f"la caja rinde {anual:.4%} anual con una tasa de {RF_ANUAL:.2%}"
 
 
 # --------------------------------------------------------------------------
@@ -189,6 +216,176 @@ def test_banda_bloquea_ordenes_chicas():
     assert np.allclose(res["weights"][-1][env.cash_slot], 1.0), "no quedó todo en caja"
 
 
+def _costo_con_minimo(tickers):
+    return CostModel(tickers=tickers, half_spread_bps=10.0, commission_rate=0.0043, min_fee=40.0)
+
+
+def test_ruido_de_caja_no_genera_ordenes_fantasma():
+    """BUG hallado el 2026-10-29 al cambiar de laptop.
+
+    `v_pre` sale de un producto punto y la suma de los nocionales objetivo de
+    una suma elemento a elemento: con la caja en cero, `v_pre - sum(val_tgt)`
+    puede dar -1e-10 sin que falte un sol. El entorno lo leía como "no alcanza
+    la caja", reescalaba TODOS los activos y dejaba órdenes de ~3e-11 que
+    pagaban la comisión MÍNIMA cada una (S/330 por día con 7 activos). Si ese
+    -1e-10 aparece o no depende de la CPU: la misma corrida daba otro número en
+    otra máquina.
+    """
+    p = panel_sintetico(n_activos=7)
+    env = PortfolioEnv(p, _costo_con_minimo(p.tickers), EnvConfig(action_mode="weights"))
+    e = env.t
+    precios = p.prices[e]
+    # Se busca una cartera 100% invertida en la que el redondeo deje la caja
+    # "negativa": es el caso real, no uno fabricado.
+    rng = np.random.default_rng(0)
+    for _ in range(10_000):
+        env.units = rng.uniform(1_000, 5_000, size=7)
+        env.cash = 0.0
+        v_pre = env._value(e)
+        w = env._weights(e)
+        if v_pre - float((env.units * precios).sum()) < 0:
+            break
+    else:  # pragma: no cover - depende de la aritmética, pero aparece en <100 intentos
+        raise AssertionError("no se encontró un caso de caja negativa por redondeo")
+
+    unidades = env.units.copy()
+    costo, rotacion = env._execute(w, e, v_pre)
+    assert costo == 0.0, f"se cobraron S/{costo:.2f} por mantener la misma cartera"
+    assert rotacion == 0.0
+    assert np.array_equal(env.units, unidades), "se movieron unidades sin orden real"
+
+
+def test_banda_no_la_burla_el_reescalado():
+    """BUG hallado el 2026-10-29: la banda congela un activo y el reescalado lo mueve.
+
+    Si la suma de pesos pasa de 1 tras la banda, el entorno reescalaba TODOS
+    los activos libres, también los que la banda acababa de congelar: quedaban
+    órdenes de pocos soles que pagaban la comisión mínima, exactamente lo que
+    la banda existe para impedir. El recorte tiene que salir de los que SÍ
+    operan.
+    """
+    p = panel_sintetico(n_activos=3)
+    env = PortfolioEnv(p, _costo_con_minimo(p.tickers),
+                       EnvConfig(action_mode="weights", rebalance_every=1))
+    e = env.t
+    v = env.cfg.initial_capital
+    # Banda = S/9,302 (0.52% de S/1.8 MM). A0 y A1 quedan a 0.27% de 1/3: la
+    # banda los congela. A2 está a 1.53%: opera.
+    w_ini = np.array([0.336, 0.336, 0.318])
+    env.units = w_ini * v / p.prices[e]
+    env.cash = v * 0.01
+
+    unidades = env.units.copy()
+    env.step(np.array([1.0, 1.0, 1.0, 0.0]))  # 1/N, sin caja
+    assert np.array_equal(env.units[:2], unidades[:2]), "el reescalado movió activos congelados por la banda"
+    assert env.units[2] > unidades[2], "A2 debió comprar"
+    assert env.cash >= 0.0
+    # Una sola orden: la de A2.
+    esperado = float(_costo_con_minimo(p.tickers).cost_of_trades(
+        np.array([0.0, 0.0, (env.units[2] - unidades[2]) * p.prices[e][2]]), e).sum())
+    assert abs(env.history["cost"][-1] - esperado) < 1e-6
+
+
+def _ordenes_por_paso(env, politica):
+    """Corre la política y devuelve, por paso, los nocionales EJECUTADOS por activo."""
+    ejecutar = env._execute
+    ordenes = []
+
+    def espia(target, e, v_pre):
+        antes = env.units.copy()
+        salida = ejecutar(target, e, v_pre)
+        ordenes.append((e, (env.units - antes) * env.panel.prices[e]))
+        return salida
+
+    env._execute = espia
+    run_policy(env, politica)
+    return ordenes
+
+
+def test_ninguna_orden_ejecutada_queda_bajo_la_banda():
+    """D7 al pie de la letra: "las órdenes por debajo de ese nocional no se ejecutan".
+
+    Hasta el 2026-10-29 la banda se aplicaba al PESO OBJETIVO y después los
+    recortes (por exceso de pesos o para pagar el costo) podían achicar una
+    orden real por debajo del piso: 365 órdenes así en el 1/N diario del panel
+    real. La banda va sobre la orden que se manda, no sobre la intención.
+    """
+    p = panel_sintetico(n_dias=250, n_activos=7)
+    env = PortfolioEnv(p, _costo_con_minimo(p.tickers), EnvConfig(action_mode="weights"))
+    banda = env.band
+    assert banda > 9_000
+    for _, nocional in _ordenes_por_paso(env, EqualWeight()):
+        chicas = (nocional != 0) & (np.abs(nocional) < banda)
+        assert not chicas.any(), f"se ejecutaron órdenes bajo la banda: {nocional[chicas]}"
+
+
+def test_sin_caja_se_compra_menos_y_no_se_toca_lo_demas():
+    """Si la caja no alcanza para comprar y pagar las comisiones, se COMPRA MENOS.
+
+    Un inversionista no vende un activo que no pensaba tocar para financiar
+    las comisiones de otro: achica la compra. Ningún activo que no tenía orden
+    puede terminar con una, y ninguna venta puede crecer.
+    """
+    p = panel_sintetico(n_activos=3)
+    env = PortfolioEnv(p, _costo_con_minimo(p.tickers), EnvConfig(action_mode="weights"))
+    e = env.t
+    v = env.cfg.initial_capital
+    # 100% invertido, sin caja. Pide vender A0 y comprar A1 en la MISMA
+    # cantidad: lo vendido no alcanza para comprar y pagar las dos comisiones.
+    env.units = np.array([0.5, 0.3, 0.2]) * v / p.prices[e]
+    env.cash = 0.0
+    v_pre = env._value(e)
+    objetivo = np.array([0.4, 0.4, 0.2, 0.0])
+    antes = env.units.copy()
+    costo, _ = env._execute(objetivo, e, v_pre)
+
+    nocional = (env.units - antes) * p.prices[e]
+    assert nocional[2] == 0.0, "se abrió una orden en un activo que no se iba a operar"
+    assert abs(nocional[0] - (-0.1 * v_pre)) < 1e-6, "la venta cambió de tamaño"
+    assert 0 < nocional[1] < 0.1 * v_pre, "la compra no se achicó para pagar el costo"
+    assert env.cash >= 0.0
+    assert abs(v_pre - costo - env._value(e)) < 1e-6, "no cuadra: valor final ≠ valor inicial − costo"
+
+
+def test_sin_banda_una_venta_que_no_paga_su_comision_no_se_manda():
+    # Modo de diagnóstico (band_notional=0) con el mínimo de S/40: vender S/10
+    # con la caja en cero dejaría la cuenta en negativo. Nadie manda esa orden.
+    p = panel_sintetico(n_activos=3)
+    env = PortfolioEnv(p, _costo_con_minimo(p.tickers),
+                       EnvConfig(action_mode="weights", band_notional=0.0))
+    e = env.t
+    env.units = np.array([0.5, 0.3, 0.2]) * env.cfg.initial_capital / p.prices[e]
+    env.cash = 0.0
+    v_pre = env._value(e)
+    objetivo = np.array([0.5, 0.3, 0.2, 0.0])
+    objetivo[0] -= 10.0 / v_pre
+    objetivo[3] += 10.0 / v_pre
+    antes = env.units.copy()
+    costo, _ = env._execute(objetivo, e, v_pre)
+    assert costo == 0.0 and np.array_equal(env.units, antes)
+
+
+def test_el_agente_observa_la_cartera_que_tiene_no_la_que_pidio():
+    """Los pesos de la observación y del historial son los EJECUTADOS.
+
+    Si la banda cancela una orden, la cartera real difiere del objetivo; el
+    agente tiene que ver lo que tiene, no lo que pidió.
+    """
+    p = panel_sintetico(n_activos=3)
+    env = PortfolioEnv(p, _costo_con_minimo(p.tickers), EnvConfig(action_mode="weights"))
+    e = env.t
+    v = env.cfg.initial_capital
+    env.units = np.array([0.336, 0.336, 0.318]) * v / p.prices[e]
+    env.cash = v * 0.01
+    env.step(np.array([1.0, 1.0, 1.0, 0.0]))  # pide 1/N: A0 y A1 caen bajo la banda
+
+    valor = env.units * p.prices[e]
+    reales = np.append(valor, env.cash) / (valor.sum() + env.cash)
+    assert np.allclose(env.w_post, reales), "la observación muestra pesos que la cartera no tiene"
+    assert np.allclose(env.history["weights"][-1], reales)
+    assert not np.allclose(env.w_post[:3], 1 / 3), "la orden de A0/A1 debió cancelarse"
+
+
 def test_banda_se_deriva_del_minimo_por_orden():
     # S/40 de mínimo con 0.43% de comisión => S/9,302. Es el piso ECONÓMICO por
     # debajo del cual rebalancear un activo es irracional (D7).
@@ -222,7 +419,7 @@ def test_delta_accion_cero_no_opera_nunca():
 
     assert np.allclose(env.history["turnover"], 0.0), "a=0 produjo operaciones"
     assert sum(env.history["cost"]) == 0.0, "a=0 pagó costo"
-    factores = 1.0 + p.rf_daily[env.t0 : env.t]
+    factores = 1.0 + p.rf_paso[env.t0 : env.t]
     esperado = env.cfg.initial_capital * np.concatenate([[1.0], np.cumprod(factores)])
     assert np.allclose(env.equity_curve, esperado, rtol=1e-12), (
         "sin operar, el patrimonio debería ser exactamente la caja capitalizada"

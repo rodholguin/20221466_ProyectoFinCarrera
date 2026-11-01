@@ -47,10 +47,11 @@ from src.env import (  # noqa: E402
     PortfolioEnv,
     load_panel,
     run_policy,
-    snapshot_cost_model,
+    costos_observados,
 )
 from src.env.folds import walk_forward  # noqa: E402
 from src.env.registro import conteo, registra  # noqa: E402
+from src.agents import envuelve  # noqa: E402
 
 
 def construye_env(panel, costos, rango, *, entrenando: bool, cfg_extra: dict):
@@ -67,17 +68,23 @@ def construye_env(panel, costos, rango, *, entrenando: bool, cfg_extra: dict):
     )
 
 
-def evalua(model, panel, costos, rango, cfg_extra: dict) -> dict:
-    """Corre la política determinista sobre el tramo completo."""
-    env = construye_env(panel, costos, rango, entrenando=False, cfg_extra=cfg_extra)
+def evalua(model, panel, costos, rango, cfg_extra: dict, algo: str = "ppo") -> dict:
+    """Corre la política determinista sobre el tramo completo.
+
+    `algo` decide si la acción pasa por el envoltorio de los off-policy (ver
+    src/agents/algoritmos.py). Tiene que ser el MISMO que en entrenamiento: un
+    SAC evaluado sin envoltorio mandaría x ∈ [-1, 1] crudo al entorno.
+    """
+    base = construye_env(panel, costos, rango, entrenando=False, cfg_extra=cfg_extra)
+    env = envuelve(base, algo)
     obs, _ = env.reset()
     done = False
     while not done:
         accion, _ = model.predict(obs, deterministic=True)
         obs, _, terminado, truncado, _ = env.step(accion)
         done = terminado or truncado
-    resumen = env.summary()
-    resumen["peso_caja_medio"] = float(np.mean([w[-1] for w in env.history["weights"]]))
+    resumen = base.summary()
+    resumen["peso_caja_medio"] = float(np.mean([w[-1] for w in base.history["weights"]]))
     return resumen
 
 
@@ -105,7 +112,7 @@ def main() -> None:
     from stable_baselines3.common.env_util import make_vec_env
 
     panel = load_panel(view=args.view, warmup=250)
-    costos = snapshot_cost_model(panel.tickers)
+    costos = costos_observados(panel)
     # El primer índice utilizable no es 0: hay que esperar el calentamiento de
     # D6 y que los 7 activos coticen (InRetail sale a bolsa en 2012-10).
     primer_util = max(panel.features.warmup + 1, panel.first_tradable_index)

@@ -617,8 +617,8 @@ FUNDAMENTALES (R4)
     antigüedad del fundamental (análoga a days_since_news). Considerar una
     columna quarters_since_fundamental / days_since_known. [abierto — mejora]
   - FERREYCORP ES UN HOLDING DESDE 2012 Y R4 USA SU ESTADO INDIVIDUAL
-    [abierto — detectado 2026-10-06 al regenerar los notebooks; corrección
-    DIFERIDA por decisión del autor]. Ferreyros pasó a ser subsidiaria y el
+    [MITIGADO 2026-10-09 — detectado 2026-10-06 al regenerar los notebooks;
+    ver la mitigación al final de esta entrada]. Ferreyros pasó a ser subsidiaria y el
     estado individual de Ferreycorp S.A.A. solo refleja la matriz. Medido en el
     caché SMV (obtener_InfoFinanciera, Q4, individual vs consolidado):
         año   ingreso I / C        pasivo/activo I / C   utilidad I / C
@@ -645,6 +645,55 @@ FUNDAMENTALES (R4)
     known_date use la fecha del hecho CONSOLIDADO (lección de InRetail).
     Mientras tanto, las figuras de exploracion_fundamentales_bvl.ipynb lo
     advierten (nota en §5, asterisco en títulos, margen recortado en §6).
+    >> MITIGADO EL 2026-10-09 (decisión del autor: TODOS los no bancos a
+       consolidado, no solo Ferreycorp). Al medirlo en los 7 se vio que el
+       problema no era exclusivo de la holding: el individual de una matriz
+       suma la utilidad de sus subsidiarias (método de participación) pero no
+       sus ingresos ni sus activos, así que margen, ROA y endeudamiento mezclan
+       grupo con matriz. Ingreso individual / consolidado y margen neto anual
+       individual vs consolidado:
+           activo     ingreso I/C (2015 / 2023)   margen 2023 I / C
+           FERREYC1        0.06 / 0.01             713.3% / 6.2%
+           MINSURI1        0.80 / 0.37              50.6% / 25.2%
+           ALICORC1        0.60 / 0.47               2.8% / 1.4%
+           CPACASC1        0.65 / 0.66              13.2% / 8.7%
+           LUSURC1         1.00 / 0.97              17.1% / 16.5%
+       QUÉ SE HIZO:
+       (1) config.yaml: smv_tipo "C" en MINSURI1, ALICORC1, CPACASC1, FERREYC1
+           y LUSURC1 (InRetail ya lo tenía). Regla única: "consolidado salvo el
+           banco".
+       (2) UTILIDAD ATRIBUIBLE. La utilidad neta consolidada (2D07ST e
+           INFO_UtilidadNeta) es la del GRUPO, minoritarios incluidos. EPS, P/E
+           y ROE pasan a la atribuible a la controladora (2D0802) sobre el
+           patrimonio atribuible (1D0710); margen, ROA y deuda quedan con las
+           cifras del grupo. Sin esto Minsur habría inflado su EPS +44% en 2023
+           (minoritario de 40% en Marcobre). Arregló de paso a InRetail, que ya
+           era consolidado y usaba la total: su EPS 2019-2020 estaba ~7%
+           inflado (minoritarios de esos años). La presencia de 2D0802 es la
+           marca de consolidado: en el individual no existe y no cambia nada.
+       (3) PISO DE FECHA. Si el hecho consolidado no aparece y se cae al lag
+           de respaldo, la fecha real del INDIVIDUAL es piso: el consolidado
+           nunca se divulga antes (mismo día en Alicorp y Pacasmayo, y en Ferreycorp
+           salvo 2 trimestres;
+           +12-14 días en Minsur y Luz del Sur; +9-19 en InRetail). Caso medido:
+           LUSURC1 2020-Q1, lag al 25-may-2020 contra individual del
+           01-ago-2020 (prórroga por la pandemia) = 68 días de LOOK-AHEAD que
+           la regla elimina.
+       (4) TESORERÍA CON SIGNO POSITIVO SE DESCARTA. El consolidado de
+           CPACASC1 2012-Q1/Q2 trae +559,585 en 1D0711 (más que el capital), lo
+           que dejaba el conteo en −28 millones de acciones y el EPS en −2.6.
+           La tesorería se reporta siempre negativa; un positivo es otra línea.
+       Tests: tests/test_fundamentales_consolidado.py (6). Regenerados R4, R6
+       (24,584 x 120, solo cambian columnas de fundamentales), los notebooks de
+       fundamentales e integración, y los brazos de R8 mercado_fundamentales y
+       completa (misma configuración, mismo hash: no suman al contador D10).
+       LÍMITE: el BCP sigue individual (taxonomía SBS sin 2D0802/1D0710;
+       ingreso I/C ~0.82 por Mibanco desde 2014). Su margen y ROA son los del
+       banco, no los del grupo BCP; ROE/EPS correctos. Declarado.
+       RESIDUO: (a) los consolidados de 2005-2011 de Pacasmayo y Alicorp
+       difieren del individual en la utilidad (reorganizaciones de esos años);
+       afecta solo al arranque de las series TTM previas al panel (2012+).
+       (b) La utilidad graficada en los notebooks (§4) es la del grupo.
 
 
 ========================================================================

@@ -64,7 +64,7 @@ from src.env import (  # noqa: E402
     RandomDirichlet,
     load_panel,
     run_policy,
-    snapshot_cost_model,
+    costos_observados,
     zero_cost_model,
 )
 from src.env.costs import SPREAD_SNAPSHOT_BPS  # noqa: E402
@@ -480,7 +480,7 @@ def main() -> None:
 
     print("[1/6] panel")
     panel = load_panel(view=VISTA, warmup=WARMUP)
-    costos = snapshot_cost_model(panel.tickers)
+    costos = costos_observados(panel)
     sin_costo = zero_cost_model(panel.tickers)
     escribe_json("panel.json", {**hechos_del_panel(panel), "vistas": dimension_por_vista()})
 
