@@ -28,5 +28,5 @@ use_deterministic_algorithms con una corrida corta duplicada ANTES de la corrida
 **How to apply:** antes de relanzar, implementar en `scripts/ablacion_r8.py` guardado por semilla + retomado
 (saltar las (vista, pliegue, semilla) ya hechas, sin duplicar el registro). Ritmo medido en la laptop sin
 batería: DDPG ~65-73 min/corrida con 2 procesos (SAC ~1.7x más lento). Servidor PUCP: ver [[project-r5-sentiment-status]];
-el 11-oct `phantom` (172.19.4.64) no respondía; `bridge` entra a una máquina 'phantom' de 32 núcleos + 3 A5500
-en 172.19.4.227 donde la llave de `rholguin` es rechazada — el autor lo resuelve con el administrador.
+el 11-oct `phantom` (<servidor-interno>) no respondía; `bridge` entra a una máquina 'phantom' de 32 núcleos + 3 A5500
+en <otro-host-interno> donde la llave de `<usuario>` es rechazada — el autor lo resuelve con el administrador.

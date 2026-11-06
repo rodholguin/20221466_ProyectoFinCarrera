@@ -56,5 +56,5 @@ Ver docs/memoria_claude/project_r8_sac_ddpg_corrida_20261011.md. Resumen:
     con una corrida corta duplicada ANTES de la corrida definitiva.
   - Antes de relanzar: implementar en scripts/ablacion_r8.py guardado por semilla + retomado
     (saltar (vista, pliegue, semilla) ya hechas sin duplicar el registro).
-  - Servidor PUCP: acceso de `rholguin` pendiente con el administrador.
+  - Servidor PUCP: acceso del usuario pendiente con el administrador.
 Plan general: docs/pendientes_20260923.txt.
