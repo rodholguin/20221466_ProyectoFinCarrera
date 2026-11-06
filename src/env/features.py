@@ -61,6 +61,12 @@ GROUPS: dict[str, list[str]] = {
         "volatility_20",
         "is_no_trade",
         "is_stale",
+        # Lo que un operador ve en pantalla antes de decidir (2026-11-05): el
+        # spread y el volumen relativo del día. Van en la BASE, no como canal
+        # de R8: no son una señal sobre el precio sino sobre el COSTO de operar,
+        # y un agente que paga costos que no ve aprende peor. Ver panel.py.
+        "liq_spread",
+        "liq_monto_rel",
     ],
     # Prefijo: cuando entren S&P 500, MSCI EM o China (reunión 2026-09-02, B2)
     # llegan como macro_* y quedan incluidos sin tocar este archivo.
@@ -178,7 +184,7 @@ PASSTHROUGH_PREFIJOS = ("sue_", "pico_sue_")
 BOUNDED: dict[str, float] = {"rsi_14": 100.0}
 
 #: Columnas a las que se aplica log1p antes de normalizar (colas muy largas).
-LOG1P = {"days_since_news", "n_articles", "n_relevantes"}
+LOG1P = {"days_since_news", "n_articles", "n_relevantes", "liq_spread"}
 
 WINSOR_SIGMA = 5.0
 WARMUP_DEFAULT = 250

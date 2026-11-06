@@ -31,8 +31,8 @@ ya no cabe en la cabeza.
   ---  --------------------------------------  --------------------------------
   D1   alcance del agente                      CERRADA — portafolio
   D2   espacio de acción                       CERRADA — ENMENDADA: acción relativa
-  D3   algoritmo                               CERRADA — PPO primario
-  D4   función de recompensa                   REABIERTA 09-19 — el tamiz reprueba a las 3
+  D3   algoritmo                               ENMENDADA 09-26 — PPO primario + SAC + DDPG
+  D4   función de recompensa                   PRE-REGISTRADA 11-05 — logret_dd principal, a correr 11-06
   D5   observación: ventana y recurrencia      CERRADA — ventana apilada, sin RNN
   D6   normalización causal                    CERRADA — expanding por activo
   D7   costos de transacción y slippage        CERRADA en forma — falta tarifario
@@ -52,7 +52,7 @@ ya no cabe en la cabeza.
   D21  MVP piloto sin tocar el tramo de prueba CERRADA — 2026-09-03
   D22  escala de exploración de PPO           CERRADA — log_std=-2, por rotación
   D23  esquema de ventana (expanding/rolling)  ABIERTA — medida, falta pre-registrar
-  D24  condición inicial del episodio          ABIERTA — hoy arranca 100% en caja
+  D24  condición inicial del episodio          CERRADA 11-05 — eval en 1/N, entrena aleatorio
   D25  presupuesto de pasos de entrenamiento   MEDIDA — entrenar MAS EMPEORA fuera de muestra
   D26  parámetros del baseline Markowitz       ABIERTA — implementado, falta pre-registrar
   D27  escala de la sorpresa fundamental       CERRADA — winsorizada, enmienda D6
@@ -178,6 +178,56 @@ DECISIONES (en orden de resolución sugerido)
     estacionariedad.
     SAC entra como UNA verificación de robustez, no como brazo de la grilla:
     cada brazo adicional castiga el Sharpe deflactado (ver D10).
+    >> ENMENDADA EL 2026-09-26 (decisión del autor): PPO, SAC Y DDPG. El
+       documento de tesis (O3, R7) compromete la comparación de los tres, y
+       la inconsistencia #2 se resuelve a favor del documento. PPO sigue
+       siendo el PRIMARIO; el costo en el contador de D10 se acepta.
+       IMPLEMENTACIÓN, y lo que la hace comparable:
+       - src/agents/algoritmos.py construye los tres con la MISMA red
+         (64x64), gamma y batch. `ablacion_r8.py --algo`.
+       - SAC y DDPG ven el entorno a través de `AccionAcotada`: exponen
+         x ∈ [-1, 1] y el entorno recibe artanh(x), así que el movimiento es
+         action_scale·x EXACTO. Es una biyección: mismas carteras alcanzables
+         que PPO, x=0 sigue siendo "no operar", y transición, costos, máscara
+         y recompensa no se tocan. Sin él, SB3 reescalaría a [-10, 10] y el
+         tanh del entorno aplastaría dos veces (satura con |u| > 0.3).
+       - La exploración NO tiene defecto: `--sac-ent-coef` (coeficiente de
+         entropía FIJO; el 'auto' de SB3 no está calibrado) y `--ddpg-sigma`.
+         Se calibran POR ROTACIÓN EN TRAIN, como D22.
+         >> CALIBRADA EL 2026-10-09 (scripts/calibra_exploracion_r7.py, pliegue
+            0, solo train, sin mirar retornos ni validación, sin registro).
+            Regla escrita antes de medir: el valor cuyo PEAJE DEL RUIDO
+            (rotación estocástica − determinista) quede más cerca del de la
+            referencia PPO log_std=−2 en modo delta = 5.99 rot/año.
+              DDPG  σ = 0.16      peaje 5.86 ± 0.50 (5 semillas) = 0.98x
+                    (σ 0.15 → 0.88x · σ 0.17 → 1.08x)
+              SAC   ent_coef 0.03 peaje 5.90 ± 2.17 (3 semillas) = 0.98x
+                    (0.02 → 0.60x · 0.035 → 1.09x · 0.05 → 1.68x)
+            >> RECALIBRADA EL 2026-11-05 con el simulador 2026-11-05.2 (costos
+               corregidos, spread observado, tope de liquidez, arranque
+               aleatorio en train, liquidez en la observación). MISMA regla,
+               escrita antes de medir; la referencia PPO log_std=−2 en modo
+               delta baja a 4.03 rot/año.
+                 DDPG  σ = 0.17   peaje 4.10 ± 0.73 (5 semillas) = 1.02x
+                       (σ 0.16 → 0.91x · σ 0.18 → 1.11x)
+                 SAC   ent_coef 0.04  peaje 4.33 ± 1.30 (3 semillas) = 1.07x
+                       (0.035 → 0.72x · 0.05 → 1.18x)
+               FIJADOS DESDE ESTA FECHA: `--ddpg-sigma 0.17` y
+               `--sac-ent-coef 0.04`. PPO sigue en log_std=−2 (D22). Artefactos
+               en data/interim/artefactos_oe1/cal_20261105/.
+            FIJADOS (09-oct, simulador viejo): `--ddpg-sigma 0.16` y `--sac-ent-coef 0.03`. La medición
+            de SAC con UNA semilla no era monótona (0.05 → 1.77x, 0.07 →
+            1.59x); con tres sí, y por eso se repitió. Su dispersión (±2.2) es
+            mayor que la de DDPG porque en SAC el ruido lo aprende la red.
+            Artefactos: data/interim/artefactos_oe1/exploracion_r7*.json.
+            COSTO MEDIDO: SAC ~16 ms/paso con 1 entorno (≈7x PPO), así que la
+            comparación R7 se corre en solo_mercado y completa, no en las 4
+            vistas (ver resultados §7.16).
+       - Off-policy con 1 entorno (PPO sigue con 4): con varios, SB3 hace un
+         paso de gradiente cada n_envs transiciones y cambia la razón de
+         repetición del replay.
+       - La configuración de PPO en el registro queda IDÉNTICA (mismo hash):
+         lo verifica un test contra las corridas ya registradas.
     DELIBERACIÓN ORIGINAL (se conserva):
     - Acción continua: PPO, SAC, DDPG/TD3.
     - Acción discreta: DQN (y variantes).
@@ -341,6 +391,46 @@ DECISIONES (en orden de resolución sugerido)
     costos; los estadísticos suficientes de la recompensa que se elija siguen
     yendo al vector de observación (Markov). `logret_dd` expone DD_t por eso.
 
+    ================================================================
+    PRE-REGISTRO DEL 2026-11-05 — ANTES DE ENTRENAR NINGÚN BRAZO NUEVO
+    ================================================================
+    Escrito con el simulador 2026-11-05.2 y SIN haber corrido ninguna recompensa
+    nueva con él. Lo único visto es la corrida DSR de §8.6 y el tamiz de §8.7.
+    Decisión del autor: correrlo el 2026-11-06.
+
+    EVIDENCIA QUE LO MOTIVA: con el simulador realista, el DSR PAGA POR RUIDO en
+    47-53% de las 38 series del tamiz (§8.7) y SAC y DDPG rotan 7-23 veces al
+    año y pierden 11-42% (§8.6). PPO, que explora poco, se salva. Es un
+    defecto de la recompensa para TODOS los algoritmos, no de los off-policy.
+
+    LA RECOMPENSA ES UNA SOLA PARA LOS TRES ALGORITMOS: R7 compara algoritmos
+    y solo es válida con el mismo objetivo. No se elige una por algoritmo.
+
+    BRAZOS (y su papel fijado AHORA, no después de ver validación):
+      PRINCIPAL   `logret_dd`, λ = 0.65 × λ_ref DEL PLIEGUE, con λ_ref de
+                  `d4_tamiz_recompensas.calibra_escala` sobre el TRAIN de ese
+                  pliegue (en el tamiz: 1.08 / 1.02 / 1.93). 0.65 está dentro de
+                  la ventana del pliegue 0 [0.63, 0.70], la única que existe.
+                  Reparo declarado: en los pliegues 1 y 2 ningún λ cumple T1 y
+                  T3 a la vez; ahí ordena por drawdown y no por Sharpe.
+      CONTROL     `logret` (D4 V0): pasa T1, T2 y T4 en los tres pliegues y
+                  reprueba T3 por construcción. Mide si el término de riesgo
+                  aporta.
+      REFERENCIA  `dsr`: YA CORRIDA (§8.6). No se vuelve a correr.
+    MATRIZ: PRINCIPAL con PPO, DDPG y SAC en las 5 vistas (solo_mercado,
+    +macro, +sentimiento, +fundamentales, completa) = 135 corridas; CONTROL con
+    los 3 algoritmos en solo_mercado y completa = 54. 3 pliegues × 3 semillas
+    × 150k pasos; exploración de D3 (σ 0.17, ent_coef 0.04, log_std −2).
+    ~5 h con scripts/lanza_r8.py en 12 procesos.
+    LO QUE NO SE HARÁ: elegir la recompensa final según cuál rinda más en
+    validación. La PRINCIPAL ya está elegida por el tamiz; las otras dos se
+    reportan como brazos. Todas las corridas entran al contador de D10.
+    FALTA IMPLEMENTAR ANTES DE LANZAR: λ por pliegue en ablacion_r8.py /
+    lanza_r8.py (hoy `--lam` es un solo valor para los tres pliegues).
+    COMPARACIÓN A REPORTAR: por algoritmo y vista, medianas por pliegue y
+    diferencias PAREADAS por semilla entre recompensas (retorno, Sharpe,
+    drawdown, ROTACIÓN y caja media), contra comprar y mantener, 1/N y caja.
+
 [X] D5. OBSERVACIÓN — CERRADA (2026-09-03): VENTANA APILADA + MLP, SIN RNN.
     RAZÓN, y no es solo "hay poco dato": LA MEMORIA YA ESTÁ EN LAS FEATURES.
     Las EWMAs de 5/20/60 días de D11/D15 cargan explícitamente la persistencia
@@ -446,6 +536,24 @@ DECISIONES (en orden de resolución sugerido)
       sea 200 pbs sobre el monto transado. La banda se fija en ese piso
       económico y se cita; δ=0 se conserva solo como diagnóstico de que el
       modelo de costos está haciendo algo.
+      >> PRECISADA EL 2026-10-29 (sin cambiar la decisión): la banda se
+         aplica a la ORDEN FINAL que se manda, no al peso objetivo. El
+         simulador la aplicaba antes de los recortes por caja y dejaba
+         órdenes reales bajo el piso (365 en el 1/N diario). Y si la caja no
+         alcanza para comprar y pagar comisiones, se COMPRA MENOS, como en una
+         cuenta real. Ver resultados_entorno_OE1.txt §8.1-8.2.
+      >> SPREAD OBSERVADO EN VEZ DEL SNAPSHOT (2026-10-29). La estructura
+         no cambia; cambia el dato: el medio spread ahora es el spread
+         cotizado PROMEDIO del día de Bloomberg (AVERAGE_BID_ASK_SPREAD),
+         día por día y activo por activo, en vez del snapshot constante del
+         2026-07-27, que subestimaba ~10x a Alicorp, InRetail y Minsur.
+         Ver resultados_entorno_OE1.txt §8.3.
+      >> SE LEVANTA "IMPACTO ≈ 0 POR CONSTRUCCIÓN" (2026-11-05). El supuesto
+         se apoyaba en un tope de capacidad que el simulador no imponía: la
+         compra inicial de BCP era 31 veces el monto del día. Ahora: tope del
+         10% del monto diario, orden pendiente que se arrastra, e impacto de
+         raíz cuadrada Y·σ·√(q/V) con Y=0.65 calibrado con Bloomberg LQA.
+         Ver resultados_entorno_OE1.txt §8.4.
     DELIBERACIÓN ORIGINAL (se conserva):
     Modelo y valores realistas para la BVL (comisiones + impacto de mercado, alto
     en nombres ralos). Si se ponen a cero, el agente sobre-opera de forma irreal.
@@ -456,6 +564,14 @@ DECISIONES (en orden de resolución sugerido)
     ese activo se ENMASCARA y el peso se arrastra (ver la interacción con D2).
     No se penaliza un intento imposible: se impide. Una restricción se cumple
     siempre; una penalización solo en promedio y si entrenó bien.
+    >> ENMENDADA EL 2026-11-05 (en el espíritu de la decisión, no en contra):
+       el recargo por is_stale nunca se calibró (valía 0.0 en todas las
+       corridas). Lo reemplaza el TOPE DE PARTICIPACIÓN sobre el monto
+       negociado real del día (Bloomberg, calza 1.00 con el Informe BVL): un
+       día SIN negociación no admite orden —"si nadie quiere jugar, no
+       juega", ahora medido con el volumen y no con un precio repetido—, y un
+       día con poca negociación admite poco. La máscara de is_no_trade sigue
+       igual. Ver resultados_entorno_OE1.txt §8.4.
     is_stale (precio repetido, no cero cotización) NO se prohíbe: entra como
     recargo sobre c_i. Medido en docs/ejecutabilidad_y_costos_OE1.txt: el proxy
     1−is_stale subestima la ejecutabilidad entre 23 y 34 pp contra la
@@ -478,6 +594,12 @@ DECISIONES (en orden de resolución sugerido)
     cero mientras la tasa de referencia no lo hace, el entorno castiga
     estructuralmente al agente por defenderse y sesga la política a estar
     siempre invertido. La misma rf se usa como sustraendo en Sharpe/Sortino.
+    >> IMPLEMENTACIÓN CORREGIDA EL 2026-10-29 (la decisión no cambia). "/365"
+       es la tasa POR DÍA CALENDARIO, pero el entorno la cobraba una vez por
+       paso HÁBIL: de viernes a lunes, un día en vez de tres. La caja rendía
+       2.65% anual en vez de 3.88% (2013-2025), justo el castigo a defenderse
+       que esta decisión quería evitar. Ahora devenga por días calendario
+       (`PanelData.rf_paso`). Ver resultados_entorno_OE1.txt §8.3.
     MATIZ AL ESPECIALISTA: dijo "ponerla a largo plazo", que sugiere depósito a
     plazo. Un depósito a plazo no es líquido a diario y choca con un agente que
     puede rebalancear. Se remunera la caja a la tasa de referencia diaria
@@ -2464,7 +2586,15 @@ Se registra para que no vuelva a pasar lo de "decidido y no implementado".
     seguidos.
 
 
-[ ] D24. CONDICIÓN INICIAL DEL EPISODIO — ABIERTA. Salió al graficar la
+[X] D24. CONDICIÓN INICIAL DEL EPISODIO — CERRADA (2026-11-05, decisión del
+    autor): la EVALUACIÓN arranca invertida en 1/N sin cobrar la entrada, en
+    todos los brazos; el ENTRENAMIENTO arranca en una cartera aleatoria
+    (Dirichlet(1) sobre activos + caja); 100% en caja queda de sensibilidad.
+    Se eligió la opción (ii) de abajo. Es ENMIENDA de D2 en lo que toca al
+    estado inicial (la acción relativa no cambia). Ver
+    resultados_entorno_OE1.txt §8.5.
+    TEXTO ORIGINAL (se conserva):
+    CONDICIÓN INICIAL DEL EPISODIO — ABIERTA. Salió al graficar la
     trayectoria, no al mirar la media, y matiza la lectura de D21.
 
     EL PORTAFOLIO ARRANCA 100% EN CAJA, y con la acción relativa el agente
@@ -2845,6 +2975,8 @@ Se registra para que no vuelva a pasar lo de "decidido y no implementado".
          macro entra por ser plausible: pasa por `probe_macro_exposicion.py`
          sobre el universo vigente, que es el mismo filtro que ELIMINÓ al oro
          (0 de 7 activos) y RECHAZÓ al estaño.
+      [2026-10-09: re-medido con R4 consolidado: interacción −1.3pp de retorno
+       y −1.09 de Sharpe; la conclusión "se estorban" se mantiene. §7.13.]
       3. §7.13 midió que los canales SE ESTORBAN (interacción −3.9pp de retorno
          y −0.86 de Sharpe). Sumar dimensiones tiene costo demostrado, no solo
          beneficio hipotético.

@@ -225,6 +225,7 @@ def _known_date(
     q: int,
     filing_dates: dict[tuple[int, int], date] | None = None,
     lags: dict[int, int] | None = None,
+    pisos: dict[tuple[int, int], date] | None = None,
 ) -> tuple[date, bool]:
     """Fecha en que el mercado conoció el EEFF del trimestre, y si es REAL.
 
@@ -239,13 +240,22 @@ def _known_date(
     significa cosas distintas en train (32.5% real) y en test (85.2% real). Sin
     la bandera ese cambio de régimen es invisible para el panel y para la
     ablación de R8. Ver riesgos §3(a) y D20.
+
+    `pisos`: fecha real de OTRO hecho que acota por abajo al fallback. Se usa en
+    los consolidados con la fecha del INDIVIDUAL: el consolidado nunca se
+    divulga antes (mismo día en ALICORC1, +12-14 d en MINSURI1/LUSURC1, +9-19 d
+    en INRETC1), así que si el hecho consolidado no aparece y el lag cae antes
+    que el individual, el lag es look-ahead. Caso medido: LUSURC1 2020Q1, lag
+    25-may-2020 contra el individual del 01-ago-2020 (prórroga por la pandemia).
     """
     if filing_dates:
         real = filing_dates.get((year, q))
         if real is not None:
             return real, True
     lag = (lags or _FILING_LAG_DAYS)[q]
-    return _period_end(year, q) + timedelta(days=lag), False
+    fallback = _period_end(year, q) + timedelta(days=lag)
+    piso = (pisos or {}).get((year, q))
+    return (max(fallback, piso) if piso else fallback), False
 
 
 def _bvl_fetch_hechos(
@@ -391,11 +401,12 @@ def _normalize_op_rows(
     rows: list[dict],
     filing_dates: dict[tuple[int, int], date] | None = None,
     lags: dict[int, int] | None = None,
+    pisos: dict[tuple[int, int], date] | None = None,
 ) -> list[dict]:
     """Convierte filas crudas de una operación al formato FUNDAMENTALS_SCHEMA."""
     prefix, monto_map = _SMV_OPS[op_name]
     period_dt = _period_end(year, q)
-    known_dt, known_real = _known_date(year, q, filing_dates, lags)
+    known_dt, known_real = _known_date(year, q, filing_dates, lags, pisos)
     period_str = period_dt.isoformat()
     known_str = known_dt.isoformat()
 
@@ -434,10 +445,11 @@ def _normalize_info_rows(
     rows: list[dict],
     filing_dates: dict[tuple[int, int], date] | None = None,
     lags: dict[int, int] | None = None,
+    pisos: dict[tuple[int, int], date] | None = None,
 ) -> list[dict]:
     """Convierte filas de obtener_InfoFinanciera al formato FUNDAMENTALS_SCHEMA."""
     period_str = _period_end(year, q).isoformat()
-    known_dt, known_real = _known_date(year, q, filing_dates, lags)
+    known_dt, known_real = _known_date(year, q, filing_dates, lags, pisos)
     known_str = known_dt.isoformat()
     currency_map = {"Soles": "PEN", "D lares": "USD", "Dólares": "USD",
                     "Dolares": "USD", "USD": "USD", "PEN": "PEN"}
@@ -523,6 +535,12 @@ def fetch_smv(
         print(f"[SMV] {asset.bvl}: known_date real (BVL, hecho tipo {tipo}) en "
               f"{n_real}/{len(periods)} periodos.")
 
+    # Consolidado: la fecha real del INDIVIDUAL es piso del fallback (ver
+    # _known_date). No sustituye a la del consolidado, que es la que vale.
+    pisos: dict[tuple[int, int], date] = {}
+    if use_filing_dates and tipo == "C":
+        pisos = _load_filing_dates(asset, start, end, cache_dir, tipo="I")
+
     # Lag de fallback CALIBRADO CON ESTE EMISOR (2026-09-01). El global 40/60 se
     # calibró contra un universo que ya no es el vigente y le mete ~5-7d de
     # look-ahead a InRetail en todo el tramo sin fecha real. Ver _calibra_lag.
@@ -545,7 +563,7 @@ def fetch_smv(
             raw = _fetch_period_raw(client, "obtener_InfoFinanciera", year, q, tipo, cache_dir)
             asset_rows = _rows_for_asset(raw, asset)
             if asset_rows:
-                all_rows.extend(_normalize_info_rows(asset, year, q, asset_rows, filing_dates, lags))
+                all_rows.extend(_normalize_info_rows(asset, year, q, asset_rows, filing_dates, lags, pisos))
             else:
                 print(f"[SMV] {asset.bvl} {period_label}: no encontrado en InfoFinanciera")
         except Exception as exc:
@@ -557,7 +575,7 @@ def fetch_smv(
                 raw = _fetch_period_raw(client, op_name, year, q, tipo, cache_dir)
                 asset_rows = _rows_for_asset(raw, asset)
                 if asset_rows:
-                    all_rows.extend(_normalize_op_rows(asset, op_name, year, q, asset_rows, filing_dates, lags))
+                    all_rows.extend(_normalize_op_rows(asset, op_name, year, q, asset_rows, filing_dates, lags, pisos))
             except Exception as exc:
                 print(f"[SMV] {asset.bvl} {period_label} {op_name}: {exc}")
 
@@ -630,6 +648,26 @@ def _detect_net_income_ytd_account(df: pd.DataFrame) -> str | None:
         if not cand.empty:
             return "GP_" + cand["account"].iloc[0][len("GP_Q_"):]
     return None
+
+
+# Estados CONSOLIDADOS (smv_tipo "C"): la utilidad neta 2D07ST y la
+# INFO_UtilidadNeta son del GRUPO, minoritarios incluidos. Lo que le corresponde
+# al accionista de la empresa listada es la atribuible a la controladora
+# (2D0802) sobre el patrimonio atribuible (1D0710). Esas dos líneas solo existen
+# en el consolidado, así que su presencia ES la marca de tipo "C": en el
+# individual el método de participación ya deja la utilidad en el monto
+# atribuible (medido: 2015-2025 coincide al peso en los 5 no bancos).
+_NI_ATTRIB_YTD = "GP_2D0802"
+_NI_ATTRIB_Q = "GP_Q_2D0802"
+_EQUITY_ATTRIB = "BG_1D0710"
+
+
+def _attributable_ytd(df: pd.DataFrame, total_ytd: pd.Series) -> pd.Series:
+    """Utilidad YTD atribuible a la controladora donde exista; la total donde no
+    (individual, o consolidados antiguos sin la apertura)."""
+    attrib = (df[df["account"] == _NI_ATTRIB_YTD]
+              .drop_duplicates("period").set_index("period")["value"])
+    return attrib.reindex(total_ytd.index).combine_first(total_ytd)
 
 
 def _ytd_to_quarterly(ytd: pd.Series) -> pd.Series:
@@ -776,8 +814,17 @@ def compute_shares_earnings(fundamentals: pd.DataFrame, asset) -> pd.DataFrame:
     else:
         cap = (df[df["account"].isin(_CAPITAL_ACCTS)]
                .set_index("period")["value"].reindex(periods))
-        tes = (df[df["account"].isin(_TREASURY_ACCTS)]
-               .set_index("period")["value"].abs().reindex(periods).fillna(0.0))
+        tes_raw = (df[df["account"].isin(_TREASURY_ACCTS)]
+                   .set_index("period")["value"].reindex(periods))
+        # Las acciones propias en cartera restan patrimonio: la SMV las reporta
+        # con signo NEGATIVO. Un valor positivo es otra línea mal rotulada
+        # (CPACASC1 consolidado 2012Q1-Q2: +559,585, más que el capital entero, lo
+        # que dejaba el conteo en -28 millones de acciones) y se descarta.
+        mal_signo = tes_raw > 0
+        if mal_signo.any():
+            print(f"[shares] {asset.bvl}: tesorería con signo positivo en "
+                  f"{list(tes_raw.index[mal_signo])} -> se descarta (no es tesorería).")
+        tes = tes_raw.where(~mal_signo).abs().fillna(0.0)
         nominal = float(asset.nominal_value)
         # CONTEO HÍBRIDO: emitidas y LISTADAS (BVL, fecha correcta de
         # reconocimiento) − en cartera (tesorería SMV, ajuste correcto). El
@@ -793,10 +840,13 @@ def compute_shares_earnings(fundamentals: pd.DataFrame, asset) -> pd.DataFrame:
                   f"sin conteo oficial de la BVL -> capital del balance SMV.")
 
     # --- utilidad neta TTM (de la serie YTD, robusta a reexpresiones) ---
+    # Consolidado: la ATRIBUIBLE a la controladora (2D0802), no la total 2D07ST
+    # que incluye a los minoritarios (MINSURI1 2023: 395,303 vs 571,013 miles US$,
+    # +44%). Ver _attributable_ytd.
     ni_acct = _detect_net_income_ytd_account(df)
     if ni_acct is not None:
         ni_rows = df[df["account"] == ni_acct]
-        ytd = ni_rows.set_index("period")["value"]
+        ytd = _attributable_ytd(df, ni_rows.set_index("period")["value"])
         cur_all = ni_rows.set_index("period")["currency"]
         q_iso = _ytd_to_quarterly(ytd)                         # miles, moneda del EEFF
         # Conversión a PEN por TRIMESTRE (a su propio TC): solo para reportantes-USD
@@ -841,6 +891,9 @@ def compute_ratios(
 
     Ratios implementados (todos derivables directamente de INFO_* del SMV):
       roe         = UtilidadNeta / PatrimonioTotal
+                    (consolidado: atribuible a la controladora 2D0802 / 1D0710;
+                    margen, ROA y deuda quedan con las cifras del GRUPO, que es
+                    lo que suman los ingresos y activos consolidados)
       roa         = UtilidadNeta / ActivoTotal
       net_margin  = UtilidadNeta / TotalIngreso
       debt_equity = PasivoTotal  / PatrimonioTotal
@@ -892,7 +945,22 @@ def compute_ratios(
         result = num / den.replace(0, float("nan"))
         return result
 
-    wide["roe"]         = _safe_div(wide["utilidad_neta"], wide["patrimonio"])
+    # Atribuibles (solo en consolidados). Se unen por (ticker, period) y no por
+    # la clave del pivot: la moneda viene de otra operación del WSDL y un rótulo
+    # esporádico distinto (ALICORC1 2025Q4) partiría la fila en dos.
+    attrib = (fundamentals[fundamentals["account"].isin([_NI_ATTRIB_Q, _EQUITY_ATTRIB])]
+              .pivot_table(index=["ticker", "period"], columns="account",
+                           values="value", aggfunc="first"))
+    wide = wide.merge(
+        attrib.reindex(columns=[_NI_ATTRIB_Q, _EQUITY_ATTRIB]).reset_index(),
+        on=["ticker", "period"], how="left")
+    # El par atribuible solo si están las DOS líneas; si no, el par total. Nunca
+    # mezclado (utilidad atribuible sobre patrimonio con minoritarios).
+    par = wide[_NI_ATTRIB_Q].notna() & wide[_EQUITY_ATTRIB].notna()
+    roe_num = wide[_NI_ATTRIB_Q].where(par, wide["utilidad_neta"])
+    roe_den = wide[_EQUITY_ATTRIB].where(par, wide["patrimonio"])
+
+    wide["roe"]         = _safe_div(roe_num, roe_den)
     wide["roa"]         = _safe_div(wide["utilidad_neta"], wide["activo"])
     wide["net_margin"]  = _safe_div(wide["utilidad_neta"], wide["ingreso"])
     wide["debt_equity"] = _safe_div(wide["pasivo"],        wide["patrimonio"])

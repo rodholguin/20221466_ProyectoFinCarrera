@@ -65,7 +65,7 @@ from src.env import (  # noqa: E402
     RandomDirichlet,
     load_panel,
     run_policy,
-    snapshot_cost_model,
+    costos_observados,
 )
 from src.env.folds import walk_forward  # noqa: E402
 from src.env.rewards import make_reward  # noqa: E402
@@ -273,7 +273,7 @@ def main() -> None:
     mults = tuple(float(x) for x in args.mults.split(",")) if args.mults else None
 
     panel = load_panel(view="solo_mercado", warmup=WARMUP)
-    costos = snapshot_cost_model(panel.tickers)
+    costos = costos_observados(panel)
     primer_util = max(panel.features.warmup + 1, panel.first_tradable_index)
     p = walk_forward(panel.n_steps, n_folds=args.folds, start=primer_util)[args.fold]
 

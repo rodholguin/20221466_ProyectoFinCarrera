@@ -216,7 +216,7 @@ LA CORRIDA — QUÉ FALTA, EN ORDEN
 ========================================================================
 INFRAESTRUCTURA (queda montada, no rehacer)
 ========================================================================
-Servidor xwing (rholguin@172.19.4.64 vía salto bridge@200.16.4.64):
+Servidor xwing (<usuario>@<servidor-interno> vía salto <usuario-salto>@<host-salto>):
   - 2x RTX 3080 (10 GB c/u), 16 cores, 125 GB RAM. Driver 535 -> Ollama corre
     en VULKAN, no CUDA (pide 550+). Igual da 0.8-1.6 s/artículo.
   - Ollama 0.32.14 instalado en ~/ollama (espacio de usuario, sin root).
@@ -226,7 +226,7 @@ Servidor xwing (rholguin@172.19.4.64 vía salto bridge@200.16.4.64):
   - Túnel para usarlo desde local:
       ssh -f -N -L 11435:127.0.0.1:11434 -o ServerAliveInterval=20 phantom
       $env:OLLAMA_URL="http://127.0.0.1:11435"
-OJO: el otro servidor (bridge@200.16.4.64, hostname "phantom") tiene 3x RTX
+OJO: el otro servidor (<usuario-salto>@<host-salto>, hostname "phantom") tiene 3x RTX
 A5500 de 24 GB — mucho mejor hardware — pero es CUENTA COMPARTIDA. No usarlo
 para trabajos largos.
 

@@ -36,11 +36,17 @@ cells.append(md_cell(
     "|--------|---------|--------|--------|\n"
     "| CREDITC1 | Banco de Crédito del Perú | Banca (plan de cuentas SBS) | PEN |\n"
     "| ALICORC1 | Alicorp | Alimentos | PEN (2025-Q4 en USD) |\n"
-    "| INRETC1 | InRetail Peru Corp | Retail / farmacias (EEFF consolidados) | PEN |\n"
+    "| INRETC1 | InRetail Peru Corp | Retail / farmacias | PEN |\n"
     "| CPACASC1 | Cementos Pacasmayo | Construcción | PEN |\n"
     "| FERREYC1 | Ferreycorp | Bienes de capital | PEN |\n"
     "| LUSURC1 | Luz del Sur | Electricidad | PEN |\n"
     "| MINSURI1 | Minsur | Minería (estaño/cobre) | USD desde 2012 |\n\n"
+    "> **Estados CONSOLIDADOS en todos los activos salvo el BCP** (regla del "
+    "2026-10-09). El estado individual de una matriz suma la utilidad de sus "
+    "subsidiarias (método de participación) pero no sus ingresos ni sus activos, así "
+    "que margen, ROA y endeudamiento salen distorsionados: Ferreycorp, holding desde "
+    "2012, llegaba a un margen neto de 713% en 2023. El BCP queda individual "
+    "(taxonomía SBS, sin la apertura de la utilidad atribuible).\n\n"
     "> **Nota metodológica:** Los montos están en **miles** de la unidad monetaria "
     "(`value` = miles de PEN o miles de USD). `known_date` es la fecha de publicación "
     "efectiva: la fecha REAL del hecho de importancia en la BVL cuando existe y, si no, "
@@ -85,7 +91,7 @@ cells.append(code_cell(
     "COLORES = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2']\n"
     "COLOR_MAP = dict(zip(TICKERS, COLORES))\n"
     "# Advertencias de datos que se muestran en los títulos (ver la nota de la sección 5).\n"
-    "NOTAS = {'FERREYC1': ' [individual de holding desde 2012]'}\n\n"
+    "NOTAS = {'CREDITC1': ' [individual]'}\n\n"
     "sns.set_theme(style='whitegrid', palette='tab10')\n"
     "plt.rcParams.update({'figure.dpi': 110, 'axes.titlesize': 11})",
     "cell-01",
@@ -219,7 +225,9 @@ cells.append(md_cell(
     "Los valores son **acumulados del ejercicio (YTD)** tal como los reporta la SMV, "
     "por lo que Q4 (diciembre) es el valor anual completo y Q1 es el más pequeño.\n\n"
     "> Minsur reporta en **USD** desde 2012 (pérdidas en 2015 y 2017). InRetail "
-    "reporta desde su salida a bolsa (2012-Q3) y se usan sus estados CONSOLIDADOS.",
+    "reporta desde su salida a bolsa (2012-Q3). La utilidad graficada es la del GRUPO "
+    "(con minoritarios); la que entra al EPS y al P/E es la atribuible a la "
+    "controladora (ver sección 5).",
     "cell-08",
 ))
 
@@ -283,14 +291,16 @@ cells.append(md_cell(
     "| **Margen Neto** | Utilidad Neta / Total Ingresos | Eficiencia de conversión ventas→utilidad |\n"
     "| **D/E** | Pasivo / Patrimonio | Apalancamiento financiero |\n"
     "| **Debt Ratio** | Pasivo / Activo | Proporción de activos financiados con deuda |\n\n"
-    "> **ADVERTENCIA DE DATOS (detectada el 2026-10-06): FERREYCORP.** Desde 2012 "
-    "Ferreycorp S.A.A. es un HOLDING (Ferreyros pasó a ser subsidiaria) y R4 usa su "
-    "estado INDIVIDUAL, que solo refleja la matriz: ingresos de apenas 1-6% de los "
-    "consolidados y pasivo/activo de 0.05 contra 0.59 consolidado (2023-Q4). La utilidad "
-    "neta coincide (método de participación), así que ROE, EPS y P/E son válidos, pero "
-    "**margen neto, ROA, D/E y debt ratio de FERREYC1 posteriores a 2011 no son "
-    "comparables**. Es el mismo caso que InRetail, que ya usa el consolidado. "
-    "Pendiente de decisión: pasar FERREYC1 a `smv_tipo: C`.",
+    "> **Estados consolidados: qué utilidad entra a cada ratio.** La utilidad neta "
+    "consolidada incluye la parte de los accionistas minoritarios de las "
+    "subsidiarias. ROE (y EPS/P/E, sección 5b) usan la utilidad **atribuible a la "
+    "controladora** sobre el patrimonio atribuible: es lo que le corresponde al "
+    "accionista de la acción listada (Minsur 2023: 395 contra 571 millones US$ del "
+    "grupo, por el 40% minoritario de Marcobre). Margen, ROA y endeudamiento usan las "
+    "cifras del GRUPO, porque ingresos y activos consolidados también son del grupo.\n\n"
+    "> *Corrección del 2026-10-09:* hasta esa fecha R4 usaba el estado individual en "
+    "todos los activos salvo InRetail; Ferreycorp (holding) tenía margen y ROA no "
+    "comparables y Minsur, Alicorp y Pacasmayo un margen inflado 1.5-2x.",
     "cell-10",
 ))
 
@@ -449,11 +459,7 @@ cells.append(code_cell(
     "            txt = f'{real:.1%}' + ('\\n(recortado)' if real != val else '')\n"
     "            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),\n"
     "                    txt, ha='center', va='bottom' if val >= 0 else 'top', fontsize=8)\n"
-    "    ax.set_xticklabels([NOMBRES[t] + ('*' if t in NOTAS and col != 'roe' else '') for t in TICKERS],\n"
-    "                       rotation=35, ha='right', fontsize=9)\n"
     "    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f'{v:.0%}'))\n\n"
-    "fig.text(0.01, -0.04, '* Ferreycorp: estado individual de holding; margen, ROA y debt ratio '\n"
-    "         'no comparables (ver la advertencia de la sección 5).', fontsize=9)\n"
     "plt.show()",
     "cell-14",
 ))

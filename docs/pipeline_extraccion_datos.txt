@@ -384,8 +384,12 @@ Parámetros RPJ confirmados:
   SAGAC1    → 014313   (Saga Falabella S.A.)
   CORAREC1  → CI0003   (Corporación Aceros Arequipa S.A.)
 
-Tipo de EEFF usado: "I" (Individual). El tipo Consolidado ("C") también está
-disponible en el WSDL pero no se utiliza en el pipeline actual.
+Tipo de EEFF usado: "C" (Consolidado) en todos los activos salvo el BCP,
+que queda "I" (taxonomía SBS). Se fija por activo en config.yaml (`smv_tipo`).
+Historia: hasta jul-2026 todo era "I"; InRetail pasó a "C" en jul-2026 y el
+resto de los no bancos el 2026-10-09 (ver riesgos_transversales_datos.txt,
+FUNDAMENTALES R4). En el consolidado, EPS/P/E/ROE usan la utilidad ATRIBUIBLE
+a la controladora (2D0802) y el patrimonio atribuible (1D0710).
 
 3.3. Cobertura temporal de fundamentales
 ------------------------------------------------------------------------

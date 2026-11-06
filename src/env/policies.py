@@ -225,7 +225,9 @@ class Markowitz(Policy):
         if self.objetivo == "min_var":
             w_act = _min_var_long_only(cov)
         else:
-            rf = float(np.mean(env.panel.rf_daily[lo + 1 : env.t]))
+            # rets[k] va del cierre lo+k al lo+k+1: lo que la caja rindió en
+            # ESE mismo tramo es rf_paso[lo+k] (por días calendario, D9).
+            rf = float(np.mean(env.panel.rf_paso[lo : env.t - 1]))
             w_act = _tangencia_long_only(rets.mean(axis=0) - rf, cov)
 
         if w_act is None:

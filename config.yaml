@@ -27,6 +27,9 @@ universe:
     yahoo: "CREDITC1.LM"
     smv: "BANCO DE CREDITO DEL PERU"
     smv_rpj: "B80005"
+    # smv_tipo: individual A PROPÓSITO (2026-10-09). Único activo que no pasa a
+    # consolidado: taxonomía SBS (2F/1F) sin la apertura atribuible 2D0802/1D0710.
+    # Ingreso I/C ~0.82 (Mibanco desde 2014): limitación declarada en riesgos R4.
     bvl_company_code: "12000"
     nominal_value: 1.0         # cuentas capital banco SBS 1F3301/1F3314
     isin: "PEP120001008"
@@ -41,6 +44,10 @@ universe:
     yahoo: null
     smv: "MINSUR S.A."
     smv_rpj: "A20032"          # reporta en USD (Moneda=Dólares)
+    smv_tipo: "C"              # CONSOLIDADO (2026-10-09): el individual omite Mina Justa
+                               # y Taboca (ingreso I/C 0.37 en 2023 -> margen 50.6% vs 25.2%).
+                               # EPS/ROE con la utilidad ATRIBUIBLE (2D0802): la total
+                               # incluye el 40% minoritario de Marcobre (+44% en 2023).
     bvl_company_code: "62200"
     nominal_value: 1.0         # S/ por acción (BVL). SMV en USD -> se usa el override
     shares_outstanding_override: 2883002520  # TOTAL económico = 3 × 961,000,840
@@ -61,6 +68,8 @@ universe:
     yahoo: "ALICORC1.LM"
     smv: "ALICORP S.A.A."
     smv_rpj: "B30006"
+    smv_tipo: "C"              # CONSOLIDADO (2026-10-09): ingreso I/C 0.47-0.60 (subsidiarias
+                               # del exterior); margen individual ~2x inflado.
     bvl_company_code: "21400"  # 34 dividendos en S/.
     nominal_value: 1.0         # Tesorería 1D0711 material (hasta 10% 2022-2023)
     isin: null
@@ -109,6 +118,8 @@ universe:
     yahoo: null
     smv: "CEMENTOS PACASMAYO S.A.A."
     smv_rpj: "CD0005"
+    smv_tipo: "C"              # CONSOLIDADO (2026-10-09): vende vía su distribuidora;
+                               # ingreso I/C ~0.65, margen individual ~1.5x inflado.
     bvl_company_code: "23950"
     nominal_value: 1.0
     isin: "PEP239501005"
@@ -122,6 +133,8 @@ universe:
     yahoo: null
     smv: "FERREYCORP S.A.A."
     smv_rpj: "B60001"
+    smv_tipo: "C"              # CONSOLIDADO (2026-10-09): holding desde 2012, su individual
+                               # es solo la matriz (ingreso I/C 0.01; margen 2023 713% vs 6.2%).
     bvl_company_code: "73600"
     nominal_value: 1.0
     isin: "PEP736001004"
@@ -135,6 +148,8 @@ universe:
     yahoo: null
     smv: "LUZ DEL SUR S.A.A."
     smv_rpj: "B40008"
+    smv_tipo: "C"              # CONSOLIDADO (2026-10-09): I ~ C (ingreso I/C 0.91-1.00), se pasa
+                               # por la regla única "consolidado salvo el banco".
     bvl_company_code: "70252"
     nominal_value: 0.68
     isin: "PEP702521001"

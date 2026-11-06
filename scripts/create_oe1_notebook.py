@@ -304,7 +304,7 @@ p = load_panel(view="solo_mercado", warmup=250)
 i0 = PANEL["primer_indice_operable"]
 fechas = pd.to_datetime(p.dates[i0:])
 precios = p.prices[i0:] / p.prices[i0]
-caja = np.cumprod(1.0 + p.rf_daily[i0:])
+caja = np.concatenate([[1.0], np.cumprod(1.0 + p.rf_paso[i0:-1])])  # D9: por día calendario
 
 fig, ax = plt.subplots(figsize=(11, 4.8))
 for j, t in enumerate(p.tickers):

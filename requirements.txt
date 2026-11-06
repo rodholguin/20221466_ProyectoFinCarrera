@@ -15,3 +15,13 @@ mediacloud>=4.2        # noticias (Media Cloud API v4)
 gymnasium>=0.29        # API del entorno
 stable-baselines3>=2.3 # PPO (primario) y SAC (robustez) — D3
 torch>=2.2             # backend de SB3; 2.12.1+cpu funciona en 3.14
+scipy>=1.11            # Markowitz tangente/min-var (src/env/policies.py)
+scikit-learn>=1.3      # solo para contrastar el Ledoit-Wolf propio en tests/test_markowitz.py
+
+# Fuentes y análisis (no estaban declarados; descubiertos al armar la laptop nueva 2026-10-29)
+pdfplumber>=0.10       # Informe Bursátil Mensual BVL (src/market/bvl_infmen.py)
+openpyxl>=3.1          # muestras de validación humana en .xlsx
+matplotlib>=3.8        # notebooks y figuras de entregables
+seaborn>=0.13          # notebooks
+python-docx>=1.1       # scripts/gen_informe_especialista.py
+jupyter>=1.0           # notebooks (trae IPython)

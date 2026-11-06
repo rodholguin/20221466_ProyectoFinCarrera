@@ -12,6 +12,7 @@ NaN silencioso dentro de la recompensa.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 
 import numpy as np
@@ -38,12 +39,36 @@ class PanelData:
     prices: np.ndarray  # (T, n) valuación total-return
     no_trade: np.ndarray  # (T, n) bool — restricción dura (D8)
     stale: np.ndarray  # (T, n) bool — recargo de costo, no prohibición (D8)
-    rf_daily: np.ndarray  # (T,) tasa libre de riesgo diaria (D9)
+    rf_daily: np.ndarray  # (T,) tasa libre de riesgo POR DÍA CALENDARIO (D9); ver rf_paso
     features: FeatureTensor
     #: Primer índice en el que TODOS los activos ya cotizan. Antes de esa fecha
     #: el universo no está completo (InRetail sale a bolsa en 2012-10) y el
     #: entorno no puede arrancar: no se puede tener lo que no está listado.
     first_tradable_index: int = 0
+
+    @cached_property
+    def dias_al_siguiente(self) -> np.ndarray:
+        """(T,) días CALENDARIO entre cada cierre y el siguiente (el último: 1).
+
+        Viernes -> lunes son 3. La caja devenga por día calendario, no por paso.
+        """
+        d = np.asarray(self.dates).astype("datetime64[D]")
+        dias = np.ones(len(d), dtype=float)
+        dias[:-1] = np.diff(d).astype(int)
+        return dias
+
+    @property
+    def rf_paso(self) -> np.ndarray:
+        """(T,) lo que rinde la caja de un cierre al siguiente (D9).
+
+        D9: "la tasa del banco central dividida entre 365" es la tasa POR DÍA
+        CALENDARIO, así que el paso cobra tantos días como transcurren: de
+        viernes a lunes, tres. Hasta el 2026-10-29 se cobraba un solo día por
+        paso hábil y la caja rendía 252/365 de la tasa (2.65% anual en vez de
+        3.88% en 2013-2025): castigaba justo lo que D9 quería no castigar.
+        Interés simple dentro del paso; entre pasos, compuesto.
+        """
+        return self.rf_daily * self.dias_al_siguiente
 
     @property
     def n_steps(self) -> int:
@@ -61,6 +86,7 @@ def load_panel(
     start: str | None = None,
     end: str | None = None,
     warmup: int = 250,
+    liquidez: str | Path | None = "bloomberg",
 ) -> PanelData:
     """Lee el panel de R6 y lo convierte en arrays para el entorno.
 
@@ -71,6 +97,9 @@ def load_panel(
         start, end: recorte temporal, inclusivo. Es como se arman los pliegues
             del walk-forward de D10.
         warmup: días de calentamiento de la normalización causal (D6).
+        liquidez: de dónde salen las columnas de liquidez de la base (`liq_*`):
+            "bloomberg" (el volcado de scripts/gen_liquidez_bloomberg.py), otra
+            ruta, o None para no agregarlas (solo diagnóstico: la base cambia).
     """
     path = Path(path)
     if not path.exists():
@@ -151,6 +180,8 @@ def load_panel(
     # D9: "la tasa del banco central, que cambia cada mes, dividida entre 365".
     rf_daily = rf_annual_pct / 100.0 / 365.0
 
+    if liquidez is not None:
+        df = _agrega_liquidez(df, liquidez)
     features = build_features(df, tickers=tickers, view=view, warmup=warmup)
     if features.values.shape[0] != len(dates):
         raise ValueError("el tensor de features no quedó alineado con el calendario")
@@ -165,3 +196,47 @@ def load_panel(
         features=features,
         first_tradable_index=first_tradable,
     )
+
+
+def _agrega_liquidez(df: pd.DataFrame, fuente: str | Path) -> pd.DataFrame:
+    """Agrega a la base lo que un operador ve en pantalla antes de decidir (2026-11-05).
+
+    liq_spread     spread cotizado promedio del día, ida y vuelta, en pbs.
+    liq_monto_rel  log1p(monto del día) − log1p(monto medio de los 21 días
+                   PREVIOS): cuánto más (o menos) líquido estuvo que de costumbre.
+
+    Ambas son del MISMO día de la fila. El agente observa la fila del cierre
+    anterior a la ejecución (D13), así que ve lo que se sabía al decidir y nunca
+    el spread o el volumen del día en que ejecuta. El costo y el tope sí usan el
+    día de ejecución: eso lo impone el entorno, no lo ve el agente.
+    """
+    from .costs import LIQUIDEZ_BLOOMBERG, VENTANA_ADV, _causal_rodante
+
+    ruta = LIQUIDEZ_BLOOMBERG if str(fuente) == "bloomberg" else Path(fuente)
+    if not Path(ruta).exists():
+        raise FileNotFoundError(
+            f"no existe {ruta}: la base de todas las vistas incluye liquidez. "
+            "Corre scripts/gen_liquidez_bloomberg.py (o load_panel(liquidez=None) "
+            "solo para diagnóstico)."
+        )
+    liq = pd.read_parquet(ruta, columns=["date", "ticker", "spread_bps", "monto_pen"])
+    fechas = np.sort(df["date"].unique())
+    tickers = sorted(df["ticker"].unique())
+    spread = liq.pivot(index="date", columns="ticker", values="spread_bps")
+    spread = spread.reindex(spread.index.union(fechas)).ffill().reindex(fechas)
+    monto = (liq.pivot(index="date", columns="ticker", values="monto_pen")
+             .reindex(fechas).fillna(0.0))
+    faltan = [t for t in tickers if t not in spread.columns]
+    if faltan:
+        raise KeyError(f"sin liquidez de Bloomberg para {faltan}")
+    spread, monto = spread[tickers], monto[tickers]
+    adv = np.nan_to_num(_causal_rodante(monto.to_numpy(), VENTANA_ADV, "mean"), nan=0.0)
+    rel = np.log1p(monto.to_numpy()) - np.log1p(adv)
+    largo = pd.DataFrame({
+        "date": np.repeat(fechas, len(tickers)),
+        "ticker": np.tile(tickers, len(fechas)),
+        "liq_spread": spread.to_numpy().reshape(-1),
+        "liq_monto_rel": rel.reshape(-1),
+    })
+    return df.merge(largo, on=["date", "ticker"], how="left", validate="one_to_one")
+
