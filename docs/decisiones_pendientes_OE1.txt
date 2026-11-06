@@ -203,7 +203,19 @@ DECISIONES (en orden de resolución sugerido)
                     (σ 0.15 → 0.88x · σ 0.17 → 1.08x)
               SAC   ent_coef 0.03 peaje 5.90 ± 2.17 (3 semillas) = 0.98x
                     (0.02 → 0.60x · 0.035 → 1.09x · 0.05 → 1.68x)
-            FIJADOS: `--ddpg-sigma 0.16` y `--sac-ent-coef 0.03`. La medición
+            >> RECALIBRADA EL 2026-11-05 con el simulador 2026-11-05.2 (costos
+               corregidos, spread observado, tope de liquidez, arranque
+               aleatorio en train, liquidez en la observación). MISMA regla,
+               escrita antes de medir; la referencia PPO log_std=−2 en modo
+               delta baja a 4.03 rot/año.
+                 DDPG  σ = 0.17   peaje 4.10 ± 0.73 (5 semillas) = 1.02x
+                       (σ 0.16 → 0.91x · σ 0.18 → 1.11x)
+                 SAC   ent_coef 0.04  peaje 4.33 ± 1.30 (3 semillas) = 1.07x
+                       (0.035 → 0.72x · 0.05 → 1.18x)
+               FIJADOS DESDE ESTA FECHA: `--ddpg-sigma 0.17` y
+               `--sac-ent-coef 0.04`. PPO sigue en log_std=−2 (D22). Artefactos
+               en data/interim/artefactos_oe1/cal_20261105/.
+            FIJADOS (09-oct, simulador viejo): `--ddpg-sigma 0.16` y `--sac-ent-coef 0.03`. La medición
             de SAC con UNA semilla no era monótona (0.05 → 1.77x, 0.07 →
             1.59x); con tres sí, y por eso se repitió. Su dispersión (±2.2) es
             mayor que la de DDPG porque en SAC el ruido lo aprende la red.

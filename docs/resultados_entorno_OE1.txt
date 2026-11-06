@@ -2169,6 +2169,45 @@ activo (el de baja liquidez opera solo por subastas).
     Los pesos entrenados son IDENTICOS con 1 u 8 hilos de torch: paralelizar
     no cambia ningun numero.
 
+------------------------------------------------------------------------
+8.6 CORRIDA PRELIMINAR CON EL SIMULADOR 2026-11-05.2 (R7 + R8, 3 semillas)
+------------------------------------------------------------------------
+QUE SE CORRIO (2026-11-05, scripts/lanza_r8.py, 12 procesos, 81.5 min):
+PPO en las 4 vistas limpias + completa, DDPG y SAC en solo_mercado y
+completa; 3 pliegues x 3 semillas x 150k pasos, recompensa DSR, accion delta
+0.05. Exploracion recalibrada por rotacion (D3): DDPG sigma 0.17, SAC
+ent_coef 0.04, PPO log_std -2. 81 corridas anotadas en D10 (registro 190 ->
+271; 47 configuraciones distintas; tramo de prueba intacto, con_test = 0).
+Artefactos (no versionados): data/interim/artefactos_oe1/r8_paralelo/.
+
+VALIDACION, mediana de 3 semillas, retorno total:
+                       p0 (2018-19)   p1 (2020-21)   p2 (2022-23)
+  comprar y mantener      +16.8%         -2.7%          -7.2%
+  1/N mensual             +12.6%         -6.0%          -7.0%
+  Markowitz               +37.0%         -8.1%         -21.6%
+  solo caja                +1.3%         -0.4%          +4.7%
+  PPO solo_mercado        +14.3%         -9.3%         -10.8%
+  PPO fundamentales       +28.4%        -18.5%          -8.4%
+  PPO completa             +6.1%        -16.1%          -9.1%
+  DDPG solo_mercado       -23.8%        -36.5%         -22.3%
+  SAC solo_mercado         -0.6%        -22.7%         -18.1%
+
+LECTURA PRELIMINAR (3 semillas = diagnostico, no resultado; D10 pide 10):
+  * NINGUN agente le gana a "comprar y mantener" en la mediana de los tres
+    pliegues. PPO rota ~2 veces al año y queda cerca de 1/N; la dispersion
+    entre semillas es grande (p0 solo_mercado: -5.0% a +25.2%).
+  * DDPG y SAC ROTAN 7-23 VECES AL AÑO y el costo realista los destruye
+    (-11% a -42%). La exploracion se calibro por el ruido en train, pero la
+    politica APRENDIDA rota mucho: es la misma patologia de D25 (el DSR no
+    ordena por costo) y vuelve a apuntar a D4 (recompensa).
+  * La caja media de los agentes cae a 1-27% (era 62% con el arranque en
+    caja): D24 hizo lo que debia.
+  * Aporte de canales en PPO (mediana de diferencias pareadas, 9 pares):
+    fundamentales +2.4pp y +0.32 de Sharpe (5/9), macro +0.1pp, sentimiento
+    -1.0pp, completa +0.4pp. Nada distinguible del ruido con 3 semillas.
+  * La caja gana el pliegue 2 y casi el 1: con costos reales y caja bien
+    remunerada, la vara de D9 es dura.
+
 
 ========================================================================
 9. QUE FALTA, Y QUE BLOQUEA QUE
