@@ -2208,6 +2208,31 @@ LECTURA PRELIMINAR (3 semillas = diagnostico, no resultado; D10 pide 10):
   * La caja gana el pliegue 2 y casi el 1: con costos reales y caja bien
     remunerada, la vara de D9 es dura.
 
+------------------------------------------------------------------------
+8.7 TAMIZ DE RECOMPENSAS (D29) REPETIDO CON EL SIMULADOR 2026-11-05.2
+------------------------------------------------------------------------
+Mismos cuatro criterios pre-registrados (T1 orden, T2 no paga ruido, T3 el
+riesgo pesa >=20%, T4 ve el peaje), mismo banco de 38 series, los TRES
+pliegues; sin entrenar, 0 al contador de D10. Artefactos en
+data/interim/artefactos_oe1/tamiz_20261105/.
+
+  recompensa   p0 (T1 T2 T3 T4)   p1           p2           "el ruido paga" en
+  dsr          NO NO si si        NO NO si si  NO NO si si  47-53% de las series
+  ddr          NO NO si NO        NO NO si NO  NO NO si NO  50-76%
+  logret       si si NO si        si si NO si  si si NO si  0%
+  mv           NO si si si        NO si si si  NO si si si  0%
+  logret_dd    NO si si si        NO si si si  NO NO si si  0-3%
+  (al lambda de referencia; el barrido fino de logret_dd cambia T1:)
+  logret_dd con lambda 0.63-0.70 x referencia: CUMPLE T1 y T3 en el
+  pliegue 0 (como el 26-sep); en los pliegues 1 y 2 NINGUN lambda los cumple
+  a la vez (ordena bien por DRAWDOWN, rho 0.60-0.97, pero no por Sharpe en
+  los años bajistas). La ventana [0.65, 0.95] que el 26-sep se habia visto en
+  el pliegue 1 NO sobrevive al simulador nuevo.
+LECTURA: el DSR PAGA POR RUIDO en la mitad de las estrategias reales —inflar
+la volatilidad le sube la recompensa—, que es exactamente el incentivo que
+explica a SAC y DDPG rotando 7-23 veces al año en §8.6. Ninguna recompensa
+pasa los cuatro criterios en los tres regimenes.
+
 
 ========================================================================
 9. QUE FALTA, Y QUE BLOQUEA QUE

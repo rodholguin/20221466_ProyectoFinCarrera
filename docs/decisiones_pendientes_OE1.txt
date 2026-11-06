@@ -32,7 +32,7 @@ ya no cabe en la cabeza.
   D1   alcance del agente                      CERRADA — portafolio
   D2   espacio de acción                       CERRADA — ENMENDADA: acción relativa
   D3   algoritmo                               ENMENDADA 09-26 — PPO primario + SAC + DDPG
-  D4   función de recompensa                   REABIERTA 09-19 — el tamiz reprueba a las 3
+  D4   función de recompensa                   PRE-REGISTRADA 11-05 — logret_dd principal, a correr 11-06
   D5   observación: ventana y recurrencia      CERRADA — ventana apilada, sin RNN
   D6   normalización causal                    CERRADA — expanding por activo
   D7   costos de transacción y slippage        CERRADA en forma — falta tarifario
@@ -390,6 +390,46 @@ DECISIONES (en orden de resolución sugerido)
     LO QUE NO CAMBIA: η sigue pre-registrada en 1/60; R_t sigue siendo neto de
     costos; los estadísticos suficientes de la recompensa que se elija siguen
     yendo al vector de observación (Markov). `logret_dd` expone DD_t por eso.
+
+    ================================================================
+    PRE-REGISTRO DEL 2026-11-05 — ANTES DE ENTRENAR NINGÚN BRAZO NUEVO
+    ================================================================
+    Escrito con el simulador 2026-11-05.2 y SIN haber corrido ninguna recompensa
+    nueva con él. Lo único visto es la corrida DSR de §8.6 y el tamiz de §8.7.
+    Decisión del autor: correrlo el 2026-11-06.
+
+    EVIDENCIA QUE LO MOTIVA: con el simulador realista, el DSR PAGA POR RUIDO en
+    47-53% de las 38 series del tamiz (§8.7) y SAC y DDPG rotan 7-23 veces al
+    año y pierden 11-42% (§8.6). PPO, que explora poco, se salva. Es un
+    defecto de la recompensa para TODOS los algoritmos, no de los off-policy.
+
+    LA RECOMPENSA ES UNA SOLA PARA LOS TRES ALGORITMOS: R7 compara algoritmos
+    y solo es válida con el mismo objetivo. No se elige una por algoritmo.
+
+    BRAZOS (y su papel fijado AHORA, no después de ver validación):
+      PRINCIPAL   `logret_dd`, λ = 0.65 × λ_ref DEL PLIEGUE, con λ_ref de
+                  `d4_tamiz_recompensas.calibra_escala` sobre el TRAIN de ese
+                  pliegue (en el tamiz: 1.08 / 1.02 / 1.93). 0.65 está dentro de
+                  la ventana del pliegue 0 [0.63, 0.70], la única que existe.
+                  Reparo declarado: en los pliegues 1 y 2 ningún λ cumple T1 y
+                  T3 a la vez; ahí ordena por drawdown y no por Sharpe.
+      CONTROL     `logret` (D4 V0): pasa T1, T2 y T4 en los tres pliegues y
+                  reprueba T3 por construcción. Mide si el término de riesgo
+                  aporta.
+      REFERENCIA  `dsr`: YA CORRIDA (§8.6). No se vuelve a correr.
+    MATRIZ: PRINCIPAL con PPO, DDPG y SAC en las 5 vistas (solo_mercado,
+    +macro, +sentimiento, +fundamentales, completa) = 135 corridas; CONTROL con
+    los 3 algoritmos en solo_mercado y completa = 54. 3 pliegues × 3 semillas
+    × 150k pasos; exploración de D3 (σ 0.17, ent_coef 0.04, log_std −2).
+    ~5 h con scripts/lanza_r8.py en 12 procesos.
+    LO QUE NO SE HARÁ: elegir la recompensa final según cuál rinda más en
+    validación. La PRINCIPAL ya está elegida por el tamiz; las otras dos se
+    reportan como brazos. Todas las corridas entran al contador de D10.
+    FALTA IMPLEMENTAR ANTES DE LANZAR: λ por pliegue en ablacion_r8.py /
+    lanza_r8.py (hoy `--lam` es un solo valor para los tres pliegues).
+    COMPARACIÓN A REPORTAR: por algoritmo y vista, medianas por pliegue y
+    diferencias PAREADAS por semilla entre recompensas (retorno, Sharpe,
+    drawdown, ROTACIÓN y caja media), contra comprar y mantener, 1/N y caja.
 
 [X] D5. OBSERVACIÓN — CERRADA (2026-09-03): VENTANA APILADA + MLP, SIN RNN.
     RAZÓN, y no es solo "hay poco dato": LA MEMORIA YA ESTÁ EN LAS FEATURES.
