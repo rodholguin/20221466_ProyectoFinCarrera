@@ -217,11 +217,12 @@ def test_las_dimensiones_de_observacion_son_las_declaradas():
         print("  (saltado: no existe el panel de R6)")
         return
     esperado = {
-        "solo_mercado": 11,
-        "mercado_macro": 18,
-        "mercado_sentimiento": 24,
-        "mercado_fundamentales": 33,
-        "completa": 53,
+        # +2 desde el 2026-11-05: liq_spread y liq_monto_rel en la base
+        "solo_mercado": 13,
+        "mercado_macro": 20,
+        "mercado_sentimiento": 26,
+        "mercado_fundamentales": 35,
+        "completa": 55,
     }
     for v, n in esperado.items():
         real = len(_panel(v).features.columns)

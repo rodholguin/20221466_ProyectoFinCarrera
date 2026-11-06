@@ -52,7 +52,7 @@ ya no cabe en la cabeza.
   D21  MVP piloto sin tocar el tramo de prueba CERRADA — 2026-09-03
   D22  escala de exploración de PPO           CERRADA — log_std=-2, por rotación
   D23  esquema de ventana (expanding/rolling)  ABIERTA — medida, falta pre-registrar
-  D24  condición inicial del episodio          ABIERTA — hoy arranca 100% en caja
+  D24  condición inicial del episodio          CERRADA 11-05 — eval en 1/N, entrena aleatorio
   D25  presupuesto de pasos de entrenamiento   MEDIDA — entrenar MAS EMPEORA fuera de muestra
   D26  parámetros del baseline Markowitz       ABIERTA — implementado, falta pre-registrar
   D27  escala de la sorpresa fundamental       CERRADA — winsorizada, enmienda D6
@@ -496,6 +496,12 @@ DECISIONES (en orden de resolución sugerido)
          día por día y activo por activo, en vez del snapshot constante del
          2026-07-27, que subestimaba ~10x a Alicorp, InRetail y Minsur.
          Ver resultados_entorno_OE1.txt §8.3.
+      >> SE LEVANTA "IMPACTO ≈ 0 POR CONSTRUCCIÓN" (2026-11-05). El supuesto
+         se apoyaba en un tope de capacidad que el simulador no imponía: la
+         compra inicial de BCP era 31 veces el monto del día. Ahora: tope del
+         10% del monto diario, orden pendiente que se arrastra, e impacto de
+         raíz cuadrada Y·σ·√(q/V) con Y=0.65 calibrado con Bloomberg LQA.
+         Ver resultados_entorno_OE1.txt §8.4.
     DELIBERACIÓN ORIGINAL (se conserva):
     Modelo y valores realistas para la BVL (comisiones + impacto de mercado, alto
     en nombres ralos). Si se ponen a cero, el agente sobre-opera de forma irreal.
@@ -506,6 +512,14 @@ DECISIONES (en orden de resolución sugerido)
     ese activo se ENMASCARA y el peso se arrastra (ver la interacción con D2).
     No se penaliza un intento imposible: se impide. Una restricción se cumple
     siempre; una penalización solo en promedio y si entrenó bien.
+    >> ENMENDADA EL 2026-11-05 (en el espíritu de la decisión, no en contra):
+       el recargo por is_stale nunca se calibró (valía 0.0 en todas las
+       corridas). Lo reemplaza el TOPE DE PARTICIPACIÓN sobre el monto
+       negociado real del día (Bloomberg, calza 1.00 con el Informe BVL): un
+       día SIN negociación no admite orden —"si nadie quiere jugar, no
+       juega", ahora medido con el volumen y no con un precio repetido—, y un
+       día con poca negociación admite poco. La máscara de is_no_trade sigue
+       igual. Ver resultados_entorno_OE1.txt §8.4.
     is_stale (precio repetido, no cero cotización) NO se prohíbe: entra como
     recargo sobre c_i. Medido en docs/ejecutabilidad_y_costos_OE1.txt: el proxy
     1−is_stale subestima la ejecutabilidad entre 23 y 34 pp contra la
@@ -2520,7 +2534,15 @@ Se registra para que no vuelva a pasar lo de "decidido y no implementado".
     seguidos.
 
 
-[ ] D24. CONDICIÓN INICIAL DEL EPISODIO — ABIERTA. Salió al graficar la
+[X] D24. CONDICIÓN INICIAL DEL EPISODIO — CERRADA (2026-11-05, decisión del
+    autor): la EVALUACIÓN arranca invertida en 1/N sin cobrar la entrada, en
+    todos los brazos; el ENTRENAMIENTO arranca en una cartera aleatoria
+    (Dirichlet(1) sobre activos + caja); 100% en caja queda de sensibilidad.
+    Se eligió la opción (ii) de abajo. Es ENMIENDA de D2 en lo que toca al
+    estado inicial (la acción relativa no cambia). Ver
+    resultados_entorno_OE1.txt §8.5.
+    TEXTO ORIGINAL (se conserva):
+    CONDICIÓN INICIAL DEL EPISODIO — ABIERTA. Salió al graficar la
     trayectoria, no al mirar la media, y matiza la lectura de D21.
 
     EL PORTAFOLIO ARRANCA 100% EN CAJA, y con la acción relativa el agente

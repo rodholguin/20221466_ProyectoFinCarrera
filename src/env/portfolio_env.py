@@ -88,7 +88,12 @@ _RUIDO_CAJA = 1e-6
 #: 2026-10-29.3: la caja devenga por DÍA CALENDARIO (D9) y el caso base de
 #: costos pasa a `costos_observados` (spread diario de Bloomberg) en lugar del
 #: snapshot del 2026-07-27.
-VERSION_SIMULADOR = "2026-10-29.3"
+#: 2026-11-05: tope de participación del 10% del monto diario, orden pendiente
+#: que se arrastra e impacto de raíz cuadrada (Y=0.65), vía `costos_observados`.
+#: 2026-11-05.2: D24 — evaluación arranca invertida en 1/N sin costo de
+#: entrada, entrenamiento desde una cartera aleatoria; y la base de todas las
+#: vistas observa el spread y el monto relativo del día (`liq_*`).
+VERSION_SIMULADOR = "2026-11-05.2"
 
 #: Tope de vueltas del ejecutor. Converge en 1-3; es una guarda contra un
 #: modelo de costos mal armado, no un parámetro.
@@ -128,6 +133,17 @@ class EnvConfig:
     # evaluación va SIEMPRE en False: el episodio tiene que ser el tramo entero.
     random_start: bool = False
     min_episode_len: int = 252
+    # D24 (cerrada el 2026-11-05). Con qué cartera arranca el episodio:
+    #   "1/N"       ya invertido en partes iguales, SIN cobrar la entrada. Es el
+    #               protocolo de EVALUACIÓN: un fondo que se evalúa un año no
+    #               liquida y recompra todo al empezar, y así quedarse en caja
+    #               es una DECISIÓN del agente y no la condición inicial (la caja
+    #               media del 62% de D21 era velocidad de entrada).
+    #   "aleatoria" pesos de una Dirichlet(1) sobre activos + caja, con la RNG
+    #               del episodio. Es el protocolo de ENTRENAMIENTO: arrancar
+    #               siempre en 1/N sesgaría la política hacia ese punto.
+    #   "caja"      100% en caja, como hasta el 2026-11-05; queda de sensibilidad.
+    cartera_inicial: Literal["1/N", "aleatoria", "caja"] = "1/N"
 
 
 class PortfolioEnv(_BASE):
@@ -198,6 +214,11 @@ class PortfolioEnv(_BASE):
         self.step_count = 0
         self.units = np.zeros(self.n_assets, dtype=float)
         self.cash = float(self.cfg.initial_capital)
+        self._arma_cartera_inicial()
+        # Orden en curso, en soles por activo (+ compra, − venta). Solo se
+        # arrastra entre días si hay tope de liquidez; ver `_execute`.
+        self.pendiente = np.zeros(self.n_assets, dtype=float)
+        self._decide = False
         self.reward_fn.reset()
 
         v0 = self._value(self.t)
@@ -259,6 +280,7 @@ class PortfolioEnv(_BASE):
             "turnover": turnover,
             "weights": ejecutados.copy(),
             "weights_pedidos": target.copy(),
+            "orden_pendiente": self.pendiente.copy(),
             "date": self.panel.dates[self.t],
         }
         if _GYM:
@@ -266,6 +288,22 @@ class PortfolioEnv(_BASE):
         return obs, float(reward), truncated, info
 
     # -------------------------------------------------------------- internos
+    def _arma_cartera_inicial(self) -> None:
+        """Reparte el capital según D24, al precio de t0 y SIN costo de entrada."""
+        modo = self.cfg.cartera_inicial
+        if modo == "caja":
+            return
+        if modo == "1/N":
+            pesos = np.full(self.n_assets, 1.0 / self.n_assets)
+        elif modo == "aleatoria":
+            w = self._rng.dirichlet(np.ones(self.n_slots))
+            pesos = w[: self.n_assets]
+        else:
+            raise ValueError(f"cartera_inicial desconocida: {modo!r}")
+        capital = float(self.cfg.initial_capital)
+        self.units = pesos * capital / self.panel.prices[self.t]
+        self.cash = capital - float((self.units * self.panel.prices[self.t]).sum())
+
     def _value(self, idx: int) -> float:
         return float(self.units @ self.panel.prices[idx] + self.cash)
 
@@ -306,6 +344,7 @@ class PortfolioEnv(_BASE):
         w_cur = self._weights(e)
 
         rebalancing = self.step_count % max(1, self.cfg.rebalance_every) == 0
+        self._decide = rebalancing
         if not rebalancing:
             return w_cur
 
@@ -355,6 +394,19 @@ class PortfolioEnv(_BASE):
         5. Una venta que no paga ni su propia comisión no se manda (solo puede
            ocurrir sin banda, en el modo de diagnóstico band_notional=0).
 
+        CON TOPE DE LIQUIDEZ (`costs.liquidez`, desde el 2026-11-05):
+        6. La decisión crea una ORDEN en soles por activo; la banda (2) se
+           aplica a esa orden completa. Cada día se ejecuta como mucho
+           participación × monto negociado del día; un día sin negociación no
+           ejecuta nada.
+        7. Lo que no se ejecuta queda PENDIENTE y se sigue ejecutando los días
+           siguientes, como una orden que se trabaja con el volumen; una
+           decisión nueva la reemplaza. Una ejecución diaria puede ser menor
+           que la banda cuando la limita el tope (la orden es grande, el
+           mercado no da más); un resto final bajo la banda no se manda.
+        8. El impacto de mercado entra en el costo (ver `costs.Liquidez`).
+        Sin tope, nada se arrastra: el comportamiento es el de antes.
+
         Historia: hasta el 2026-10-29 (a) una caja de -1e-10 por redondeo —cuyo
         SIGNO depende de la CPU— se leía como faltante y dejaba órdenes de 3e-11
         que pagaban la comisión mínima (S/330 por día con 7 activos; cada
@@ -368,10 +420,26 @@ class PortfolioEnv(_BASE):
         val_cur = self.units * prices
         masked = self.panel.no_trade[e]
         tol = 1e-8 * v_pre
+        liq = self.costs.liquidez
 
-        val_tgt = target[: self.n_assets] * v_pre
-        # (1) y D8: sin orden por ruido, y lo enmascarado no se toca.
-        val_tgt = np.where((np.abs(val_tgt - val_cur) < tol) | masked, val_cur, val_tgt)
+        # Sin tope, la orden sale SIEMPRE del objetivo (los días sin decisión el
+        # objetivo es la cartera actual y la orden es cero), como antes.
+        if self._decide or liq is None:
+            orden_nueva = target[: self.n_assets] * v_pre - val_cur
+            # (1) y D8: sin orden por ruido, y lo enmascarado no se toca.
+            orden_nueva[(np.abs(orden_nueva) < tol) | masked] = 0.0
+            if liq is not None:
+                # (6) la banda va sobre la orden completa, el día que se decide
+                orden_nueva[np.abs(orden_nueva) < self.band] = 0.0
+            self.pendiente = orden_nueva
+        orden_dia = self.pendiente.copy()
+        orden_dia[masked] = 0.0
+        limitada = np.zeros(self.n_assets, dtype=bool)
+        if liq is not None:
+            tope = liq.tope(e)
+            limitada = np.abs(orden_dia) > tope  # (6) el mercado no da más
+            orden_dia = np.clip(orden_dia, -tope, tope)
+        val_tgt = val_cur + orden_dia
 
         cost = 0.0
         cash_after = 0.0
@@ -379,7 +447,8 @@ class PortfolioEnv(_BASE):
         # el tope es una guarda, no un parámetro.
         for _ in range(_MAX_VUELTAS_EJECUCION):
             orden = val_tgt - val_cur
-            chicas = (orden != 0.0) & (np.abs(orden) < self.band)  # (2) y (4)
+            # (2) y (4); una ejecución recortada por el tope puede quedar bajo la banda (7)
+            chicas = (orden != 0.0) & (np.abs(orden) < self.band) & ~limitada
             val_tgt[chicas] = val_cur[chicas]
             orden = val_tgt - val_cur
 
@@ -391,6 +460,10 @@ class PortfolioEnv(_BASE):
             total_compras = float(orden[compras].sum())
             if total_compras > 0.0:
                 val_tgt[compras] -= min(1.0, -cash_after / total_compras) * orden[compras]
+                # una compra que la FALTA DE CAJA deja bajo la banda no se manda hoy
+                achicadas = compras & (val_tgt - val_cur < self.band)
+                val_tgt[achicadas] = val_cur[achicadas]
+                limitada = limitada & ~achicadas
                 continue
             # (5) Sin compras que achicar y aún falta: hay ventas que no pagan ni
             # su propia comisión (vender S/10 pagando el mínimo de S/47). Nadie
@@ -413,6 +486,13 @@ class PortfolioEnv(_BASE):
         notionals = np.abs(val_tgt - val_cur)
         notionals[masked] = 0.0
         turnover = float(notionals.sum() / v_pre) if v_pre > 0 else 0.0
+
+        if liq is None:
+            self.pendiente = np.zeros(self.n_assets)  # sin tope, nada se arrastra
+        else:
+            # (7) lo no ejecutado sigue pendiente; los restos bajo la banda no se mandan
+            self.pendiente = self.pendiente - (val_tgt - val_cur)
+            self.pendiente[np.abs(self.pendiente) < max(tol, self.band)] = 0.0
 
         # Sin orden, las unidades no se recalculan: val/precio no devuelve las
         # mismas unidades bit a bit y la cartera "se movería" sin operar.

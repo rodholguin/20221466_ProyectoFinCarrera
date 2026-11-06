@@ -55,6 +55,7 @@ from src.agents import envuelve  # noqa: E402
 
 
 def construye_env(panel, costos, rango, *, entrenando: bool, cfg_extra: dict):
+    """D24: se entrena desde una cartera ALEATORIA y se evalúa ya invertido en 1/N."""
     a, b = rango
     return PortfolioEnv(
         panel,
@@ -63,6 +64,7 @@ def construye_env(panel, costos, rango, *, entrenando: bool, cfg_extra: dict):
             start_index=a,
             end_index=b,
             random_start=entrenando,
+            cartera_inicial="aleatoria" if entrenando else "1/N",
             **cfg_extra,
         ),
     )

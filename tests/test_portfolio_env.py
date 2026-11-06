@@ -209,7 +209,7 @@ def test_banda_bloquea_ordenes_chicas():
     p = panel_sintetico()
     # Una banda mayor que el patrimonio bloquea TODO, incluida la compra inicial:
     # el agente se queda en caja. Es el comportamiento correcto, no un borde.
-    env = _env(p, rebalance_every=1, band_notional=1e12)
+    env = _env(p, rebalance_every=1, band_notional=1e12, cartera_inicial="caja")
     res = run_policy(env, EqualWeight())
 
     assert np.allclose(env.history["turnover"], 0.0), "la banda no bloqueó las operaciones"
@@ -409,7 +409,7 @@ def test_delta_accion_cero_no_opera_nunca():
     env = PortfolioEnv(
         p,
         CostModel(tickers=p.tickers, half_spread_bps=110.0, commission_rate=0.0043, min_fee=40.0),
-        EnvConfig(action_mode="delta", rebalance_every=1, band_notional=0.0),
+        EnvConfig(action_mode="delta", rebalance_every=1, band_notional=0.0, cartera_inicial="caja"),
     )
     env.reset()
     done = False

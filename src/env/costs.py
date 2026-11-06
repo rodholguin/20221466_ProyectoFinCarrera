@@ -65,6 +65,71 @@ SPREAD_SNAPSHOT_BPS: dict[str, float] = {
 }
 
 
+#: Tope de participación: como mucho este porcentaje del monto negociado del
+#: día, por activo. Es el MISMO supuesto con que se dimensionó la cartera
+#: (ejecutabilidad_y_costos_OE1.txt §6.4), no uno nuevo.
+PARTICIPACION_MAX = 0.10
+#: Coeficiente Y del impacto de raíz cuadrada. Calibrado con Bloomberg LQA
+#: dentro de un mismo activo (2026-09-26): 0.51 en BCP, 0.77 en Luz del Sur; se
+#: toma el punto medio. Ver docs/resultados_entorno_OE1.txt §8.4.
+IMPACTO_Y = 0.65
+#: Ventanas CAUSALES del monto medio y de la volatilidad (días previos).
+VENTANA_ADV = 21
+VENTANA_SIGMA = 20
+
+
+@dataclass
+class Liquidez:
+    """Lo que el mercado admite cada día, por activo. Arrays (T, n) en el calendario del panel.
+
+    Dos piezas, ambas estándar en la literatura de ejecución:
+      * TOPE DE PARTICIPACIÓN: una ejecución diaria no supera
+        `participacion × monto[e]`. Un día sin negociación (monto 0) no admite
+        orden: eso es lo que un precio arrastrado (`is_stale`) significa de
+        verdad, y reemplaza al recargo de D8, que nunca se calibró.
+      * IMPACTO DE RAÍZ CUADRADA: costo extra = Y·σ·√(q/V)·q, con σ la
+        volatilidad diaria y V el monto medio, ambos de días PREVIOS (Almgren
+        et al. 2005; Tóth et al. 2011; Bouchaud et al. 2018).
+
+    `monto` es del mismo día de la ejecución y no es look-ahead: acota lo que
+    se puede ejecutar ese día (una orden que acompaña al volumen), no informa la
+    decisión, que se tomó con el cierre anterior.
+    """
+
+    monto: np.ndarray
+    adv: np.ndarray
+    sigma: np.ndarray
+    participacion: float = PARTICIPACION_MAX
+    impacto_Y: float = IMPACTO_Y
+
+    def __post_init__(self) -> None:
+        if not (self.monto.shape == self.adv.shape == self.sigma.shape):
+            raise ValueError("monto, adv y sigma deben tener la misma forma (T, n)")
+        if not 0.0 < self.participacion <= 1.0:
+            raise ValueError(f"participación fuera de (0, 1]: {self.participacion}")
+        if self.impacto_Y < 0:
+            raise ValueError("el coeficiente de impacto no puede ser negativo")
+
+    def tope(self, day_idx: int) -> np.ndarray:
+        """Nocional máximo ejecutable ese día, por activo (0 si no hubo negociación)."""
+        return self.participacion * self.monto[day_idx]
+
+    def impacto(self, notionals: np.ndarray, day_idx: int) -> np.ndarray:
+        """Y·σ·√(q/V)·q en dinero. V es el monto medio previo; si no lo hay, el del día."""
+        if self.impacto_Y == 0.0:
+            return np.zeros_like(notionals)
+        v = np.where(self.adv[day_idx] > 0, self.adv[day_idx], self.monto[day_idx])
+        v = np.maximum(v, 1.0)
+        return self.impacto_Y * self.sigma[day_idx] * np.sqrt(notionals / v) * notionals
+
+
+def _causal_rodante(x: np.ndarray, ventana: int, como: str) -> np.ndarray:
+    """Media o desvío de los `ventana` días PREVIOS a cada día (nunca el propio)."""
+    rod = pd.DataFrame(x).rolling(ventana, min_periods=max(2, ventana // 2))
+    out = (rod.mean() if como == "mean" else rod.std()).shift(1)
+    return out.to_numpy(dtype=float)
+
+
 @dataclass
 class CostModel:
     """Costo de transacción por activo, en unidades de dinero.
@@ -91,6 +156,8 @@ class CostModel:
     fees_rate: float = DERECHOS_MERCADO
     stale_surcharge_bps: float = 0.0
     cost_multiplier: float = 1.0
+    #: Tope de participación e impacto (ver `Liquidez`). None: sin límite, como hasta el 2026-11-05.
+    liquidez: Liquidez | None = None
 
     _spread: np.ndarray = field(init=False, repr=False)
 
@@ -145,7 +212,11 @@ class CostModel:
         if self.stale_surcharge_bps and is_stale is not None:
             recargo = (self.stale_surcharge_bps / 10_000.0) * notionals * np.asarray(is_stale)
 
-        return self.cost_multiplier * (comision + derechos + spread + recargo)
+        impacto = 0.0
+        if self.liquidez is not None:
+            impacto = self.liquidez.impacto(notionals, day_idx)
+
+        return self.cost_multiplier * (comision + derechos + spread + recargo + impacto)
 
     # --------------------------------------------------- banda de no-operación
     def band_notional(self) -> float:
@@ -224,15 +295,49 @@ def serie_spread_bps(tickers: list[str], dates, ruta: Path | str = LIQUIDEZ_BLOO
     return serie.to_numpy(dtype=float)
 
 
-def costos_observados(panel, **kwargs) -> CostModel:
+def liquidez_observada(panel, ruta: Path | str = LIQUIDEZ_BLOOMBERG,
+                       participacion: float = PARTICIPACION_MAX,
+                       impacto_Y: float = IMPACTO_Y) -> Liquidez:
+    """`Liquidez` con el monto negociado diario de Bloomberg (calza 1.00 con el Informe BVL).
+
+    Un día sin fila en Bloomberg, o marcado como relleno, cuenta como SIN
+    negociación (monto 0): no se inventa liquidez. σ sale de los retornos del
+    propio panel; V es el monto medio de los 21 días previos.
+    """
+    ruta = Path(ruta)
+    if not ruta.exists():
+        raise FileNotFoundError(f"no existe {ruta}; corre scripts/gen_liquidez_bloomberg.py")
+    df = pd.read_parquet(ruta, columns=["date", "ticker", "monto_pen"])
+    ancho = df.pivot(index="date", columns="ticker", values="monto_pen")
+    faltan = [t for t in panel.tickers if t not in ancho.columns]
+    if faltan:
+        raise KeyError(f"sin monto negociado de Bloomberg para {faltan}")
+    fechas = pd.to_datetime(np.asarray(panel.dates))
+    monto = ancho[list(panel.tickers)].reindex(fechas).fillna(0.0).to_numpy(dtype=float)
+    if (monto < 0).any():
+        raise ValueError("monto negociado negativo en el volcado de Bloomberg")
+    adv = np.nan_to_num(_causal_rodante(monto, VENTANA_ADV, "mean"), nan=0.0)
+    ret = np.diff(np.log(panel.prices), axis=0, prepend=np.nan)
+    sigma = _causal_rodante(ret, VENTANA_SIGMA, "std")
+    # El arranque sin historia (calentamiento, nunca operado) toma la mediana del activo.
+    sigma = np.where(np.isfinite(sigma), sigma, np.nanmedian(sigma, axis=0))
+    return Liquidez(monto=monto, adv=adv, sigma=sigma,
+                    participacion=participacion, impacto_Y=impacto_Y)
+
+
+def costos_observados(panel, liquidez: bool = True, **kwargs) -> CostModel:
     """CostModel con el spread OBSERVADO día a día (Bloomberg). Caso base desde 2026-10-29.
 
     Reemplaza al snapshot del 2026-07-27, que subestimaba ~10x el spread de
     Alicorp, InRetail y Minsur (8/13/14 pbs contra medianas anuales de 62-390).
     Ver docs/resultados_entorno_OE1.txt §8.3.
+
+    Desde el 2026-11-05 trae también la `Liquidez` observada (tope del 10% del
+    monto del día e impacto de raíz cuadrada, §8.4); `liquidez=False` la quita.
     """
     spread = serie_spread_bps(panel.tickers, panel.dates, desde_indice=panel.first_tradable_index)
-    return CostModel(tickers=list(panel.tickers), half_spread_bps=spread / 2.0, **kwargs)
+    liq = liquidez_observada(panel) if liquidez else None
+    return CostModel(tickers=list(panel.tickers), half_spread_bps=spread / 2.0, liquidez=liq, **kwargs)
 
 
 def zero_cost_model(tickers: list[str]) -> CostModel:

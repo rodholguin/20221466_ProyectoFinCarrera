@@ -128,7 +128,7 @@ METRICAS = [
 #: Argumentos que NO definen el experimento: se pueden cambiar al retomar.
 #: `views` y `seeds` porque retomar una vista suelta o extender semillas es
 #: justamente el caso de uso; `out`/`retoma` porque son rutas.
-_ARGS_LIBRES = {"views", "seeds", "out", "retoma", "registro"}
+_ARGS_LIBRES = {"views", "seeds", "out", "retoma", "registro", "pliegues", "seed_list", "hilos", "sin_tablas"}
 
 
 def huella_panel(ruta: Path = DEFAULT_PANEL) -> str:
@@ -268,7 +268,20 @@ def main() -> None:
     # Solo para PROBAR el script sin ensuciar el registro de D10, que es
     # append-only: una corrida de humo anotada ahí contaría como estrategia.
     ap.add_argument("--registro", default=str(REGISTRO), help=argparse.SUPPRESS)
+    # Para el lanzador paralelo (scripts/lanza_r8.py): un proceso por trabajo.
+    ap.add_argument("--pliegues", type=int, nargs="*", default=None,
+                    help="solo estos pliegues (defecto: todos)")
+    ap.add_argument("--seed-list", type=int, nargs="*", default=None,
+                    help="solo estas semillas (defecto: 0..seeds-1)")
+    ap.add_argument("--hilos", type=int, default=None,
+                    help="torch.set_num_threads; el resultado NO depende de esto (medido 2026-11-05)")
+    ap.add_argument("--sin-tablas", action="store_true", help="no imprime las tablas finales")
     args = ap.parse_args()
+    if args.hilos:
+        import torch
+
+        torch.set_num_threads(args.hilos)
+    semillas = args.seed_list if args.seed_list is not None else list(range(args.seeds))
     salida = Path(args.out)
     origen = Path(args.retoma) if args.retoma else (salida if salida.exists() else None)
     if origen is not None and not origen.exists():
@@ -358,6 +371,8 @@ def main() -> None:
         resultados["vistas"].setdefault(vista, {})
 
         for p in pliegues:
+            if args.pliegues is not None and p.idx not in args.pliegues:
+                continue
             if vista == args.views[0]:
                 # Deterministas y baratos: se recalculan siempre, también al retomar.
                 resultados["baselines"][f"pliegue{p.idx}"] = baselines_del_tramo(
@@ -377,7 +392,7 @@ def main() -> None:
                 **config_registro(args.algo, explora),
             }
             por_semilla = hechas(resultados, vista, p.idx)
-            for semilla in range(args.seeds):
+            for semilla in semillas:
                 if semilla in por_semilla:
                     print(f"  pliegue{p.idx} s{semilla}: ya estaba, se salta")
                     continue
@@ -420,6 +435,8 @@ def main() -> None:
 
     resultados["parcial"] = False
     guarda(resultados, salida)
+    if args.sin_tablas:
+        return
 
     # ------------------------------------------------------------------ tablas
     def med(vista: str, fold: int, clave: str) -> float:

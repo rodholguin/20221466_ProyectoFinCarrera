@@ -154,6 +154,12 @@ DIMENSION DE LA OBSERVACION, por vista de la ablacion de R8:
 
   (7 x features + 8 pesos actuales + 2 estadisticos del DSR)
 
+  >> DESDE EL 2026-11-05 la base suma 2 columnas de liquidez (liq_spread,
+     liq_monto_rel; ver 8.5) y TODAS las vistas crecen en 2 por activo:
+       solo_mercado 13 (101) · mercado_macro 20 (150) · mercado_sentimiento
+       26 (192) · mercado_fundamentales 35 (255) · completa 55 (395).
+     La tabla de arriba describe las corridas anteriores a esa fecha.
+
   OJO CON ESTA TABLA, CAMBIO EL 2026-09-12 Y NO SOLO POR LAS COLUMNAS NUEVAS:
   las vistas se REDEFINIERON para que la ablacion de R8 sea atribuible. Antes
   `mercado_sentimiento` y `mercado_fundamentales` llevaban macro ADENTRO, asi
@@ -2065,6 +2071,103 @@ dia y la compra inicial de CREDITC1 es 31 veces el dia. La capacidad de §6.4
 de ejecutabilidad_y_costos_OE1.txt supone 10% de participacion; el simulador
 todavia no lo impone. El monto diario ya esta en el mismo volcado
 (`monto_pen`).
+>> RESUELTO EL 2026-11-05, ver 8.4.
+
+------------------------------------------------------------------------
+8.4 TOPE DE LIQUIDEZ, ORDEN PENDIENTE E IMPACTO (VERSION_SIMULADOR 2026-11-05)
+------------------------------------------------------------------------
+EL DATO. El monto negociado diario (TURNOVER) de Bloomberg CALZA 1.00 a 1
+con el monto mensual del Informe Bursatil oficial de la BVL en los 7 activos
+y 173 meses (2012-01 a 2026-06): es la cifra oficial, a frecuencia diaria.
+
+LO QUE SE IMPLEMENTO (`costs.Liquidez`, via `costos_observados`):
+  (a) TOPE: una ejecucion diaria no supera el 10% del monto negociado ese
+      dia, por activo. Es el MISMO supuesto con que se dimensiono la cartera
+      (ejecutabilidad_y_costos_OE1.txt §6.4). Un dia sin negociacion no
+      admite orden: reemplaza al recargo por is_stale de D8, que nunca se
+      calibro (valia 0.0).
+  (b) ORDEN PENDIENTE: la decision crea una orden en soles; lo no ejecutado
+      se sigue ejecutando los dias siguientes, como una orden que se trabaja
+      con el volumen; una decision nueva la reemplaza. Medido con prototipo:
+      CANCELAR el remanente deja al 1/N mensual 212 dias sin invertirse y al
+      trimestral 807: no es una alternativa.
+  (c) BANDA D7 sobre la orden completa; una ejecucion diaria recortada por
+      el tope puede ser menor que la banda (la orden es grande y el mercado
+      no da mas); un resto final bajo la banda no se manda. Se cobra el
+      minimo por cada dia de ejecucion: conservador, falta confirmar con una
+      SAB si las ejecuciones parciales de una orden pagan un solo minimo.
+  (d) IMPACTO DE RAIZ CUADRADA: Y·σ·√(q/V)·q, con σ la volatilidad diaria de
+      los 20 dias PREVIOS y V el monto medio de los 21 dias PREVIOS (Almgren
+      et al. 2005; Toth et al. 2011; Bouchaud et al. 2018). Y = 0.65:
+      calibrado con Bloomberg LQA DENTRO de un mismo activo (26-sep), que da
+      0.51 en CREDITC1 y 0.77 en LUSURC1. Se suma al medio spread observado;
+      LQA implica un intercepto de 16-34 pbs contra un medio spread observado
+      de 26-198, asi que la suma es CONSERVADORA (puede contar parte del
+      costo dos veces): se declara.
+  El monto del dia es contemporaneo a la ejecucion y no es look-ahead: acota
+  lo que se puede ejecutar ese dia, no informa la decision.
+
+PRECIO DE CIERRE (Reglamento de Operaciones en Rueda, art. 19, y
+disposiciones complementarias): la cotizacion de cierre es la de la subasta
+de cierre; si no la hay, la ultima operacion; si no, la cotizacion previa
+(eso es exactamente un dia is_stale). Despues de la subasta hay una fase de
+"Negociacion a Precio de Cierre": ejecutar al cierre es posible. Lo que NO
+se conoce es que parte del volumen pasa por la subasta; el tope usa el monto
+del dia completo, que equivale a trabajar la orden durante la sesion.
+
+CUANTO CAMBIA (2013-2025; sin liquidez -> con liquidez):
+  comprar y mantener   -0.4% -> -4.7%     1/N diario      +6.5% -> +3.7%
+  1/N mensual         +12.4% -> +7.7%     1/N trimestral +16.3% -> +12.6%
+  Markowitz           -16.7% -> -10.2%    solo caja      +64.1% (igual)
+  Armar la cartera inicial toma ~15 dias habiles (22 Markowitz). En
+  validacion el 1/N pierde ~1pp por pliegue. Lo que mas castiga es la
+  ROTACION alta, que es justo el regimen en que operaron los agentes.
+VERIFICACION: 140 tests (9 nuevos en tests/test_liquidez.py); estres de
+19,560 pasos aleatorios sin errores y sin ejecuciones sobre el tope; los tres
+algoritmos deterministas; el resultado NO depende del numero de hilos de
+torch (pesos identicos con 1 y 8).
+PENDIENTE DE DATOS (mejoraria la calibracion, no bloquea): mas puntos LQA
+(3-4 tamaños x 3-4 fechas x 7 activos), tarifario escrito de una SAB
+(minimo por orden y ejecuciones parciales) y el segmento vigente de cada
+activo (el de baja liquidez opera solo por subastas).
+
+------------------------------------------------------------------------
+8.5 ARRANQUE DEL EPISODIO (D24) Y LIQUIDEZ EN LA OBSERVACION
+    (VERSION_SIMULADOR 2026-11-05.2)
+------------------------------------------------------------------------
+(a) D24 CERRADA (decision del autor, 2026-11-05):
+      EVALUACION     arranca INVERTIDA en 1/N, sin cobrar la entrada, en todos
+                     los brazos (agente y baselines).
+      ENTRENAMIENTO  arranca en una cartera ALEATORIA (Dirichlet(1) sobre los
+                     7 activos + caja, con la RNG del episodio).
+      SENSIBILIDAD   100% en caja, como hasta ahora.
+    POR QUE: arrancar en caja obligaba a comprar todo cada año evaluado
+    (~1% del capital de peaje que un fondo real no paga) y, con la accion
+    relativa (5 pp por dia) y el tope de liquidez, el agente tardaba semanas
+    en invertirse: su caja media del 62% (D21) era VELOCIDAD DE ENTRADA, no
+    preferencia. Ahora quedarse en caja es una DECISION. Entrenar siempre
+    desde 1/N sesgaria la politica hacia ese punto; por eso el aleatorio.
+    PROPIEDAD UTIL: un agente que no opera (accion 0) reproduce EXACTAMENTE a
+    "comprar y mantener" desde 1/N; el piso de comparacion queda explicito.
+(b) LA BASE OBSERVA LA LIQUIDEZ: dos columnas por activo en el grupo
+    `mercado`, que comparten todas las vistas:
+      liq_spread     spread cotizado promedio del dia (Bloomberg), en log y
+                     estandarizado expanding (D6).
+      liq_monto_rel  log del monto del dia contra el monto medio de los 21
+                     dias previos: cuanto mas o menos liquido estuvo.
+    POR QUE EN LA BASE Y NO COMO CANAL DE R8: no son señal sobre el precio
+    sino sobre el COSTO de operar. El entorno ya IMPONE el tope y cobra el
+    costo; la observacion es lo que un operador ve en pantalla para decidir
+    CUANDO y CUANTO operar. Un agente que paga costos que no ve solo aprende
+    su promedio. Son del cierre anterior a la ejecucion (D13): nunca ve el
+    spread ni el volumen del dia en que ejecuta. Verificado: recortar el
+    futuro no cambia ningun valor pasado.
+(c) PARALELISMO: scripts/lanza_r8.py corre un proceso por (algoritmo,
+    vista, pliegue, semilla) y es el UNICO que escribe en el registro de D10
+    (en Windows dos procesos agregando lineas a la vez pueden pisarse).
+    Retoma por trabajo y junta los resultados en el formato de ablacion_r8.
+    Los pesos entrenados son IDENTICOS con 1 u 8 hilos de torch: paralelizar
+    no cambia ningun numero.
 
 
 ========================================================================
